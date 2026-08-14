@@ -13,6 +13,12 @@ use std::{
 };
 
 pub mod storage;
+pub mod wasm;
+
+pub use wasm::{
+    MAX_WASM_FUEL, MAX_WASM_MEMORY_PAGES, MAX_WASM_PAYLOAD_BYTES, WasmError, WasmPluginInstance,
+    WasmPluginModule,
+};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;

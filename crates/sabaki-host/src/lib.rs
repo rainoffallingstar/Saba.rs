@@ -7,6 +7,7 @@ pub mod external_file;
 pub mod file_codec;
 pub mod persistence;
 pub mod plugin_supervisor;
+pub mod plugin_wasm;
 pub mod plugin_workflow;
 pub mod recent_files;
 pub mod settings;
@@ -41,6 +42,9 @@ pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave}
 pub use plugin_supervisor::{
     AUTO_DISABLE_AFTER_CRASHES, DEFAULT_REQUEST_TIMEOUT, PluginProcessInfo, PluginProcessStatus,
     PluginSupervisor, plugin_storage_root,
+};
+pub use plugin_wasm::{
+    WASM_ENTRYPOINT_EXTENSION, WasmWorkflowError, invoke_wasm_command, load_wasm_module,
 };
 pub use plugin_workflow::{
     PersistedPluginState, PluginPersistence, PluginStore, scan_plugin_installations,

@@ -127,14 +127,14 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | 目标 | 数量 |
 |---|---|
 | `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
-| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 2 帧/校验 |
-| `sabaki-host` | 81 单元（含 2 监督进程冒烟）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 7 wasm 沙箱 + 2 帧/校验 |
+| `sabaki-host` | 85 单元（含 2 监督进程冒烟、4 wasm 工作流）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 106 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 254 个全绿）
+cargo test --workspace        # 全部测试（当前 265 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -184,10 +184,19 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 显示进程状态（running/crashed/auto-disabled）与最近 stderr 日志，启用原生
 插件时自动启动监督进程、禁用时停止。
 
+**迭代 12（WASM runtime）已完成：** `plugin-runtime::wasm` 沙箱运行时
+（wasmi 1.1，无 host import，符合 §10.3）：导出 `memory` + `invoke` 的 ABI、
+每次调用 fuel 上限 1M、内存上限 32 页、payload 1MiB、递归深度 128；模块
+编译校验（缺 invoke/缺 memory/声明内存超限均拒绝）、无效 JSON 响应拒绝、
+死循环 fuel trap，7 个 WAT 内嵌测试。host `plugin_wasm` 工作流：加载
+`.wasm` entrypoint（runtime/enable/扩展名校验）、`invoke_wasm_command`
+（JSON-RPC 形状 DTO）、错误映射到共享 `PluginError` 词汇。GPUI 命令按钮
+对 wasm 插件真实调用并显示结果（declarative 仍为占位）。
+
 按优先级排序的后续候选迭代：
 
-1. **路线图远期项**：WASM runtime + capability imports（wasmtime，下一轮
-   候选）、主题包安装。
+1. **路线图远期项**：WASM capability imports（按已授权权限注入最小
+   import，如 gameRead→快照读取）、主题包安装。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
@@ -198,9 +207,11 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 
 - 引擎真实进程路径已有真实子进程冒烟测试（fake-gtp-engine.py），但尚未用
   KataGo/GNU Go 实物引擎做过手工验证（需用户配置引擎 + 模型）。
-- 原生插件监督已实现（超时/崩溃检测/重启上限/stderr 日志/自动禁用），但
-  GPUI 侧尚无「插件命令 → 进程 RPC」的完整调用链 UI（面板目前只显示状态与
-  日志，命令按钮仍走 declarative 占位分发）。
+- 原生插件监督已实现（超时/崩溃检测/重启上限/stderr 日志/自动禁用），
+  GPUI 命令按钮对 wasm 插件真实调用；native 插件的命令调用链（经
+  Supervisor RPC）仍待接 UI。
+- WASM runtime 默认无 host import；按权限注入 capability import（如
+  gameRead 快照）属下一轮候选。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
 - `main.rs` 已拆分（`panels.rs`），但 `ShellApp` 状态字段与事件处理器仍集中在

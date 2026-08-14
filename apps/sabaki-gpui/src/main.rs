@@ -939,11 +939,48 @@ impl ShellApp {
         cx.notify();
     }
 
-    /// Dispatches a declarative plugin command: no execution body exists yet,
-    /// so the invocation is recorded in the status bar and the plugin log.
+    /// Dispatches a plugin command. WASM plugins are invoked in-process
+    /// through the sandboxed runtime; declarative plugins have no execution
+    /// body yet and are recorded in the status bar.
     fn on_plugin_command(&mut self, plugin_id: &str, command_id: &str, cx: &mut Context<Self>) {
-        self.status =
-            format!("plugin {plugin_id} command {command_id} dispatched (declarative)").into();
+        let Some(record) = self
+            .plugin_store
+            .list()
+            .iter()
+            .find(|record| record.manifest.id == plugin_id)
+            .cloned()
+        else {
+            self.status = format!("plugin {plugin_id} is not installed").into();
+            cx.notify();
+            return;
+        };
+        if matches!(
+            record.manifest.runtime,
+            sabaki_plugin_runtime::PluginRuntime::Wasm
+        ) {
+            match sabaki_host::load_wasm_module(&record)
+                .and_then(|module| {
+                    sabaki_host::invoke_wasm_command(
+                        &record,
+                        &module,
+                        command_id,
+                        serde_json::json!({}),
+                    )
+                })
+                .map_err(sabaki_host::WasmWorkflowError::into_plugin_error)
+            {
+                Ok(result) => {
+                    self.status =
+                        format!("plugin {plugin_id} command {command_id} → {result}").into();
+                }
+                Err(error) => {
+                    self.status = format!("plugin {plugin_id} command failed: {error}").into();
+                }
+            }
+        } else {
+            self.status =
+                format!("plugin {plugin_id} command {command_id} dispatched (declarative)").into();
+        }
         cx.notify();
     }
 
