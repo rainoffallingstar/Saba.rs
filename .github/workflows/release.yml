@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build release binary
+        run: cargo build --release -p sabaki-gpui
+
+      - name: Package macOS app and dmg
+        if: runner.os == 'macOS'
+        run: ./scripts/bundle-macos.sh
+      - name: Upload macOS artifacts
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saba-rs-macos
+          path: |
+            dist/macos/*.app
+            dist/macos/*.dmg
+
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/linux
+          cp target/release/sabaki-gpui dist/linux/saba-rs
+          cp README.md LICENSE.md dist/linux/
+          tar -czf dist/linux/saba-rs-linux-x86_64.tar.gz -C dist/linux saba-rs README.md LICENSE.md
+      - name: Upload Linux artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saba-rs-linux
+          path: dist/linux/*.tar.gz
+
+      - name: Package Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          Copy-Item target/release/sabaki-gpui.exe dist/windows/saba-rs.exe
+          Copy-Item README.md, LICENSE.md dist/windows/
+          Compress-Archive -Path dist/windows/saba-rs.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath dist/windows/saba-rs-windows-x86_64.zip -Force
+      - name: Upload Windows artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saba-rs-windows
+          path: dist/windows/*.zip
