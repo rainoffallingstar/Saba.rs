@@ -22,7 +22,7 @@ examples/               Fake GTP engine for subprocess smoke tests; example plug
 ## Building & testing
 
 ```bash
-cargo test --workspace   # all tests (230+ across the workspace)
+cargo test --workspace   # all tests (201 across the workspace)
 cargo run -p sabaki-gpui # launch the GPUI client (optional SGF path argument)
 SABAKI_CONFIG_DIR=/tmp/sg cargo run -p sabaki-gpui   # isolated config directory
 ```

@@ -11,7 +11,7 @@
 Ubuntu/macOS/Windows 三平台全绿；`main.rs`（2799 行）渲染树拆分至
 `panels.rs`（976 行），shell 只留状态/动作/装配；新增 300 手职业对局与多分支教学谱
 性能基线（打开/快照/导航）；`docs/packaging-notes.md` 打包调研。
-`cargo test --workspace` **232 测试全绿**。
+`cargo test --workspace` **201 测试全绿**。
 
 ---
 
@@ -133,7 +133,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 232 个全绿）
+cargo test --workspace        # 全部测试（当前 201 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
