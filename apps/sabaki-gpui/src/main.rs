@@ -784,6 +784,75 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Re-scans the themes root and refreshes the installed-theme list.
+    fn refresh_installed_themes(&mut self) {
+        match file_workflow::theme_root() {
+            Ok(theme_root) => match sabaki_host::scan_theme_root(&theme_root) {
+                Ok(scan) => {
+                    self.installed_themes = scan.themes;
+                    self.legacy_asar_themes = scan.legacy_asar;
+                }
+                Err(error) => self.status = format!("theme scan failed: {error}").into(),
+            },
+            Err(error) => self.status = format!("theme directory unavailable: {error}").into(),
+        }
+    }
+
+    /// Picks a theme package directory with a native dialog, validates and
+    /// installs it into the themes root, then refreshes the panel.
+    fn on_theme_install(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.dialog_service.pick_open_path() else {
+            self.status = "theme install cancelled".into();
+            cx.notify();
+            return;
+        };
+        if !path.is_dir() {
+            self.status = format!("{} is not a theme package directory", path.display()).into();
+            cx.notify();
+            return;
+        }
+        let theme_root = match file_workflow::theme_root() {
+            Ok(root) => root,
+            Err(error) => {
+                self.status = format!("theme directory unavailable: {error}").into();
+                cx.notify();
+                return;
+            }
+        };
+        match sabaki_host::install_theme(&path, &theme_root) {
+            Ok(theme) => {
+                self.refresh_installed_themes();
+                self.status = format!(
+                    "installed theme {} v{}",
+                    theme.manifest.name, theme.manifest.version
+                )
+                .into();
+            }
+            Err(error) => self.status = format!("theme install failed: {error}").into(),
+        }
+        cx.notify();
+    }
+
+    /// Removes an installed theme by id.
+    fn on_theme_uninstall(&mut self, theme_id: &str, cx: &mut Context<Self>) {
+        let theme_root = match file_workflow::theme_root() {
+            Ok(root) => root,
+            Err(error) => {
+                self.status = format!("theme directory unavailable: {error}").into();
+                cx.notify();
+                return;
+            }
+        };
+        match sabaki_host::uninstall_theme(&theme_root, theme_id) {
+            Ok(()) => {
+                self.refresh_installed_themes();
+                self.status = format!("uninstalled theme {theme_id}").into();
+            }
+            Err(error) => self.status = format!("theme uninstall failed: {error}").into(),
+        }
+        cx.notify();
+    }
+
     /// Selects a theme, swaps the active tokens and persists the choice under
     /// the `theme.current` setting key through the host settings workflow.
     fn on_theme_selected(&mut self, choice: ThemeChoice, cx: &mut Context<Self>) {

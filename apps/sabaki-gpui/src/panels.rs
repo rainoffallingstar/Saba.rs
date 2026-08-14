@@ -868,28 +868,75 @@ pub fn render_settings_panel(
                         .flex_col()
                         .gap_1()
                         .children(shell.installed_themes.iter().map(|theme| {
-                            let theme_id = theme.manifest.id.clone();
+                            let apply_id = theme.manifest.id.clone();
+                            let uninstall_id = theme.manifest.id.clone();
                             div()
-                                .px_2()
-                                .py_1()
-                                .border_1()
-                                .border_color(rgb(0x8a6d3b))
-                                .rounded(px(4.0))
-                                .bg(rgb(0xe8e0d4))
-                                .child(format!(
-                                    "{} v{} (installed)",
-                                    theme.manifest.name, theme.manifest.version
-                                ))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell,
-                                                _: &MouseDownEvent,
-                                                _: &mut Window,
-                                                cx: &mut Context<ShellApp>| {
-                                        shell.on_installed_theme_selected(&theme_id, cx);
-                                    }),
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .border_1()
+                                        .border_color(rgb(0x8a6d3b))
+                                        .rounded(px(4.0))
+                                        .bg(rgb(0xe8e0d4))
+                                        .child(format!(
+                                            "{} v{} (installed)",
+                                            theme.manifest.name, theme.manifest.version
+                                        ))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |shell,
+                                                        _: &MouseDownEvent,
+                                                        _: &mut Window,
+                                                        cx: &mut Context<ShellApp>| {
+                                                shell.on_installed_theme_selected(&apply_id, cx);
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .px_1()
+                                        .py_1()
+                                        .border_1()
+                                        .border_color(rgb(0xc0392b))
+                                        .rounded(px(4.0))
+                                        .bg(rgb(0xf5d6d6))
+                                        .child("uninstall")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |shell,
+                                                        _: &MouseDownEvent,
+                                                        _: &mut Window,
+                                                        cx: &mut Context<ShellApp>| {
+                                                shell.on_theme_uninstall(&uninstall_id, cx);
+                                            }),
+                                        ),
                                 )
                         })),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .border_1()
+                        .border_color(rgb(0x8a6d3b))
+                        .rounded(px(4.0))
+                        .bg(rgb(0xe8e0d4))
+                        .child("install theme from folder…")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(
+                                |shell,
+                                 _: &MouseDownEvent,
+                                 _: &mut Window,
+                                 cx: &mut Context<ShellApp>| {
+                                    shell.on_theme_install(cx);
+                                },
+                            ),
+                        ),
                 )
                 .child(
                     shell

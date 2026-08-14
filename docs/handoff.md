@@ -134,7 +134,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 280 个全绿）
+cargo test --workspace        # 全部测试（当前 280 个全绿（迭代 17 为纯 UI 接线））
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -226,9 +226,19 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 `HostApplication::apply_transaction` 验证应用(非法落子/劫/占用由宿主拒绝),
 状态栏报告 applied/rejected 计数。WAT 测试:授权收集、未授权 link 失败。
 
+**迭代 17（主题包安装入口 UI）已完成：** GPUI 设置面板新增
+「install theme from folder…」按钮（原生目录选择 → `install_theme` 校验后
+复制 → 刷新列表）与每个已安装主题的「uninstall」按钮;应用/卸载后状态栏
+反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
+`.asar` 迁移提示）闭环。
+
 按优先级排序的后续候选迭代：
 
-1. **路线图远期项**：主题包安装入口 UI（从目录安装/卸载按钮）。
+1. **Beta #10 跟踪**：原生 screenshot/headless GPU CI（受 gpui 0.2.2 能力
+   限制,见 `docs/beta-gate.md`;跟踪上游 snapshot API,或将渲染纯逻辑
+   继续下沉单测）。
+2. **发布收尾（需外部条件）**：签名/公证、Linux AppImage/Flatpak、
+   Windows installer、GitHub Release 自动发布。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
