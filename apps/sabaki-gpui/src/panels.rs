@@ -850,6 +850,38 @@ pub fn render_settings_panel(
                 .flex_col()
                 .gap_1()
                 .text_sm()
+                .child("mode")
+                .child(
+                    div().flex().gap_1().child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .border_1()
+                            .border_color(rgb(0x8a6d3b))
+                            .rounded(px(4.0))
+                            .bg(if shell.scoring_mode {
+                                rgb(0xf7ecd8)
+                            } else {
+                                rgb(0xe8e0d4)
+                            })
+                            .child(if shell.scoring_mode {
+                                "scoring: on"
+                            } else {
+                                "scoring: off"
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(ShellApp::on_scoring_mode_toggle),
+                            ),
+                    ),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
                 .child("preferences")
                 .child(
                     div()
@@ -874,20 +906,36 @@ pub fn render_settings_panel(
         )
 }
 
-/// The goban plus the analysis best-move ring overlay.
+/// The goban plus the analysis best-move ring overlay. Rendering options come
+/// from the shell settings (`view.show_coordinates`, `view.show_move_numbers`)
+/// and the document state (move numbers, scoring overrides).
 pub fn render_goban_area(
-    board: &sabaki_domain_core::BoardSnapshot,
+    snapshot: &GameSnapshot,
     theme: &crate::theme::ThemeTokens,
     best_move: Option<sabaki_domain_core::Vertex>,
+    shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Div {
+    let board = &snapshot.board;
+    let options = crate::goban_view::GobanRenderOptions {
+        show_coordinates: shell
+            .settings
+            .get_bool("view.show_coordinates")
+            .unwrap_or(false),
+        show_move_numbers: shell
+            .settings
+            .get_bool("view.show_move_numbers")
+            .unwrap_or(false),
+        move_numbers: crate::goban_view::move_numbers_from_moves(&snapshot.moves),
+        score_overrides: snapshot.score_overrides.clone(),
+    };
     div()
         .child(
             div()
                 .absolute()
                 .left(px(BOARD_WINDOW_OFFSET_X))
                 .top(px(BOARD_WINDOW_OFFSET_Y))
-                .child(render_goban(board, BOARD_PIXEL_SIZE, theme))
+                .child(render_goban(board, BOARD_PIXEL_SIZE, theme, &options))
                 .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_board_clicked)),
         )
         .child(if let Some(vertex) = best_move {

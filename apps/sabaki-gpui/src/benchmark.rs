@@ -226,13 +226,17 @@ pub struct LargeGameBenchmarkResult {
 impl LargeGameBenchmarkResult {
     pub fn summary(&self) -> String {
         format!(
-            "large game: {}x{} {} moves (reopen {}), open {:?}, {:?}/snapshot, {:?}/nav-round",
+            "large game: {}x{} {} moves (reopen {}), open {:?}, {} snapshots in {:?} ({:?}/snapshot), {} nav-rounds in {:?} ({:?}/nav-round)",
             self.board_width,
             self.board_width,
             self.moves,
             self.reopened_moves,
             self.open_total,
+            self.snapshot_iterations,
+            self.snapshot_total,
             self.per_snapshot,
+            self.navigation_iterations,
+            self.navigation_total,
             self.per_navigation_round
         )
     }

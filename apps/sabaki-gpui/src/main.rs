@@ -42,7 +42,10 @@ use crate::file_workflow::{
     clear_autosave, record_opened_file,
 };
 use crate::goban_view::vertex_at;
-use crate::markup::{MarkupTool, create_markup_transaction};
+use crate::markup::{
+    MarkupTool, create_markup_transaction, create_scoring_transaction, create_setup_transactions,
+    next_scoring_override,
+};
 use crate::navigation::{
     NavigationDirection, navigation_availability, navigation_target, position_label,
 };
@@ -116,6 +119,7 @@ struct ShellApp {
     installed_plugins: Vec<PluginPanelEntry>,
     last_vertex: Option<Vertex>,
     active_tool: MarkupTool,
+    scoring_mode: bool,
     comment_focus_handle: FocusHandle,
     comment_draft: SharedString,
     benchmark: SharedString,
@@ -225,6 +229,7 @@ impl ShellApp {
             installed_plugins,
             last_vertex: None,
             active_tool: MarkupTool::Play,
+            scoring_mode: false,
             comment_focus_handle: cx.focus_handle(),
             comment_draft: "".into(),
             benchmark: benchmark_result.summary().into(),
@@ -1261,7 +1266,11 @@ impl ShellApp {
         else {
             return;
         };
-        if self.active_tool == MarkupTool::Play {
+        if self.scoring_mode {
+            self.scoring_at(vertex, cx);
+        } else if self.active_tool.is_setup_tool() {
+            self.setup_at(vertex, cx);
+        } else if self.active_tool == MarkupTool::Play {
             self.play_at(vertex, cx);
         } else {
             self.markup_at(vertex, cx);
@@ -1328,6 +1337,86 @@ impl ShellApp {
             }
             Err(error) => self.status = format!("markup failed: {error}").into(),
         }
+        cx.notify();
+    }
+
+    /// Edits setup stones on the current node: `AB`/`AW` placement appends
+    /// the clicked vertex to the node's setup property; clear removes it from
+    /// both properties.
+    fn setup_at(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
+        let snapshot = self.host.snapshot();
+        let node_id = snapshot.current_node_id.clone();
+        let node_properties = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .map(|node| node.properties.clone())
+            .unwrap_or_default();
+        let transactions =
+            create_setup_transactions(&node_id, vertex, self.active_tool, &node_properties);
+        if transactions.is_empty() {
+            self.status = "no setup change for this vertex".into();
+            cx.notify();
+            return;
+        }
+        let mut events = RecordingSink::default();
+        let mut applied = 0;
+        for transaction in transactions {
+            match self.host.apply_transaction(transaction, &mut events) {
+                Ok(_) => applied += 1,
+                Err(error) => {
+                    self.status = format!("setup failed: {error}").into();
+                    break;
+                }
+            }
+        }
+        if applied > 0 {
+            self.last_vertex = Some(vertex);
+            self.status = format!(
+                "{} at {},{}",
+                self.active_tool.label(),
+                vertex.column,
+                vertex.row
+            )
+            .into();
+            self.synchronize_recovery();
+        }
+        cx.notify();
+    }
+
+    /// Toggles the scoring override on the clicked vertex through the
+    /// `ApplyScoringOverride` transaction, cycling none → alive black →
+    /// alive white → clear.
+    fn scoring_at(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
+        let current = self.host.snapshot().score_overrides.get(&vertex).copied();
+        let transaction = create_scoring_transaction(vertex, next_scoring_override(current));
+        let mut events = RecordingSink::default();
+        match self.host.apply_transaction(transaction, &mut events) {
+            Ok(_) => {
+                self.last_vertex = Some(vertex);
+                self.status =
+                    format!("scoring override at {},{}", vertex.column, vertex.row).into();
+                self.synchronize_recovery();
+            }
+            Err(error) => self.status = format!("scoring failed: {error}").into(),
+        }
+        cx.notify();
+    }
+
+    /// Toggles the scoring mode: while active, board clicks cycle scoring
+    /// overrides instead of placing moves.
+    fn on_scoring_mode_toggle(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.scoring_mode = !self.scoring_mode;
+        self.status = if self.scoring_mode {
+            "scoring mode: click stones to cycle dead/alive".into()
+        } else {
+            "scoring mode off".into()
+        };
         cx.notify();
     }
 
@@ -1505,9 +1594,10 @@ impl Render for ShellApp {
             ))
             .child(panels::render_settings_panel(&settings_rows, self, cx))
             .child(panels::render_goban_area(
-                &snapshot.board,
+                &snapshot,
                 &self.theme,
                 self.analysis_best_move,
+                self,
                 cx,
             ))
     }

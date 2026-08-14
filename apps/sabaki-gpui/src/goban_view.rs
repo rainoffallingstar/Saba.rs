@@ -1,11 +1,37 @@
+use std::collections::BTreeMap;
+
 use gpui::{Div, ParentElement, Pixels, Point, Styled, div, px, rgb};
-use sabaki_domain_core::{BoardSnapshot, Color, Vertex};
+use sabaki_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
 
 use crate::markup::markup_symbol;
 use crate::theme::ThemeTokens;
 
 const BOARD_MARGIN_PX: f32 = 28.0;
 const STONE_SIZE_PX: f32 = 22.0;
+
+/// Rendering options derived from the shell settings and document state.
+#[derive(Clone, Debug, Default)]
+pub struct GobanRenderOptions {
+    /// Draw A-T column and 1-19 row labels in the margins.
+    pub show_coordinates: bool,
+    /// Draw the move number on each stone.
+    pub show_move_numbers: bool,
+    /// Move number per vertex (1-based), built from the document's moves.
+    pub move_numbers: BTreeMap<Vertex, usize>,
+    /// Alive-stone overrides from `GameSnapshot.score_overrides`; overridden
+    /// vertices get a cross marker.
+    pub score_overrides: BTreeMap<Vertex, i8>,
+}
+
+/// Builds the 1-based move number per vertex from a document's move list.
+/// `pass` moves (no vertex) are skipped.
+pub fn move_numbers_from_moves(moves: &[MoveDto]) -> BTreeMap<Vertex, usize> {
+    moves
+        .iter()
+        .enumerate()
+        .filter_map(|(index, move_dto)| move_dto.vertex.map(|vertex| (vertex, index + 1)))
+        .collect()
+}
 
 pub fn board_spacing(board: &BoardSnapshot, board_pixel_size: f32) -> f32 {
     (board_pixel_size - 2.0 * BOARD_MARGIN_PX) / (board.width.max(2) - 1) as f32
@@ -75,6 +101,56 @@ fn board_line(from: (f32, f32), to: (f32, f32), thickness_px: f32, color: u32) -
     }
 }
 
+/// Computes the two wing endpoints of an arrowhead at `end`, pointing back
+/// along the line from `start` to `end`. Pure so the geometry is testable.
+pub fn arrowhead_vertices(start: (f32, f32), end: (f32, f32), wing_length: f32) -> [(f32, f32); 2] {
+    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+    let length = (dx * dx + dy * dy).sqrt().max(1e-6);
+    let (ux, uy) = (dx / length, dy / length);
+    let (px, py) = (-uy, ux);
+    let half_width = wing_length * 0.5;
+    [
+        (
+            end.0 - ux * wing_length + px * half_width,
+            end.1 - uy * wing_length + py * half_width,
+        ),
+        (
+            end.0 - ux * wing_length - px * half_width,
+            end.1 - uy * wing_length - py * half_width,
+        ),
+    ]
+}
+
+/// The SGF column letter for a zero-based column index, skipping `I`.
+fn column_letter(column: usize) -> char {
+    let offset = if column >= 8 { column + 1 } else { column };
+    char::from_u32((b'A' + offset as u8) as u32).unwrap_or('A')
+}
+
+/// Formats a zero-based vertex as an SGF point like `dd` (lowercase).
+pub fn format_sgf_vertex(vertex: Vertex) -> String {
+    let column = char::from_u32((b'a' + vertex.column as u8) as u32).unwrap_or('a');
+    let row = char::from_u32((b'a' + vertex.row as u8) as u32).unwrap_or('a');
+    format!("{column}{row}")
+}
+
+/// Parses an SGF point like `dd` back into a zero-based vertex.
+pub fn parse_sgf_vertex(value: &str) -> Option<Vertex> {
+    let mut characters = value.chars();
+    let column_char = characters.next()?;
+    let row_char = characters.next()?;
+    if characters.next().is_some() {
+        return None;
+    }
+    if !column_char.is_ascii_lowercase() || !row_char.is_ascii_lowercase() {
+        return None;
+    }
+    Some(Vertex {
+        column: usize::from(column_char as u8 - b'a'),
+        row: usize::from(row_char as u8 - b'a'),
+    })
+}
+
 fn stone(color: Color, x: f32, y: f32, stone_black: u32, stone_white: u32) -> Div {
     let stone_color = match color {
         Color::Black => rgb(stone_black),
@@ -91,7 +167,51 @@ fn stone(color: Color, x: f32, y: f32, stone_black: u32, stone_white: u32) -> Di
         .bg(stone_color)
 }
 
-pub fn render_goban(board: &BoardSnapshot, board_pixel_size: f32, theme: &ThemeTokens) -> Div {
+/// Renders a move number centered on a stone, in the contrast color.
+fn move_number_div(x: f32, y: f32, number: usize, on_black: bool) -> Div {
+    div()
+        .absolute()
+        .left(px(x - 6.0))
+        .top(px(y - 7.0))
+        .w(px(12.0))
+        .h(px(14.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .text_color(rgb(if on_black { 0xffffff } else { 0x111111 }))
+        .child(number.to_string())
+}
+
+fn star_point_vertices(width: usize, height: usize) -> Vec<(usize, usize)> {
+    if width < 9 || height < 9 {
+        return Vec::new();
+    }
+    let columns: Vec<usize> = if width >= 13 {
+        vec![3, width / 2, width - 4]
+    } else {
+        vec![3, width - 4]
+    };
+    let rows: Vec<usize> = if height >= 13 {
+        vec![3, height / 2, height - 4]
+    } else {
+        vec![3, height - 4]
+    };
+    let mut result = Vec::new();
+    for &column in &columns {
+        for &row in &rows {
+            result.push((column, row));
+        }
+    }
+    result
+}
+
+pub fn render_goban(
+    board: &BoardSnapshot,
+    board_pixel_size: f32,
+    theme: &ThemeTokens,
+    options: &GobanRenderOptions,
+) -> Div {
     let width = board.width;
     let height = board.height;
     let board_size = board_pixel_size;
@@ -135,6 +255,19 @@ pub fn render_goban(board: &BoardSnapshot, board_pixel_size: f32, theme: &ThemeT
         );
     }
 
+    // Board lines and arrows from the snapshot markup.
+    for line in &board.lines {
+        let start =
+            intersection_position(board, board_pixel_size, line.start.column, line.start.row);
+        let end = intersection_position(board, board_pixel_size, line.end.column, line.end.row);
+        children.push(board_line(start, end, 2.0, 0xc0392b));
+        if line.line_type == "arrow" {
+            for wing in arrowhead_vertices(start, end, 9.0) {
+                children.push(board_line(end, wing, 2.0, 0xc0392b));
+            }
+        }
+    }
+
     for row in 0..height {
         for column in 0..width {
             let sign = board.sign_map[row][column];
@@ -146,8 +279,27 @@ pub fn render_goban(board: &BoardSnapshot, board_pixel_size: f32, theme: &ThemeT
             let (x, y) = intersection_position(board, board_pixel_size, column, row);
             if let Some(color) = color {
                 children.push(stone(color, x, y, stone_black, stone_white));
+                if options.show_move_numbers {
+                    if let Some(number) = options.move_numbers.get(&Vertex { column, row }) {
+                        children.push(move_number_div(x, y, *number, color == Color::Black));
+                    }
+                }
             }
         }
+    }
+
+    // Last-move indicator on the current vertex.
+    if let Some(current) = board.current_vertex {
+        let (x, y) = intersection_position(board, board_pixel_size, current.column, current.row);
+        children.push(
+            div()
+                .absolute()
+                .left(px(x - 4.0))
+                .top(px(y - 4.0))
+                .size(px(8.0))
+                .rounded_full()
+                .bg(rgb(0xc0392b)),
+        );
     }
 
     for row in 0..height {
@@ -172,6 +324,66 @@ pub fn render_goban(board: &BoardSnapshot, board_pixel_size: f32, theme: &ThemeT
         }
     }
 
+    // Scoring overrides: mark overridden vertices with a cross.
+    for (vertex, override_value) in &options.score_overrides {
+        if *override_value == 0 {
+            continue;
+        }
+        let (x, y) = intersection_position(board, board_pixel_size, vertex.column, vertex.row);
+        children.push(
+            div()
+                .absolute()
+                .left(px(x - 8.0))
+                .top(px(y - 10.0))
+                .w(px(16.0))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(rgb(0xc0392b))
+                .child("×"),
+        );
+    }
+
+    // Coordinates in the margins.
+    if options.show_coordinates {
+        for column in 0..width {
+            let (x, _) = intersection_position(board, board_pixel_size, column, 0);
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(x - 6.0))
+                    .top(px(board_size - BOARD_MARGIN_PX + 6.0))
+                    .w(px(12.0))
+                    .h(px(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(rgb(0x6b4f2a))
+                    .child(column_letter(column).to_string()),
+            );
+        }
+        for row in 0..height {
+            let (_, y) = intersection_position(board, board_pixel_size, 0, row);
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(BOARD_MARGIN_PX / 2.0 - 6.0))
+                    .top(px(y - 7.0))
+                    .w(px(12.0))
+                    .h(px(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(rgb(0x6b4f2a))
+                    .child((row + 1).to_string()),
+            );
+        }
+    }
+
     div()
         .absolute()
         .left(px(BOARD_MARGIN_PX / 2.0))
@@ -181,34 +393,14 @@ pub fn render_goban(board: &BoardSnapshot, board_pixel_size: f32, theme: &ThemeT
         .child(div().relative().size(px(board_size)).children(children))
 }
 
-fn star_point_vertices(width: usize, height: usize) -> Vec<(usize, usize)> {
-    if width < 9 || height < 9 {
-        return Vec::new();
-    }
-    let columns: Vec<usize> = if width >= 13 {
-        vec![3, width / 2, width - 4]
-    } else {
-        vec![3, width - 4]
-    };
-    let rows: Vec<usize> = if height >= 13 {
-        vec![3, height / 2, height - 4]
-    } else {
-        vec![3, height - 4]
-    };
-    let mut result = Vec::new();
-    for &column in &columns {
-        for &row in &rows {
-            result.push((column, row));
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{board_spacing, render_goban, vertex_at};
+    use super::{
+        GobanRenderOptions, arrowhead_vertices, board_spacing, column_letter, format_sgf_vertex,
+        move_numbers_from_moves, parse_sgf_vertex, render_goban, vertex_at,
+    };
     use gpui::px;
-    use sabaki_domain_core::{BoardSnapshot, Vertex};
+    use sabaki_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
 
     fn test_board(width: usize, height: usize) -> BoardSnapshot {
         sabaki_domain_core::GameDocument::new(width, height)
@@ -259,7 +451,80 @@ mod tests {
     #[test]
     fn renders_a_board_element_for_any_supported_size() {
         let board = test_board(19, 19);
-        let element = render_goban(&board, 400.0, &crate::theme::ThemeTokens::default());
+        let options = GobanRenderOptions {
+            show_coordinates: true,
+            show_move_numbers: true,
+            ..GobanRenderOptions::default()
+        };
+        let element = render_goban(
+            &board,
+            400.0,
+            &crate::theme::ThemeTokens::default(),
+            &options,
+        );
         let _ = element;
+    }
+
+    #[test]
+    fn arrowhead_wings_point_back_along_the_line() {
+        // Horizontal line: wings sit behind the end, above and below it.
+        let wings = arrowhead_vertices((0.0, 0.0), (10.0, 0.0), 6.0);
+        assert!((wings[0].0 - 4.0).abs() < 1e-6);
+        assert!((wings[0].1 - 3.0).abs() < 1e-6);
+        assert!((wings[1].0 - 4.0).abs() < 1e-6);
+        assert!((wings[1].1 + 3.0).abs() < 1e-6);
+
+        // Degenerate zero-length line still yields finite wings.
+        let degenerate = arrowhead_vertices((5.0, 5.0), (5.0, 5.0), 6.0);
+        assert!(degenerate[0].0.is_finite());
+    }
+
+    #[test]
+    fn column_letters_skip_i() {
+        assert_eq!(column_letter(0), 'A');
+        assert_eq!(column_letter(7), 'H');
+        assert_eq!(column_letter(8), 'J');
+        assert_eq!(column_letter(18), 'T');
+    }
+
+    #[test]
+    fn move_numbers_are_one_based_and_skip_passes() {
+        let moves = vec![
+            MoveDto {
+                color: Color::Black,
+                vertex: Some(Vertex { column: 3, row: 3 }),
+            },
+            MoveDto {
+                color: Color::White,
+                vertex: None,
+            },
+            MoveDto {
+                color: Color::Black,
+                vertex: Some(Vertex { column: 15, row: 3 }),
+            },
+        ];
+        let numbers = move_numbers_from_moves(&moves);
+        assert_eq!(numbers.get(&Vertex { column: 3, row: 3 }), Some(&1));
+        assert_eq!(numbers.get(&Vertex { column: 15, row: 3 }), Some(&3));
+        assert_eq!(numbers.len(), 2);
+    }
+
+    #[test]
+    fn sgf_vertices_round_trip() {
+        for vertex in [
+            Vertex { column: 0, row: 0 },
+            Vertex {
+                column: 18,
+                row: 18,
+            },
+        ] {
+            let encoded = format_sgf_vertex(vertex);
+            assert_eq!(parse_sgf_vertex(&encoded), Some(vertex));
+        }
+        assert_eq!(format_sgf_vertex(Vertex { column: 3, row: 3 }), "dd");
+        assert_eq!(parse_sgf_vertex("dd"), Some(Vertex { column: 3, row: 3 }));
+        assert_eq!(parse_sgf_vertex("DD"), None);
+        assert_eq!(parse_sgf_vertex("d"), None);
+        assert_eq!(parse_sgf_vertex("ddd"), None);
     }
 }

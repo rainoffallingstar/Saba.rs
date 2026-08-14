@@ -10,8 +10,9 @@ use sabaki_domain_core::{
 };
 
 /// The markup tools exposed by the shell toolbar. `Play` falls through to the
-/// normal board interaction; the remaining tools attach a markup marker to the
-/// clicked vertex via the `AddMarkup` transaction.
+/// normal board interaction; the markup tools attach a marker to the clicked
+/// vertex via the `AddMarkup` transaction; the setup tools write `AB`/`AW`/
+/// `AE`-style setup properties via `SetNodeProperty`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MarkupTool {
     Play,
@@ -20,6 +21,9 @@ pub enum MarkupTool {
     Triangle,
     Cross,
     Label,
+    SetupBlack,
+    SetupWhite,
+    SetupClear,
 }
 
 pub const MARKUP_TOOLS: &[MarkupTool] = &[
@@ -29,6 +33,9 @@ pub const MARKUP_TOOLS: &[MarkupTool] = &[
     MarkupTool::Triangle,
     MarkupTool::Cross,
     MarkupTool::Label,
+    MarkupTool::SetupBlack,
+    MarkupTool::SetupWhite,
+    MarkupTool::SetupClear,
 ];
 
 impl MarkupTool {
@@ -40,6 +47,9 @@ impl MarkupTool {
             MarkupTool::Triangle => "Triangle",
             MarkupTool::Cross => "Cross",
             MarkupTool::Label => "Label",
+            MarkupTool::SetupBlack => "Setup black",
+            MarkupTool::SetupWhite => "Setup white",
+            MarkupTool::SetupClear => "Setup clear",
         }
     }
 
@@ -51,8 +61,26 @@ impl MarkupTool {
             MarkupTool::Triangle => Some("TR"),
             MarkupTool::Cross => Some("MA"),
             MarkupTool::Label => Some("LB"),
-            MarkupTool::Play => None,
+            MarkupTool::Play
+            | MarkupTool::SetupBlack
+            | MarkupTool::SetupWhite
+            | MarkupTool::SetupClear => None,
         }
+    }
+
+    /// The SGF setup property for this tool (`AB`, `AW`, `AE`).
+    pub fn setup_property(self) -> Option<&'static str> {
+        match self {
+            MarkupTool::SetupBlack => Some("AB"),
+            MarkupTool::SetupWhite => Some("AW"),
+            MarkupTool::SetupClear => Some("AE"),
+            _ => None,
+        }
+    }
+
+    /// Whether this tool drives setup-stone editing instead of markup.
+    pub fn is_setup_tool(self) -> bool {
+        self.setup_property().is_some()
     }
 }
 
@@ -80,6 +108,96 @@ pub fn create_markup_transaction(
         nodes: Vec::new(),
         score_override: None,
     })
+}
+
+fn set_property_transaction(
+    node_id: &NodeId,
+    property: &str,
+    values: Vec<String>,
+) -> GameTransaction {
+    GameTransaction {
+        schema_version: CURRENT_TRANSACTION_SCHEMA_VERSION,
+        transaction_type: GameTransactionType::SetNodeProperty,
+        color: None,
+        vertex: None,
+        node_id: Some(node_id.clone()),
+        property: Some(property.to_owned()),
+        values,
+        marker: None,
+        nodes: Vec::new(),
+        score_override: None,
+    }
+}
+
+/// Builds the setup-stone transactions for the current node. Placing a black
+/// or white setup stone appends the vertex to the node's `AB`/`AW` property
+/// (deduplicated); clearing removes the vertex from both properties. A
+/// property that ends up empty is removed entirely (empty `values`), which
+/// also covers the initial placement when no setup exists yet.
+pub fn create_setup_transactions(
+    node_id: &NodeId,
+    vertex: Vertex,
+    tool: MarkupTool,
+    node_properties: &sabaki_domain_core::Properties,
+) -> Vec<GameTransaction> {
+    let point = crate::goban_view::format_sgf_vertex(vertex);
+    match tool.setup_property() {
+        Some("AB") | Some("AW") => {
+            let property = tool
+                .setup_property()
+                .expect("matched setup properties exist");
+            let mut values = node_properties.get(property).cloned().unwrap_or_default();
+            if !values.contains(&point) {
+                values.push(point);
+            }
+            vec![set_property_transaction(node_id, property, values)]
+        }
+        Some("AE") => {
+            let mut transactions = Vec::new();
+            for property in ["AB", "AW"] {
+                if !node_properties.contains_key(property) {
+                    continue;
+                }
+                let values: Vec<String> = node_properties
+                    .get(property)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|value| value != &point)
+                    .collect();
+                transactions.push(set_property_transaction(node_id, property, values));
+            }
+            transactions
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Cycles the scoring override for a vertex: none → alive black (1) →
+/// alive white (-1) → clear (0). Pure so the cycling is unit-testable.
+pub fn next_scoring_override(current: Option<i8>) -> i8 {
+    match current {
+        None | Some(0) => 1,
+        Some(1) => -1,
+        Some(-1) => 0,
+        Some(_) => 1,
+    }
+}
+
+/// Builds the `ApplyScoringOverride` transaction for the current position.
+pub fn create_scoring_transaction(vertex: Vertex, override_value: i8) -> GameTransaction {
+    GameTransaction {
+        schema_version: CURRENT_TRANSACTION_SCHEMA_VERSION,
+        transaction_type: GameTransactionType::ApplyScoringOverride,
+        color: None,
+        vertex: Some(vertex),
+        node_id: None,
+        property: None,
+        values: Vec::new(),
+        marker: None,
+        nodes: Vec::new(),
+        score_override: Some(override_value),
+    }
 }
 
 /// Renders a compact single-character symbol for a marker type, matching the
@@ -136,6 +254,9 @@ where
                     MarkupTool::Triangle => "△".to_owned(),
                     MarkupTool::Cross => "✕".to_owned(),
                     MarkupTool::Label => "A".to_owned(),
+                    MarkupTool::SetupBlack => "B".to_owned(),
+                    MarkupTool::SetupWhite => "W".to_owned(),
+                    MarkupTool::SetupClear => "✖".to_owned(),
                 })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -235,5 +356,96 @@ mod tests {
         assert_eq!(markup_symbol("cross", None), "✕");
         assert_eq!(markup_symbol("label", Some("A")), "A");
         assert_eq!(markup_symbol("label", None), "?");
+    }
+    #[test]
+    fn setup_placement_appends_and_deduplicates_vertices() {
+        use sabaki_domain_core::Properties;
+
+        let node_id = "root".to_owned();
+        let mut properties = Properties::new();
+        properties.insert("AB".to_owned(), vec!["dd".to_owned()]);
+
+        let transactions = super::create_setup_transactions(
+            &node_id,
+            Vertex { column: 3, row: 3 },
+            MarkupTool::SetupBlack,
+            &properties,
+        );
+
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(
+            transactions[0].transaction_type,
+            GameTransactionType::SetNodeProperty
+        );
+        assert_eq!(transactions[0].property.as_deref(), Some("AB"));
+        assert_eq!(transactions[0].values, vec!["dd".to_owned()]);
+    }
+
+    #[test]
+    fn setup_placement_writes_a_new_property_when_none_exists() {
+        let transactions = super::create_setup_transactions(
+            &"root".to_owned(),
+            Vertex { column: 15, row: 3 },
+            MarkupTool::SetupWhite,
+            &sabaki_domain_core::Properties::new(),
+        );
+
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].property.as_deref(), Some("AW"));
+        assert_eq!(transactions[0].values, vec!["pd".to_owned()]);
+    }
+
+    #[test]
+    fn setup_clear_removes_the_vertex_from_both_properties() {
+        use sabaki_domain_core::Properties;
+
+        let mut properties = Properties::new();
+        properties.insert("AB".to_owned(), vec!["dd".to_owned(), "pp".to_owned()]);
+        properties.insert("AW".to_owned(), vec!["dd".to_owned()]);
+
+        let transactions = super::create_setup_transactions(
+            &"root".to_owned(),
+            Vertex { column: 3, row: 3 },
+            MarkupTool::SetupClear,
+            &properties,
+        );
+
+        assert_eq!(transactions.len(), 2);
+        let ab = transactions
+            .iter()
+            .find(|transaction| transaction.property.as_deref() == Some("AB"))
+            .expect("an AB transaction exists");
+        assert_eq!(ab.values, vec!["pp".to_owned()]);
+        let aw = transactions
+            .iter()
+            .find(|transaction| transaction.property.as_deref() == Some("AW"))
+            .expect("an AW transaction exists");
+        assert!(aw.values.is_empty(), "emptied properties are removed");
+    }
+
+    #[test]
+    fn setup_clear_skips_absent_properties() {
+        let transactions = super::create_setup_transactions(
+            &"root".to_owned(),
+            Vertex { column: 3, row: 3 },
+            MarkupTool::SetupClear,
+            &sabaki_domain_core::Properties::new(),
+        );
+        assert!(transactions.is_empty());
+    }
+
+    #[test]
+    fn scoring_override_cycles_through_states() {
+        assert_eq!(super::next_scoring_override(None), 1);
+        assert_eq!(super::next_scoring_override(Some(0)), 1);
+        assert_eq!(super::next_scoring_override(Some(1)), -1);
+        assert_eq!(super::next_scoring_override(Some(-1)), 0);
+
+        let transaction = super::create_scoring_transaction(Vertex { column: 3, row: 3 }, 1);
+        assert_eq!(
+            transaction.transaction_type,
+            GameTransactionType::ApplyScoringOverride
+        );
+        assert_eq!(transaction.score_override, Some(1));
     }
 }
