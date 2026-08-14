@@ -126,14 +126,14 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 | 目标 | 数量 |
 |---|---|
-| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ **5 legacy fixture 导入集成** |
+| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + **5 SGF proptest** |
 | `sabaki-host` | 78 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 105 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 222 个全绿）
+cargo test --workspace        # 全部测试（当前 227 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -170,13 +170,14 @@ stop analysis、generation 取消旧任务。
 重叠歧义按候选顺序确定性决策）；host `open()` 与 GPUI 原生文件访问按扩展名
 分发导入（导入结果归一化为 UTF-8 SGF），SGF 路径保留 `CA` 检测出的源编码
 （修复此前硬编码 Utf8 的问题）；真实 fixture 集成测试（even/handicap2.ngf、
-utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试。
+utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
+**SGF property tests（proptest）**：序列化幂等、move 序列/棋盘/根属性往返
+一致、任意合法对局不 panic（`domain-core/tests/sgf_properties.rs`）。
 
 按优先级排序的后续候选迭代：
 
 1. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
-   native 进程监督（超时/重启/日志）、主题包安装、SGF property tests
-   （proptest 性质测试，差分 fixture 已铺好基线）。
+   native 进程监督（超时/重启/日志）、主题包安装。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
