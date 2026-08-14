@@ -87,26 +87,41 @@ pub fn wasm_capabilities_for(
     let has_game_read = record
         .granted_permissions
         .contains(&PluginPermission::GameRead);
+    let has_game_write = record
+        .granted_permissions
+        .contains(&PluginPermission::GameWrite);
     sabaki_plugin_runtime::WasmCapabilities {
         game_snapshot: if has_game_read {
             game_snapshot.map(str::to_owned)
         } else {
             None
         },
+        game_write: has_game_write,
     }
+}
+
+/// The result of a WASM invocation: the plugin's JSON response plus any
+/// transaction proposals it submitted through `game.submitTransaction`.
+/// Proposals are returned separately so the caller can validate and apply
+/// them through its own transaction path.
+#[derive(Debug)]
+pub struct WasmInvocationResult {
+    pub response: Value,
+    pub proposed_transactions: Vec<Value>,
 }
 
 /// Invokes a plugin command through the sandboxed WASM instance. The request
 /// DTO mirrors the native JSON-RPC shape (`method` + `params`) so plugins
 /// implement one protocol regardless of layer. `game_snapshot` is exposed to
-/// the plugin only when `GameRead` was granted.
+/// the plugin only when `GameRead` was granted; `game.submitTransaction`
+/// only when `GameWrite` was granted.
 pub fn invoke_wasm_command(
     record: &PluginRecord,
     module: &WasmPluginModule,
     method: &str,
     params: Value,
     game_snapshot: Option<&str>,
-) -> Result<Value, WasmWorkflowError> {
+) -> Result<WasmInvocationResult, WasmWorkflowError> {
     if !matches!(record.manifest.runtime, PluginRuntime::Wasm) {
         return Err(WasmWorkflowError::NotWasm(record.manifest.id.clone()));
     }
@@ -121,9 +136,14 @@ pub fn invoke_wasm_command(
         "method": method,
         "params": params,
     });
-    instance
+    let response = instance
         .invoke(&request)
-        .map_err(WasmWorkflowError::Runtime)
+        .map_err(WasmWorkflowError::Runtime)?;
+    let proposed_transactions = instance.take_pending_transactions();
+    Ok(WasmInvocationResult {
+        response,
+        proposed_transactions,
+    })
 }
 
 #[cfg(test)]
@@ -191,8 +211,12 @@ mod tests {
         )
         .expect("invocation succeeds");
 
-        assert_eq!(result["method"], "game.snapshot");
-        assert_eq!(result["params"], serde_json::json!({"depth": 1}));
+        assert_eq!(result.response["method"], "game.snapshot");
+        assert_eq!(result.response["params"], serde_json::json!({"depth": 1}));
+        assert!(
+            result.proposed_transactions.is_empty(),
+            "an echo plugin must not propose transactions"
+        );
         fs::remove_dir_all(&install_path).ok();
     }
 
@@ -245,11 +269,26 @@ mod tests {
             "GameRead must expose the game snapshot capability"
         );
 
+        record.granted_permissions = BTreeSet::from([PluginPermission::GameWrite]);
+        let with_write = super::wasm_capabilities_for(&record, None);
+        assert!(
+            with_write.game_write,
+            "GameWrite must expose the submit-transaction capability"
+        );
+        assert_eq!(
+            with_write.game_snapshot, None,
+            "GameWrite alone must not expose the snapshot capability"
+        );
+
         record.granted_permissions = BTreeSet::new();
         let without_read = super::wasm_capabilities_for(&record, Some("{\"moves\":3}"));
         assert_eq!(
             without_read.game_snapshot, None,
             "without GameRead the snapshot capability must stay absent"
+        );
+        assert!(
+            !without_read.game_write,
+            "without GameWrite the transaction capability must stay absent"
         );
         let _ = &WasmCapabilities::default();
         fs::remove_dir_all(&install_path).ok();

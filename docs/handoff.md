@@ -127,14 +127,14 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | 目标 | 数量 |
 |---|---|
 | `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
-| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 9 wasm 沙箱（含 capability import）+ 2 帧/校验 |
-| `sabaki-host` | 98 单元（含 2 监督进程冒烟、5 wasm 工作流、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
+| `sabaki-host` | 98 单元（含 2 监督进程冒烟、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 102 测试（theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 278 个全绿）
+cargo test --workspace        # 全部测试（当前 280 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -217,10 +217,18 @@ rgb()）;GPUI 启动时对非空 user styles.css 生成迁移报告并显示在�
 缺口为 #10 原生 screenshot/headless GPU CI(gpui 0.2.2 能力限制,附短期/
 中期/里程碑建议)。
 
+**迭代 16（WASM 事务写入）已完成：** `WasmCapabilities.game_write`
+（授权 `GameWrite` 时暴露 `sabaki.game_submit_transaction` import,未授权
+link 失败）;插件提交的事务 JSON 被**收集为 proposal**(不直接改游戏),
+invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
+返回 `WasmInvocationResult { response, proposed_transactions }`;GPUI
+命令分发对每个 proposal 反序列化为 `GameTransaction` 并经
+`HostApplication::apply_transaction` 验证应用(非法落子/劫/占用由宿主拒绝),
+状态栏报告 applied/rejected 计数。WAT 测试:授权收集、未授权 link 失败。
+
 按优先级排序的后续候选迭代：
 
-1. **路线图远期项**：WASM 事务写入（gameWrite→提交事务）、主题包安装
-   入口 UI。
+1. **路线图远期项**：主题包安装入口 UI（从目录安装/卸载按钮）。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。

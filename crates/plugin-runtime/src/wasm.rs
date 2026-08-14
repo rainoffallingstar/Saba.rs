@@ -13,6 +13,8 @@
 //! response is re-parsed and validated by the host before it reaches any
 //! caller.
 
+use std::sync::{Arc, Mutex};
+
 use wasmi::{Config, Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
 
 /// Maximum fuel per invocation; a plugin exceeding it is trapped.
@@ -78,7 +80,13 @@ pub struct WasmPluginInstance {
     store: Store<()>,
     memory: Memory,
     invoke: TypedFunc<(i32, i32), i32>,
+    pending_transactions: Arc<Mutex<Vec<TransactionProposal>>>,
 }
+
+/// A transaction proposal collected from a WASM plugin during an
+/// invocation. Carries the raw JSON so the caller can validate against its
+/// own transaction schema.
+pub type TransactionProposal = serde_json::Value;
 
 /// One host capability offered to a WASM plugin (design §10.3: the host
 /// provides the *minimal* capability imports matching the granted
@@ -89,10 +97,17 @@ pub struct WasmPluginInstance {
 /// The capability names are stable and versioned through the plugin API:
 /// - `game.snapshot` (requires `GameRead`): returns the current game
 ///   snapshot as JSON, identical to the native `game.snapshot` RPC.
+/// - `game.submitTransaction` (requires `GameWrite`): accepts a JSON
+///   `GameTransaction`, collects it as a proposal, and returns
+///   `{"ok":true}` (or an error object). The host validates and applies
+///   proposals *after* the invocation returns; a plugin can never mutate
+///   the game outside the host's validation path.
 #[derive(Clone, Debug, Default)]
 pub struct WasmCapabilities {
     /// Optional `game.snapshot` result JSON (granted `GameRead`).
     pub game_snapshot: Option<String>,
+    /// Whether `game.submitTransaction` is exposed (granted `GameWrite`).
+    pub game_write: bool,
 }
 
 impl WasmPluginInstance {
@@ -132,13 +147,58 @@ impl WasmPluginInstance {
                 )
                 .map_err(|error| WasmError::Compile(error.to_string()))?;
         }
+        let pending_transactions = Arc::new(Mutex::new(Vec::new()));
+        if capabilities.game_write {
+            let proposals = Arc::clone(&pending_transactions);
+            linker
+                .func_wrap(
+                    "sabaki",
+                    "game_submit_transaction",
+                    move |mut caller: wasmi::Caller<'_, ()>, ptr: i32, len: i32| {
+                        let memory = caller
+                            .get_export("memory")
+                            .and_then(|export| export.into_memory())
+                            .ok_or_else(|| wasmi::Error::new("plugin memory is unavailable"))?;
+                        let mut input = vec![0; len.max(0) as usize];
+                        memory
+                            .read(&caller, ptr.max(0) as usize, &mut input)
+                            .map_err(|error| wasmi::Error::new(error.to_string()))?;
+                        // Parse the proposal; when valid, collect it for the
+                        // host to validate and apply after the invocation.
+                        let parsed = serde_json::from_slice::<TransactionProposal>(&input);
+                        let bytes = match parsed {
+                            Ok(proposal) => {
+                                proposals
+                                    .lock()
+                                    .expect("proposal queue is not poisoned")
+                                    .push(proposal);
+                                br#"{"ok":true}"#.to_vec()
+                            }
+                            Err(error) => serde_json::to_vec(&serde_json::json!({
+                                "ok": false,
+                                "error": format!("invalid transaction JSON: {error}")
+                            }))
+                            .unwrap_or_default(),
+                        };
+                        memory
+                            .write(&mut caller, ptr.max(0) as usize, &bytes)
+                            .map_err(|error| wasmi::Error::new(error.to_string()))?;
+                        Ok(bytes.len() as i32)
+                    },
+                )
+                .map_err(|error| WasmError::Compile(error.to_string()))?;
+        }
         let instance = linker
             .instantiate_and_start(&mut store, module.module())
             .map_err(|error| WasmError::Compile(error.to_string()))?;
-        Self::from_instance(instance, store)
+        Self::from_instance(instance, store, pending_transactions)
     }
 
-    fn from_instance(instance: Instance, store: Store<()>) -> Result<Self, WasmError> {
+    fn from_instance(
+        instance: Instance,
+        store: Store<()>,
+        pending_transactions: Arc<Mutex<Vec<TransactionProposal>>>,
+    ) -> Result<Self, WasmError> {
         let memory = instance
             .get_memory(&store, "memory")
             .ok_or(WasmError::MissingMemory)?;
@@ -154,7 +214,21 @@ impl WasmPluginInstance {
             store,
             memory,
             invoke,
+            pending_transactions,
         })
+    }
+
+    /// Drains the transaction proposals the plugin submitted through
+    /// `game.submitTransaction` during the last invocation. The caller
+    /// validates and applies each proposal through its own transaction
+    /// path; this instance never touches the game directly.
+    pub fn take_pending_transactions(&self) -> Vec<TransactionProposal> {
+        std::mem::take(
+            &mut self
+                .pending_transactions
+                .lock()
+                .expect("proposal queue is not poisoned"),
+        )
     }
 
     /// Invokes the plugin with a JSON request DTO and returns the validated
@@ -318,6 +392,7 @@ mod tests {
         let module = WasmPluginModule::compile(&bytes).expect("module compiles");
         let capabilities = WasmCapabilities {
             game_snapshot: Some("{\"moves\":3}".to_owned()),
+            game_write: false,
         };
         let mut instance =
             WasmPluginInstance::instantiate_with_capabilities(&module, &capabilities)
@@ -353,6 +428,69 @@ mod tests {
                 Err(WasmError::Compile(_))
             ),
             "an ungranted import must fail to link"
+        );
+    }
+
+    #[test]
+    fn granted_game_write_collects_transaction_proposals() {
+        // The plugin forwards the request body to game.submitTransaction and
+        // returns its result length.
+        let bytes = wat::parse_str(
+            r#"(module
+  (import "sabaki" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+    local.get $ptr
+    local.get $len
+    call $submit))"#,
+        )
+        .expect("WAT parses");
+        let module = WasmPluginModule::compile(&bytes).expect("module compiles");
+        let capabilities = WasmCapabilities {
+            game_snapshot: None,
+            game_write: true,
+        };
+        let mut instance =
+            WasmPluginInstance::instantiate_with_capabilities(&module, &capabilities)
+                .expect("instance with granted gameWrite starts");
+        let proposal = serde_json::json!({
+            "schemaVersion": 1,
+            "type": "playMove",
+            "color": "black",
+            "vertex": {"column": 3, "row": 3},
+        });
+        let response = instance.invoke(&proposal).expect("invocation succeeds");
+        assert_eq!(response, serde_json::json!({"ok": true}));
+        let pending = instance.take_pending_transactions();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0], proposal,
+            "the proposal must be collected verbatim"
+        );
+    }
+
+    #[test]
+    fn ungranted_game_write_fails_to_link() {
+        let bytes = wat::parse_str(
+            r#"(module
+  (import "sabaki" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+    local.get $ptr
+    local.get $len
+    call $submit))"#,
+        )
+        .expect("WAT parses");
+        let module = WasmPluginModule::compile(&bytes).expect("module compiles");
+        assert!(
+            matches!(
+                WasmPluginInstance::instantiate_with_capabilities(
+                    &module,
+                    &WasmCapabilities::default()
+                ),
+                Err(WasmError::Compile(_))
+            ),
+            "an ungranted gameWrite import must fail to link"
         );
     }
 

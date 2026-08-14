@@ -1021,8 +1021,35 @@ impl ShellApp {
                 .map_err(sabaki_host::WasmWorkflowError::into_plugin_error)
             {
                 Ok(result) => {
-                    self.status =
-                        format!("plugin {plugin_id} command {command_id} → {result}").into();
+                    // Apply every transaction the plugin proposed through
+                    // game.submitTransaction; the host validates each one
+                    // (legal move, ko, occupied vertex, ...) before it lands
+                    // in the document and undo history.
+                    let mut applied = 0usize;
+                    let mut rejected = 0usize;
+                    for proposal in &result.proposed_transactions {
+                        let Ok(transaction) = serde_json::from_value::<
+                            sabaki_domain_core::GameTransaction,
+                        >(proposal.clone()) else {
+                            rejected += 1;
+                            continue;
+                        };
+                        let mut events = RecordingSink::default();
+                        match self.host.apply_transaction(transaction, &mut events) {
+                            Ok(_) => applied += 1,
+                            Err(_) => rejected += 1,
+                        }
+                    }
+                    let mut status = format!(
+                        "plugin {plugin_id} command {command_id} → {}",
+                        result.response
+                    );
+                    if applied > 0 || rejected > 0 {
+                        status.push_str(&format!(
+                            " (transactions: {applied} applied, {rejected} rejected)"
+                        ));
+                    }
+                    self.status = status.into();
                 }
                 Err(error) => {
                     self.status = format!("plugin {plugin_id} command failed: {error}").into();
