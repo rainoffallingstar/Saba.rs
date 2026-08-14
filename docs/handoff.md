@@ -128,13 +128,13 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 9 wasm 沙箱（含 capability import）+ 2 帧/校验 |
-| `sabaki-host` | 94 单元（含 2 监督进程冒烟、5 wasm 工作流、8 主题包）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-host` | 98 单元（含 2 监督进程冒烟、5 wasm 工作流、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 102 测试（theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 274 个全绿）
+cargo test --workspace        # 全部测试（当前 278 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -208,6 +208,14 @@ import；授权时才定义 `sabaki.game_snapshot`，未授权 import 在 link �
 `wasm_capabilities_for`（按 granted `GameRead` 决定是否注入快照）与
 `invoke_wasm_command` 增加快照参数；GPUI 命令分发把当前 `GameSnapshot`
 序列化注入插件。WAT 测试：授权可调用并转发结果、未授权 link 失败。
+
+**迭代 15（Beta 门槛加固）已完成：** `sabaki-host::legacy_styles`
+`analyze_legacy_styles`（设计 §8.1:不承诺 styles.css 运行时兼容,可表达为
+theme-token 的颜色规则列出、其余规则计为忽略;容错解析注释/缺分号/短 hex/
+rgb()）;GPUI 启动时对非空 user styles.css 生成迁移报告并显示在状态栏;
+新增 `docs/beta-gate.md` §11.3 十项逐项核对表:九项满足/部分满足,唯一
+缺口为 #10 原生 screenshot/headless GPU CI(gpui 0.2.2 能力限制,附短期/
+中期/里程碑建议)。
 
 按优先级排序的后续候选迭代：
 

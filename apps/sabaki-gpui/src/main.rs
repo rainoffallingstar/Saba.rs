@@ -2078,6 +2078,16 @@ fn main() {
                 for invalid in &loaded.validation.invalid_values {
                     initial_status = format!("ignored setting {}: {}", invalid.key, invalid);
                 }
+                // Design §8.1: user styles.css is not executed; report which
+                // color rules could migrate to theme tokens.
+                if !loaded.store.user_styles().trim().is_empty() {
+                    let report = sabaki_host::analyze_legacy_styles(loaded.store.user_styles());
+                    initial_status = format!(
+                        "styles.css migration: {} color rule(s) migratable to theme tokens, {} rule(s) not migrated",
+                        report.migrated_color_rules.len(),
+                        report.ignored_rule_count
+                    );
+                }
                 loaded.store
             }
             Err(error) => {

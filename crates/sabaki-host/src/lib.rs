@@ -5,6 +5,7 @@ pub mod engine_session;
 pub mod engine_workflow;
 pub mod external_file;
 pub mod file_codec;
+pub mod legacy_styles;
 pub mod persistence;
 pub mod plugin_supervisor;
 pub mod plugin_wasm;
@@ -39,6 +40,7 @@ pub use external_file::{
 pub use file_codec::{
     FileCodecError, decode_legacy_bytes, decode_sgf_bytes, detect_sgf_encoding, encode_sgf,
 };
+pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_supervisor::{
     AUTO_DISABLE_AFTER_CRASHES, DEFAULT_REQUEST_TIMEOUT, PluginProcessInfo, PluginProcessStatus,
