@@ -9,6 +9,10 @@
   !define APP_VERSION "0.1.0"
 !endif
 
+; Resolve relative File/OutFile paths against the repository root
+; (the script lives in scripts/).
+!cd "${__FILEDIR__}\.."
+
 !define APP_NAME "Saba.rs"
 !define APP_PUBLISHER "Saba.rs"
 !define APP_ID "dev.saba-rs.app"
