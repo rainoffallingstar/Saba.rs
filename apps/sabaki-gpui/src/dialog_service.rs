@@ -97,8 +97,18 @@ pub struct NativeGameFileAccess;
 impl GameFileAccess for NativeGameFileAccess {
     fn read_game_file(&self, path: &Path) -> Result<DecodedGameFile, HostError> {
         let bytes = std::fs::read(path).map_err(|error| HostError::FileRead(error.to_string()))?;
-        sabaki_host::decode_sgf_bytes(&bytes)
-            .map_err(|error| HostError::FileRead(error.to_string()))
+        match sabaki_domain_core::legacy::file_extension(path) {
+            Some(extension) if matches!(extension.as_str(), "ngf" | "gib" | "ugf") => {
+                let content = sabaki_host::decode_legacy_bytes(&bytes)
+                    .map_err(|error| HostError::FileRead(error.to_string()))?;
+                Ok(DecodedGameFile {
+                    content,
+                    encoding: SourceEncoding::Utf8,
+                })
+            }
+            _ => sabaki_host::decode_sgf_bytes(&bytes)
+                .map_err(|error| HostError::FileRead(error.to_string())),
+        }
     }
 
     fn write_game_file(

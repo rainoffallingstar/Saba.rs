@@ -126,14 +126,14 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 | 目标 | 数量 |
 |---|---|
-| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟） |
-| `sabaki-host` | 77 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 |
+| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ **5 legacy fixture 导入集成** |
+| `sabaki-host` | 78 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 105 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 201 个全绿）
+cargo test --workspace        # 全部测试（当前 222 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -163,12 +163,20 @@ setup stones、计分模式 UI。
 stop analysis、generation 取消旧任务。
 **迭代 9（发布准备第二阶段）已完成：** release 构建 CI 三平台产物上传
 （macOS .app+dmg / Linux tar.gz / Windows zip），bundle 脚本可用。
+**迭代 10（数据保真加固 + 旧格式导入）已完成：** NGF/GIB/UGF 导入器
+（`domain-core::legacy`，语义镜像上游 `src/modules/fileformats/*.js`，含 tygem
+让子落位顺序、UGF 坐标换算、`[` 转义、`parseFloat` 前缀语义）；`file_codec`
+新增 `decode_legacy_bytes`（UTF-8→Shift_JIS→EUC-JP→GBK→Big5 严格尝试，字节
+重叠歧义按候选顺序确定性决策）；host `open()` 与 GPUI 原生文件访问按扩展名
+分发导入（导入结果归一化为 UTF-8 SGF），SGF 路径保留 `CA` 检测出的源编码
+（修复此前硬编码 Utf8 的问题）；真实 fixture 集成测试（even/handicap2.ngf、
+utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试。
 
 按优先级排序的后续候选迭代：
 
 1. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
-   native 进程监督（超时/重启/日志）、NGF/GIB/UGF 导入、主题包安装、
-   SGF property tests。
+   native 进程监督（超时/重启/日志）、主题包安装、SGF property tests
+   （proptest 性质测试，差分 fixture 已铺好基线）。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
@@ -188,6 +196,10 @@ stop analysis、generation 取消旧任务。
   （窗口激活会触发 refresh 帧）；无原生对话框 API，经 rfd 实现。
 - 计分覆盖已实现（`ApplyScoringOverride` + `GameSnapshot.score_overrides`），
   但尚无计分模式 UI 与死子判定算法（`score.estimator_iterations` 键未用）。
+- `decode_legacy_bytes` 的编码候选顺序（UTF-8→Shift_JIS→EUC-JP→GBK→Big5）
+  对字节重叠的多编码文本（如 GBK 与 Shift_JIS 共用字节对）按固定顺序确定性
+  决策，可能选错编码（与上游 jschardet 统计检测同为不确定性）；中文 NGF
+  建议另存为 UTF-8 后再导入。
 - 分析胜率条将 winrate 直接按黑方显示（未做手番换算）；流式分析每次启动独立
   进程（未复用已连接会话，`kata-analyze` 配置参数来自 `engines.analyze_commands`
   的命令名，无额外参数透传）。

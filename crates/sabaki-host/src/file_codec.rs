@@ -165,9 +165,34 @@ fn encoding_label(encoding: SourceEncoding) -> &'static str {
     }
 }
 
+/// Decodes legacy-format bytes (NGF/GIB/UGF, which carry no `CA`
+/// declaration): tries UTF-8, Shift_JIS, EUC-JP, GBK and Big5 in order with
+/// strict decoding. All strict candidates failing yields the same error as
+/// undecodable SGF bytes.
+pub fn decode_legacy_bytes(bytes: &[u8]) -> Result<String, FileCodecError> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Ok(text.strip_prefix('\u{feff}').unwrap_or(text).to_owned());
+    }
+    for encoding in [
+        SourceEncoding::ShiftJis,
+        SourceEncoding::EucJp,
+        SourceEncoding::Gbk,
+        SourceEncoding::Big5,
+    ] {
+        if let Some(decoded) =
+            encoding_rs_for(encoding).decode_without_bom_handling_and_without_replacement(bytes)
+        {
+            return Ok(decoded.into_owned());
+        }
+    }
+    Err(FileCodecError::InvalidUtf8WithoutCa)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FileCodecError, decode_sgf_bytes, detect_sgf_encoding, encode_sgf};
+    use super::{
+        FileCodecError, decode_legacy_bytes, decode_sgf_bytes, detect_sgf_encoding, encode_sgf,
+    };
     use crate::SourceEncoding;
 
     #[test]
@@ -277,6 +302,26 @@ mod tests {
         assert!(matches!(
             detect_sgf_encoding(b"(;FF[4]CA[]SZ[19])").unwrap_err(),
             FileCodecError::InvalidCaLabel
+        ));
+    }
+
+    #[test]
+    fn decodes_legacy_bytes_across_encodings() {
+        assert_eq!(
+            decode_legacy_bytes("(plain utf8)".as_bytes()).unwrap(),
+            "(plain utf8)"
+        );
+        // Legacy encodings overlap byte-wise, so a character-exact assertion
+        // would depend on candidate order; assert strict decodability only.
+        let gbk = encode_sgf("黑棋", SourceEncoding::Gbk).unwrap();
+        assert!(decode_legacy_bytes(&gbk).is_ok());
+
+        let sjis = encode_sgf("日本語", SourceEncoding::ShiftJis).unwrap();
+        assert!(decode_legacy_bytes(&sjis).is_ok());
+        // Bytes that are invalid under every candidate are rejected.
+        assert!(matches!(
+            decode_legacy_bytes(&[0xff, 0xfe, 0xfd]),
+            Err(FileCodecError::InvalidUtf8WithoutCa)
         ));
     }
 

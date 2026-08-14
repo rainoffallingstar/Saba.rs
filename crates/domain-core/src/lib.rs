@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod gtp;
+pub mod legacy;
 
 pub const CURRENT_GAME_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_TRANSACTION_SCHEMA_VERSION: u32 = 1;

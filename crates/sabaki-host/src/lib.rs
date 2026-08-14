@@ -33,7 +33,9 @@ pub use external_file::{
     ExternalFileDecision, ExternalFileObservation, ExternalFileReadError, ExternalFileReader,
     ExternalFileStatus, ExternalFileStatusDto, ExternalFileStore,
 };
-pub use file_codec::{FileCodecError, decode_sgf_bytes, detect_sgf_encoding, encode_sgf};
+pub use file_codec::{
+    FileCodecError, decode_legacy_bytes, decode_sgf_bytes, detect_sgf_encoding, encode_sgf,
+};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_workflow::{
     PersistedPluginState, PluginPersistence, PluginStore, scan_plugin_installations,
@@ -141,7 +143,16 @@ impl HostApplication {
         events: &mut impl HostEventSink,
     ) -> Result<GameSnapshot, HostError> {
         let decoded_file = file_access.read_game_file(&path)?;
-        self.open_decoded(path, decoded_file.content, decoded_file.encoding, events)
+        let (content, encoding) = match sabaki_domain_core::legacy::file_extension(&path) {
+            Some(extension) if matches!(extension.as_str(), "ngf" | "gib" | "ugf") => (
+                sabaki_domain_core::legacy::import_by_extension(&extension, &decoded_file.content)
+                    .map_err(|error| HostError::FileRead(error.to_string()))?,
+                // Imported legacy files are normalized to UTF-8 SGF text.
+                SourceEncoding::Utf8,
+            ),
+            _ => (decoded_file.content, decoded_file.encoding),
+        };
+        self.open_decoded(path, content, encoding, events)
     }
 
     pub fn open_decoded(
