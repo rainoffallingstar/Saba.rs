@@ -232,13 +232,22 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 18（发布流水线补全）已完成：** `scripts/bundle-linux-appimage.sh`
+（linuxdeploy 收集动态依赖 + appimagetool 产出 AppImage,FUSE-free CI）;
+`scripts/installer.nsi`（NSIS 安装器:开始菜单/桌面快捷方式、卸载器、注册
+表项;路径经 ROOT_DIR 宏解析,已实测 CI 产出 `saba-rs-setup-0.1.0.exe`）;
+release.yml 增 Linux AppImage 步骤、Windows NSIS 步骤与 `publish` job
+（v* tag 时 softprops/action-gh-release 自动创建 Release 附加全部产物）。
+手动触发实测:三平台 job 全绿,产物齐全（macOS .app/dmg、Linux
+tar.gz/AppImage、Windows zip/setup.exe）。
+
 按优先级排序的后续候选迭代：
 
 1. **Beta #10 跟踪**：原生 screenshot/headless GPU CI（受 gpui 0.2.2 能力
    限制,见 `docs/beta-gate.md`;跟踪上游 snapshot API,或将渲染纯逻辑
    继续下沉单测）。
-2. **发布收尾（需外部条件）**：签名/公证、Linux AppImage/Flatpak、
-   Windows installer、GitHub Release 自动发布。
+2. **发布收尾（需外部条件）**：签名/公证（macOS Developer ID +
+   notarytool、Windows Authenticode,需开发者证书）、Flatpak manifest。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
