@@ -812,7 +812,16 @@ while True:
             ),
             "a crashed plugin must surface as ProcessExited"
         );
-        let status = process.try_wait().expect("try_wait succeeds");
+        // On Windows the stdout EOF and the process termination are not
+        // atomic: poll briefly until the exit status becomes observable.
+        let mut status = None;
+        for _ in 0..20 {
+            status = process.try_wait().expect("try_wait succeeds");
+            if status.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert!(status.is_some(), "the crashed process must be reaped");
         let logs = process.logs();
         assert!(
