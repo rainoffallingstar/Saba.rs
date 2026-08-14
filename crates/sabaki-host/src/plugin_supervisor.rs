@@ -213,6 +213,7 @@ pub fn plugin_storage_root(config_directory: &std::path::Path) -> PathBuf {
 mod tests {
     use super::*;
     use sabaki_plugin_runtime::PluginError;
+    use std::fs;
 
     /// A python3 JSON-RPC echo plugin, same protocol as the runtime tests.
     const ECHO_PLUGIN: &str = r#"
@@ -334,6 +335,79 @@ while True:
                 .any(|line| line.contains("crashing now")),
             "the stderr log must be attached to the crash info"
         );
+    }
+
+    /// End-to-end against the real Go example plugin: builds (when `go` is
+    /// available) the sgf-exporter binary, starts it through the supervisor
+    /// and round-trips a JSON-RPC request. This is the same path the GPUI
+    /// command buttons take.
+    #[test]
+    fn supervisor_calls_the_real_go_example_plugin() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|dir| dir.parent())
+            .expect("workspace root");
+        let plugin_dir = repo_root.join("examples/plugins/sgf-exporter");
+        if !plugin_dir.join("main.go").exists() {
+            eprintln!("go example plugin missing; skipping");
+            return;
+        }
+        let go_available = std::process::Command::new("go")
+            .arg("version")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some();
+        if !go_available {
+            eprintln!("go not found; skipping go plugin test");
+            return;
+        }
+        let bin_dir = plugin_dir.join("bin");
+        let _ = fs::remove_dir_all(&bin_dir);
+        let build = std::process::Command::new("go")
+            .args(["build", "-o", "bin/sabaki-sgf-exporter", "."])
+            .current_dir(&plugin_dir)
+            .env("GOCACHE", "/tmp/saba-go-cache")
+            .env("GOPATH", "/tmp/saba-go-path")
+            .output()
+            .expect("go build runs");
+        assert!(
+            build.status.success(),
+            "go build failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        let manifest = sabaki_plugin_runtime::PluginManifest {
+            schema_version: 1,
+            id: "org.sabaki.sgf-exporter".to_owned(),
+            name: "SGF Exporter".to_owned(),
+            version: "0.1.0".to_owned(),
+            api_version: 1,
+            runtime: sabaki_plugin_runtime::PluginRuntime::Native,
+            activation_events: Vec::new(),
+            permissions: Default::default(),
+            contributes: Default::default(),
+            entrypoint: Some("bin/sabaki-sgf-exporter".to_owned()),
+        };
+        let record = PluginRecord {
+            manifest,
+            install_path: plugin_dir.clone(),
+            enabled: true,
+            granted_permissions: Default::default(),
+            native_execution_authorized: true,
+        };
+        let mut supervisor = PluginSupervisor::new("org.sabaki.sgf-exporter");
+        supervisor.start(&record).expect("go plugin starts");
+        let result = supervisor
+            .request(
+                "org.sabaki.sgf-exporter.export",
+                serde_json::json!({"command": "export"}),
+            )
+            .expect("go plugin answers");
+        assert_eq!(result["status"], "ready");
+        supervisor.stop();
+        let _ = fs::remove_dir_all(&bin_dir);
     }
 
     #[test]

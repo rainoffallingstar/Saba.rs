@@ -1059,6 +1059,50 @@ impl ShellApp {
     /// Dispatches a plugin command. WASM plugins are invoked in-process
     /// through the sandboxed runtime; declarative plugins have no execution
     /// body yet and are recorded in the status bar.
+    /// Dispatches a command to a native plugin through its supervised
+    /// JSON-RPC process. The supervisor is started on demand; a crashed
+    /// process triggers one automatic restart attempt, and further failures
+    /// surface the host's crash diagnostics (design §10.4: bounded restarts,
+    /// auto-disable after the budget).
+    fn dispatch_native_plugin_command(&mut self, plugin_id: &str, command_id: &str) {
+        if !self.plugin_supervisors.contains_key(plugin_id) {
+            self.start_plugin_supervisor(plugin_id);
+        }
+        let Some(supervisor) = self.plugin_supervisors.get_mut(plugin_id) else {
+            self.status = format!("plugin {plugin_id} process unavailable").into();
+            return;
+        };
+        let request = serde_json::json!({"command": command_id});
+        match supervisor.request(command_id, request.clone()) {
+            Ok(result) => {
+                self.status = format!("plugin {plugin_id} command {command_id} → {result}").into();
+            }
+            Err(sabaki_plugin_runtime::PluginError::ProcessExited { .. }) => {
+                // One automatic restart, then report the crash diagnostic.
+                match supervisor.restart() {
+                    Ok(()) => match supervisor.request(command_id, request) {
+                        Ok(result) => {
+                            self.status = format!(
+                                "plugin {plugin_id} restarted; command {command_id} → {result}"
+                            )
+                            .into();
+                        }
+                        Err(error) => {
+                            self.status =
+                                format!("plugin {plugin_id} command failed: {error}").into();
+                        }
+                    },
+                    Err(error) => {
+                        self.status = format!("plugin {plugin_id} disabled: {error}").into();
+                    }
+                }
+            }
+            Err(error) => {
+                self.status = format!("plugin {plugin_id} command failed: {error}").into();
+            }
+        }
+    }
+
     fn on_plugin_command(&mut self, plugin_id: &str, command_id: &str, cx: &mut Context<Self>) {
         let Some(record) = self
             .plugin_store
@@ -1072,6 +1116,11 @@ impl ShellApp {
             return;
         };
         if matches!(
+            record.manifest.runtime,
+            sabaki_plugin_runtime::PluginRuntime::Native
+        ) {
+            self.dispatch_native_plugin_command(plugin_id, command_id);
+        } else if matches!(
             record.manifest.runtime,
             sabaki_plugin_runtime::PluginRuntime::Wasm
         ) {

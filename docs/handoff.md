@@ -128,13 +128,13 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
-| `sabaki-host` | 98 单元（含 2 监督进程冒烟、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-host` | 99 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 102 测试（theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 280 个全绿（迭代 17 为纯 UI 接线））
+cargo test --workspace        # 全部测试（当前 281 个全绿（迭代 17 为纯 UI 接线））
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -232,6 +232,11 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 19（native 插件命令调用链）已完成：** GPUI `on_plugin_command`
+新增 Native 分支——经 `PluginSupervisor::request` 走 JSON-RPC 调用监督
+进程,进程按需启动,崩溃时自动重启一次,超预算自动禁用(§10.4);新增
+**真实 Go 示例插件端到端测试**(`examples/plugins/sgf-exporter`:go build
+真实二进制 → supervisor 启动 → JSON-RPC 往返,无 go 时跳过)。
 **迭代 18（发布流水线补全）已完成：** `scripts/bundle-linux-appimage.sh`
 （linuxdeploy 收集动态依赖 + appimagetool 产出 AppImage,FUSE-free CI）;
 `scripts/installer.nsi`（NSIS 安装器:开始菜单/桌面快捷方式、卸载器、注册
@@ -258,9 +263,9 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 
 - 引擎真实进程路径已有真实子进程冒烟测试（fake-gtp-engine.py），但尚未用
   KataGo/GNU Go 实物引擎做过手工验证（需用户配置引擎 + 模型）。
-- 原生插件监督已实现（超时/崩溃检测/重启上限/stderr 日志/自动禁用），
-  GPUI 命令按钮对 wasm 插件真实调用；native 插件的命令调用链（经
-  Supervisor RPC）仍待接 UI。
+- 原生插件监督与命令调用链已闭环（GPUI 命令按钮经 Supervisor RPC 调用
+  真实 Go 示例插件,含崩溃自动重启一次）;WASM 与 native 两条插件路径均
+  可执行。
 - WASM capability imports 已实现（gameRead→`sabaki.game_snapshot`，未授权
   link 失败）；事务写入（gameWrite）等其余能力未接。
 - 主题包安装/校验已实现（host `theme_workflow`），但 GPUI 尚无「安装主题
