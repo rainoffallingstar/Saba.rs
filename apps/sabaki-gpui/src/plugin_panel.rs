@@ -19,6 +19,11 @@ pub struct PluginPanelEntry {
     pub native_runtime: bool,
     /// Whether native execution has been explicitly authorized by the user.
     pub native_authorized: bool,
+    /// Human-readable process status for native plugins (running/crashed/
+    /// disabled), absent for declarative/wasm plugins or before first start.
+    pub process_status: Option<String>,
+    /// Recent standard-error output of the native process, if supervised.
+    pub process_logs: Vec<String>,
 }
 
 /// Extracts the UI-relevant summary from a manifest. Pure function so the
@@ -62,6 +67,8 @@ pub fn entry_from_manifest(manifest: &PluginManifest) -> PluginPanelEntry {
             sabaki_plugin_runtime::PluginRuntime::Native
         ),
         native_authorized: false,
+        process_status: None,
+        process_logs: Vec::new(),
     }
 }
 
@@ -84,6 +91,29 @@ pub fn entry_from_record(record: &PluginRecord) -> PluginPanelEntry {
         .collect();
     entry.native_authorized = record.native_execution_authorized;
     entry
+}
+
+/// Overlays the supervisor's process state onto the panel entry, so the
+/// plugin list reflects the live native process (running/crashed/disabled)
+/// with its captured stderr log.
+pub fn apply_process_info(entry: &mut PluginPanelEntry, info: &sabaki_host::PluginProcessInfo) {
+    if !entry.native_runtime {
+        return;
+    }
+    let status = match info.status {
+        sabaki_host::PluginProcessStatus::Running => {
+            format!("running ({} restarts)", info.restart_count)
+        }
+        sabaki_host::PluginProcessStatus::Crashed => {
+            format!("crashed ({} crashes)", info.crash_count)
+        }
+        sabaki_host::PluginProcessStatus::Disabled => {
+            format!("auto-disabled after {} crashes", info.crash_count)
+        }
+        sabaki_host::PluginProcessStatus::Stopped => "stopped".to_owned(),
+    };
+    entry.process_status = Some(status);
+    entry.process_logs = info.logs.clone();
 }
 
 /// Parses a manifest JSON document and validates it against the host rules.
@@ -191,6 +221,58 @@ mod tests {
         authorized.native_execution_authorized = true;
         let entry = super::entry_from_record(&authorized);
         assert!(entry.native_authorized);
+    }
+
+    #[test]
+    fn process_info_overlays_running_and_crashed_state() {
+        use sabaki_host::{PluginProcessInfo, PluginProcessStatus};
+        let mut manifest = sample_manifest();
+        manifest.runtime = sabaki_plugin_runtime::PluginRuntime::Native;
+        manifest.entrypoint = Some("bin/plugin".to_owned());
+        let record = PluginRecord {
+            manifest,
+            install_path: PathBuf::from("/plugins/opening-trainer"),
+            enabled: true,
+            granted_permissions: BTreeSet::from([
+                sabaki_plugin_runtime::PluginPermission::GameRead,
+            ]),
+            native_execution_authorized: true,
+        };
+        let mut entry = super::entry_from_record(&record);
+        assert!(entry.process_status.is_none());
+
+        super::apply_process_info(
+            &mut entry,
+            &PluginProcessInfo {
+                plugin_id: "org.example.opening-trainer".to_owned(),
+                status: PluginProcessStatus::Running,
+                logs: vec!["ready".to_owned()],
+                restart_count: 1,
+                crash_count: 0,
+                auto_disabled: false,
+            },
+        );
+        assert_eq!(
+            entry.process_status.as_deref(),
+            Some("running (1 restarts)")
+        );
+        assert_eq!(entry.process_logs, vec!["ready".to_owned()]);
+
+        super::apply_process_info(
+            &mut entry,
+            &PluginProcessInfo {
+                plugin_id: "org.example.opening-trainer".to_owned(),
+                status: PluginProcessStatus::Disabled,
+                logs: Vec::new(),
+                restart_count: 3,
+                crash_count: 3,
+                auto_disabled: true,
+            },
+        );
+        assert_eq!(
+            entry.process_status.as_deref(),
+            Some("auto-disabled after 3 crashes")
+        );
     }
 
     #[test]

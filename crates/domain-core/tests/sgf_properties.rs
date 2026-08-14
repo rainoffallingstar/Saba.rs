@@ -120,10 +120,9 @@ proptest! {
     #[test]
     fn arbitrary_legal_game_never_panics(moves in move_sequence(19)) {
         let mut game = GameDocument::new(19, 19).unwrap();
-        let mut serialized = game.to_sgf();
         for transaction in moves {
             let _ = game.apply_transaction(transaction);
-            serialized = game.to_sgf();
+            let serialized = game.to_sgf();
             let _ = GameDocument::from_sgf(&serialized);
         }
     }

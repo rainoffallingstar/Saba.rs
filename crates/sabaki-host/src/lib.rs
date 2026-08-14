@@ -6,6 +6,7 @@ pub mod engine_workflow;
 pub mod external_file;
 pub mod file_codec;
 pub mod persistence;
+pub mod plugin_supervisor;
 pub mod plugin_workflow;
 pub mod recent_files;
 pub mod settings;
@@ -37,6 +38,10 @@ pub use file_codec::{
     FileCodecError, decode_legacy_bytes, decode_sgf_bytes, detect_sgf_encoding, encode_sgf,
 };
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
+pub use plugin_supervisor::{
+    AUTO_DISABLE_AFTER_CRASHES, DEFAULT_REQUEST_TIMEOUT, PluginProcessInfo, PluginProcessStatus,
+    PluginSupervisor, plugin_storage_root,
+};
 pub use plugin_workflow::{
     PersistedPluginState, PluginPersistence, PluginStore, scan_plugin_installations,
 };

@@ -60,7 +60,7 @@ use crate::node_inspector::{
     current_node_metadata,
 };
 use crate::plugin_contribution::PluginPanelContribution;
-use crate::plugin_panel::{PluginPanelEntry, entry_from_record};
+use crate::plugin_panel::{PluginPanelEntry, apply_process_info, entry_from_record};
 use crate::settings::{
     BOARD_SIZE_OPTIONS, THEME_CHOICES, ThemeChoice, theme_from_setting,
     window_bounds_from_settings, window_maximized_from_settings,
@@ -125,6 +125,7 @@ struct ShellApp {
     panel: PluginPanelContribution,
     plugin_store: sabaki_host::PluginStore,
     plugin_persistence: NativePluginPersistence,
+    plugin_supervisors: std::collections::BTreeMap<String, sabaki_host::PluginSupervisor>,
     installed_plugins: Vec<PluginPanelEntry>,
     last_vertex: Option<Vertex>,
     active_tool: MarkupTool,
@@ -238,6 +239,7 @@ impl ShellApp {
             panel,
             plugin_store,
             plugin_persistence,
+            plugin_supervisors: std::collections::BTreeMap::new(),
             installed_plugins,
             last_vertex: None,
             active_tool: MarkupTool::Play,
@@ -810,6 +812,14 @@ impl ShellApp {
         };
         match result {
             Ok(()) => {
+                if currently_enabled {
+                    if let Some(supervisor) = self.plugin_supervisors.get_mut(plugin_id) {
+                        supervisor.stop();
+                    }
+                    self.plugin_supervisors.remove(plugin_id);
+                } else {
+                    self.start_plugin_supervisor(plugin_id);
+                }
                 self.persist_plugin_registry(
                     plugin_id,
                     if currently_enabled {
@@ -841,6 +851,52 @@ impl ShellApp {
             Err(error) => self.status = format!("permission grant failed: {error}").into(),
         }
         cx.notify();
+    }
+
+    /// Starts the supervised native process for a plugin when it is a
+    /// native-runtime plugin, enabled and authorized; failures land in the
+    /// status bar and leave the plugin unsupervised.
+    fn start_plugin_supervisor(&mut self, plugin_id: &str) {
+        let Some(record) = self
+            .plugin_store
+            .list()
+            .iter()
+            .find(|record| record.manifest.id == plugin_id)
+        else {
+            return;
+        };
+        if !matches!(
+            record.manifest.runtime,
+            sabaki_plugin_runtime::PluginRuntime::Native
+        ) {
+            return;
+        }
+        let mut supervisor = sabaki_host::PluginSupervisor::new(plugin_id);
+        match supervisor.start(record) {
+            Ok(()) => {
+                self.plugin_supervisors
+                    .insert(plugin_id.to_owned(), supervisor);
+            }
+            Err(error) => {
+                self.status = format!("plugin process start failed: {error}").into();
+            }
+        }
+    }
+
+    /// Refreshes the supervised-process state shown in the plugin panel:
+    /// polls for crashes and overlays the live info onto the entries.
+    fn refresh_plugin_processes(&mut self) {
+        for supervisor in self.plugin_supervisors.values_mut() {
+            supervisor.poll();
+        }
+        for entry in &mut self.installed_plugins {
+            if let Some(supervisor) = self.plugin_supervisors.get(&entry.plugin_id) {
+                apply_process_info(entry, &supervisor.info());
+            } else {
+                entry.process_status = None;
+                entry.process_logs.clear();
+            }
+        }
     }
 
     /// Authorizes native execution for a native plugin after an explicit
@@ -903,6 +959,7 @@ impl ShellApp {
             .iter()
             .map(entry_from_record)
             .collect();
+        self.refresh_plugin_processes();
     }
 
     /// Resets the board to the given size as a fresh game.

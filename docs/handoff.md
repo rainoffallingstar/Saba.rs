@@ -126,14 +126,15 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 | 目标 | 数量 |
 |---|---|
-| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + **5 SGF proptest** |
-| `sabaki-host` | 78 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 105 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
+| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 2 帧/校验 |
+| `sabaki-host` | 81 单元（含 2 监督进程冒烟）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-gpui` | 106 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 227 个全绿）
+cargo test --workspace        # 全部测试（当前 254 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -173,11 +174,20 @@ stop analysis、generation 取消旧任务。
 utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 **SGF property tests（proptest）**：序列化幂等、move 序列/棋盘/根属性往返
 一致、任意合法对局不 panic（`domain-core/tests/sgf_properties.rs`）。
+**迭代 11（插件深水区第一波）已完成：** `plugin-runtime::storage` 插件私有
+存储（插件 ID 命名空间键值 JSON、原子写、key/路径校验、单值 1MiB 与 4096 键
+限制）；`SupervisedNativePluginProcess`（stdout 读线程按请求 ID 分发响应、
+命令超时、崩溃检测 `ProcessExited`、stderr 环形日志 200 行×512 字符、重启
+上限 3 次，真实 python3 子进程测试）；host `PluginSupervisor`（请求/重启/
+停止/轮询、崩溃诊断、超过 `AUTO_DISABLE_AFTER_CRASHES` 自动标记禁用，对应
+设计 §10.4「每次崩溃记录诊断并自动禁用，避免无限重启」）；gpui 插件面板
+显示进程状态（running/crashed/auto-disabled）与最近 stderr 日志，启用原生
+插件时自动启动监督进程、禁用时停止。
 
 按优先级排序的后续候选迭代：
 
-1. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
-   native 进程监督（超时/重启/日志）、主题包安装。
+1. **路线图远期项**：WASM runtime + capability imports（wasmtime，下一轮
+   候选）、主题包安装。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
@@ -187,8 +197,10 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 ## 7. 技术债 / 已知限制
 
 - 引擎真实进程路径已有真实子进程冒烟测试（fake-gtp-engine.py），但尚未用
-  KataGo/GNU Go 实物引擎做过手工验证（需用户配置引擎 + 模型）；KataGo
-  `kata-analyze` 的实时流式搜索更新（非阻塞读取 + 节流事件）属后续监督阶段。
+  KataGo/GNU Go 实物引擎做过手工验证（需用户配置引擎 + 模型）。
+- 原生插件监督已实现（超时/崩溃检测/重启上限/stderr 日志/自动禁用），但
+  GPUI 侧尚无「插件命令 → 进程 RPC」的完整调用链 UI（面板目前只显示状态与
+  日志，命令按钮仍走 declarative 占位分发）。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
 - `main.rs` 已拆分（`panels.rs`），但 `ShellApp` 状态字段与事件处理器仍集中在

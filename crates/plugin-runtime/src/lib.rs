@@ -1,10 +1,18 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     path::{Component, Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{RecvTimeoutError, SyncSender, sync_channel},
+    },
+    time::Duration,
 };
+
+pub mod storage;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -119,6 +127,16 @@ pub enum PluginError {
     ManifestDecode(#[from] serde_json::Error),
     #[error("plugin process could not be started: {0}")]
     ProcessStart(std::io::Error),
+    #[error("plugin process exited with status {status}")]
+    ProcessExited { status: String },
+    #[error("plugin request {request_id} timed out")]
+    RpcTimeout { request_id: u64 },
+    #[error("plugin rejected the request: {message} (code {code})")]
+    RpcRejected { code: i64, message: String },
+    #[error("plugin response carried no result")]
+    MissingResult,
+    #[error("plugin exceeded the {count} automatic restart limit")]
+    RestartLimitReached { count: u32 },
     #[error("plugin process does not expose standard input")]
     MissingStandardInput,
     #[error("plugin RPC message could not be encoded: {0}")]
@@ -266,7 +284,7 @@ pub struct JsonRpcResponse {
     pub error: Option<JsonRpcError>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
@@ -309,43 +327,202 @@ pub fn read_rpc_frame<T: DeserializeOwned>(reader: &mut impl Read) -> Result<T, 
     serde_json::from_slice(&payload).map_err(PluginError::RpcDecode)
 }
 
-pub struct NativePluginProcess {
-    child: Child,
-    standard_input: ChildStdin,
-    next_request_id: u64,
+/// How the supervised process should be launched. Kept separate from the
+/// running handle so a crash can be restarted with the identical command.
+#[derive(Clone, Debug)]
+pub struct ProcessSpawnSpec {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub working_dir: PathBuf,
+    pub environment: Vec<(String, String)>,
 }
 
-impl NativePluginProcess {
-    pub fn start(record: &PluginRecord) -> Result<Self, PluginError> {
+impl ProcessSpawnSpec {
+    pub fn for_record(record: &PluginRecord) -> Result<Self, PluginError> {
         if !matches!(record.manifest.runtime, PluginRuntime::Native) {
             return Err(PluginError::InvalidRuntime);
         }
-        if !record.enabled || !record.native_execution_authorized {
-            return Err(PluginError::NativeExecutionNotAuthorized);
-        }
-
         let entrypoint = record.resolve_entrypoint()?;
-        let mut child = Command::new(entrypoint)
-            .current_dir(&record.install_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env_clear()
-            .env("SABAKI_PLUGIN_ID", &record.manifest.id)
-            .spawn()
-            .map_err(PluginError::ProcessStart)?;
-        let standard_input = child
-            .stdin
-            .take()
-            .ok_or(PluginError::MissingStandardInput)?;
+        let mut environment = vec![
+            ("SABAKI_PLUGIN_ID".to_owned(), record.manifest.id.clone()),
+            (
+                "SABAKI_PLUGIN_VERSION".to_owned(),
+                record.manifest.version.clone(),
+            ),
+        ];
+        if let Some(api_version) = std::env::var_os("SABAKI_PLUGIN_API_VERSION") {
+            environment.push((
+                "SABAKI_PLUGIN_API_VERSION".to_owned(),
+                api_version.to_string_lossy().into_owned(),
+            ));
+        }
         Ok(Self {
-            child,
+            program: entrypoint,
+            args: Vec::new(),
+            working_dir: record.install_path.clone(),
+            environment,
+        })
+    }
+}
+
+/// Maximum number of stderr log lines kept per process.
+pub const MAX_PROCESS_LOG_LINES: usize = 200;
+
+/// Maximum length of a single logged line; longer lines are truncated.
+pub const MAX_PROCESS_LOG_LINE_CHARS: usize = 512;
+
+/// Maximum number of automatic restarts before the supervisor gives up.
+pub const MAX_PROCESS_RESTARTS: u32 = 3;
+
+/// A supervised native plugin process.
+///
+/// The process runs length-prefixed JSON-RPC over stdio (see
+/// `write_rpc_frame`/`read_rpc_frame`). A background thread owns standard
+/// output and routes responses back to the waiting caller by request id; a
+/// second thread captures standard error into a bounded ring log. When the
+/// process exits, pending callers receive a typed `ProcessExited` error and
+/// the supervisor can detect the crash with `try_wait`, restart with
+/// `restart`, or give up after `MAX_PROCESS_RESTARTS` and let the host
+/// disable the plugin (design §10.4: no infinite restarts).
+pub struct SupervisedNativePluginProcess {
+    spec: ProcessSpawnSpec,
+    child: Child,
+    standard_input: ChildStdin,
+    next_request_id: u64,
+    pending: Arc<Mutex<BTreeMap<u64, SyncSender<JsonRpcResponse>>>>,
+    log: Arc<Mutex<VecDeque<String>>>,
+    exited: Arc<AtomicBool>,
+    restart_count: u32,
+}
+
+fn spawn_supervised(spec: &ProcessSpawnSpec) -> Result<(Child, ChildStdin), PluginError> {
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.args)
+        .current_dir(&spec.working_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear();
+    for (key, value) in &spec.environment {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().map_err(PluginError::ProcessStart)?;
+    let standard_input = child
+        .stdin
+        .take()
+        .ok_or(PluginError::MissingStandardInput)?;
+    Ok((child, standard_input))
+}
+
+fn run_response_reader(
+    mut child_stdout: ChildStdout,
+    pending: Arc<Mutex<BTreeMap<u64, SyncSender<JsonRpcResponse>>>>,
+    exited: Arc<AtomicBool>,
+) {
+    loop {
+        match read_rpc_frame::<JsonRpcResponse>(&mut child_stdout) {
+            Ok(response) => {
+                let sender = pending
+                    .lock()
+                    .expect("pending map is not poisoned")
+                    .remove(&response.id);
+                if let Some(sender) = sender {
+                    let _ = sender.send(response);
+                }
+            }
+            Err(PluginError::UnexpectedEndOfStream) | Err(PluginError::ManifestRead(_)) => {
+                // The child exited or closed its stdout: wake every pending
+                // caller with a typed error so no request hangs forever, and
+                // record the exit so later callers fail immediately too.
+                exited.store(true, Ordering::SeqCst);
+                let error = JsonRpcError {
+                    code: -32000,
+                    message: "plugin process exited".to_owned(),
+                    data: None,
+                };
+                let mut pending = pending.lock().expect("pending map is not poisoned");
+                for (_, sender) in pending.iter() {
+                    let _ = sender.send(JsonRpcResponse {
+                        jsonrpc: "2.0".to_owned(),
+                        id: 0,
+                        result: None,
+                        error: Some(error.clone()),
+                    });
+                }
+                pending.clear();
+                return;
+            }
+            Err(_) => {
+                // Oversized or undecodable frames are dropped; the reader
+                // keeps going so one bad message cannot wedge the channel.
+                continue;
+            }
+        }
+    }
+}
+
+fn run_stderr_logger(mut child_stderr: ChildStderr, log: Arc<Mutex<VecDeque<String>>>) {
+    use std::io::BufRead;
+    let mut reader = BufReader::new(&mut child_stderr);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {
+                let mut line = line.trim_end_matches(['\r', '\n']).to_owned();
+                if line.chars().count() > MAX_PROCESS_LOG_LINE_CHARS {
+                    line = line.chars().take(MAX_PROCESS_LOG_LINE_CHARS).collect();
+                }
+                let mut log = log.lock().expect("log is not poisoned");
+                if log.len() >= MAX_PROCESS_LOG_LINES {
+                    log.pop_front();
+                }
+                log.push_back(line);
+            }
+        }
+    }
+}
+
+impl SupervisedNativePluginProcess {
+    pub fn start(spec: ProcessSpawnSpec) -> Result<Self, PluginError> {
+        let (child, standard_input) = spawn_supervised(&spec)?;
+        let pending = Arc::new(Mutex::new(BTreeMap::new()));
+        let log = Arc::new(Mutex::new(VecDeque::new()));
+        let exited = Arc::new(AtomicBool::new(false));
+        let stdout_reader_pending = Arc::clone(&pending);
+        let stdout_reader_exited = Arc::clone(&exited);
+        let stderr_logger_log = Arc::clone(&log);
+        let mut child_for_io = child;
+        if let Some(stdout) = child_for_io.stdout.take() {
+            std::thread::spawn(move || {
+                run_response_reader(stdout, stdout_reader_pending, stdout_reader_exited)
+            });
+        }
+        if let Some(stderr) = child_for_io.stderr.take() {
+            std::thread::spawn(move || run_stderr_logger(stderr, stderr_logger_log));
+        }
+        Ok(Self {
+            spec,
+            child: child_for_io,
             standard_input,
             next_request_id: 1,
+            pending,
+            log,
+            exited,
+            restart_count: 0,
         })
     }
 
+    /// Sends a request and returns its id; the response is delivered by
+    /// `await_response`. The process must still be running.
     pub fn send_request(&mut self, method: &str, params: Value) -> Result<u64, PluginError> {
+        if let Some(status) = self.child.try_wait().map_err(PluginError::ProcessStart)? {
+            return Err(PluginError::ProcessExited {
+                status: status.to_string(),
+            });
+        }
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         write_rpc_frame(
@@ -358,6 +535,108 @@ impl NativePluginProcess {
             },
         )?;
         Ok(request_id)
+    }
+
+    /// Waits for the response with the given id. Returns `RpcTimeout` when
+    /// the deadline passes, `ProcessExited` when the child died meanwhile.
+    pub fn await_response(
+        &mut self,
+        request_id: u64,
+        timeout: Duration,
+    ) -> Result<Value, PluginError> {
+        if self.exited.load(Ordering::SeqCst) {
+            return Err(PluginError::ProcessExited {
+                status: self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            });
+        }
+        let (sender, receiver) = sync_channel::<JsonRpcResponse>(1);
+        self.pending
+            .lock()
+            .expect("pending map is not poisoned")
+            .insert(request_id, sender);
+        match receiver.recv_timeout(timeout) {
+            Ok(response) => match response.error {
+                Some(error) if error.code == -32000 => Err(PluginError::ProcessExited {
+                    status: self
+                        .child
+                        .try_wait()
+                        .ok()
+                        .flatten()
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                }),
+                Some(error) => Err(PluginError::RpcRejected {
+                    code: error.code,
+                    message: error.message,
+                }),
+                None => response.result.ok_or(PluginError::MissingResult),
+            },
+            Err(RecvTimeoutError::Timeout) => {
+                self.pending
+                    .lock()
+                    .expect("pending map is not poisoned")
+                    .remove(&request_id);
+                Err(PluginError::RpcTimeout { request_id })
+            }
+            Err(RecvTimeoutError::Disconnected) => Err(PluginError::UnexpectedEndOfStream),
+        }
+    }
+
+    /// Non-blocking crash check. `Ok(None)` means still running; `Ok(Some)`
+    /// carries the exit status of a terminated process.
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, PluginError> {
+        self.child.try_wait().map_err(PluginError::ProcessStart)
+    }
+
+    /// Recent standard-error output, oldest first, bounded by
+    /// `MAX_PROCESS_LOG_LINES`.
+    pub fn logs(&self) -> Vec<String> {
+        self.log
+            .lock()
+            .expect("log is not poisoned")
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    /// Kills the current process and starts a fresh one with the same spec.
+    /// Fails once `MAX_PROCESS_RESTARTS` automatic restarts were consumed;
+    /// the host then disables the plugin instead of looping forever.
+    pub fn restart(&mut self) -> Result<(), PluginError> {
+        if self.restart_count >= MAX_PROCESS_RESTARTS {
+            return Err(PluginError::RestartLimitReached {
+                count: self.restart_count,
+            });
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let (child, standard_input) = spawn_supervised(&self.spec)?;
+        self.child = child;
+        self.standard_input = standard_input;
+        self.restart_count += 1;
+        self.exited.store(false, Ordering::SeqCst);
+        let stdout_reader_pending = Arc::clone(&self.pending);
+        let stdout_reader_exited = Arc::clone(&self.exited);
+        let stderr_logger_log = Arc::clone(&self.log);
+        if let Some(stdout) = self.child.stdout.take() {
+            std::thread::spawn(move || {
+                run_response_reader(stdout, stdout_reader_pending, stdout_reader_exited)
+            });
+        }
+        if let Some(stderr) = self.child.stderr.take() {
+            std::thread::spawn(move || run_stderr_logger(stderr, stderr_logger_log));
+        }
+        Ok(())
     }
 
     pub fn terminate(&mut self) -> Result<(), std::io::Error> {
@@ -407,5 +686,227 @@ mod tests {
 
         assert_eq!(decoded["id"], 42);
         assert_eq!(decoded["method"], "game.snapshot");
+    }
+
+    // ------------------------------------------------------------------
+    // Supervised process tests against real python3 subprocesses. Skipped
+    // when python3 is unavailable, mirroring the GTP stream tests.
+    // ------------------------------------------------------------------
+
+    /// A JSON-RPC echo plugin: reads length-prefixed frames from stdin and
+    /// answers every request with `{"result": params}`. Exits cleanly on
+    /// stdin EOF. A leading `CRASH_AFTER` environment variable makes the
+    /// process die before answering the first frame (crash simulation).
+    const ECHO_PLUGIN: &str = r#"
+import os, struct, sys, json
+
+def read_frame():
+    header = sys.stdin.buffer.read(4)
+    if not header:
+        return None
+    (length,) = struct.unpack("<I", header)
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_frame(obj):
+    payload = json.dumps(obj).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack("<I", len(payload)) + payload)
+    sys.stdout.buffer.flush()
+
+crash_after = os.environ.get("CRASH_AFTER")
+answered = 0
+while True:
+    request = read_frame()
+    if request is None:
+        break
+    if crash_after is not None and answered >= int(crash_after):
+        sys.stderr.write("crashing now\n")
+        sys.stderr.flush()
+        sys.exit(3)
+    answered += 1
+    write_frame({"jsonrpc": "2.0", "id": request["id"], "result": request["params"]})
+"#;
+
+    fn python3() -> Option<()> {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|_| ())
+    }
+
+    fn echo_spec() -> ProcessSpawnSpec {
+        ProcessSpawnSpec {
+            program: PathBuf::from("python3"),
+            args: vec!["-c".to_owned(), ECHO_PLUGIN.to_owned()],
+            working_dir: std::env::temp_dir(),
+            environment: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn supervised_process_round_trips_a_request() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping supervised process test");
+            return;
+        };
+        let mut process =
+            SupervisedNativePluginProcess::start(echo_spec()).expect("echo plugin starts");
+        let id = process
+            .send_request("game.snapshot", serde_json::json!({"depth": 2}))
+            .expect("request is sent");
+        let result = process
+            .await_response(id, Duration::from_secs(5))
+            .expect("echo plugin answers");
+        assert_eq!(result, serde_json::json!({"depth": 2}));
+        process.terminate().ok();
+    }
+
+    #[test]
+    fn supervised_process_times_out_when_the_plugin_never_answers() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping timeout test");
+            return;
+        };
+        let mut spec = echo_spec();
+        // A hanging plugin: never answer, but keep the pipe open.
+        spec.args = vec![
+            "-c".to_owned(),
+            "import struct, sys, time; f=sys.stdin.buffer.read(); time.sleep(60)".to_owned(),
+        ];
+        let mut process =
+            SupervisedNativePluginProcess::start(spec).expect("hanging plugin starts");
+        let id = process
+            .send_request("ping", Value::Null)
+            .expect("request is sent");
+        assert!(matches!(
+            process.await_response(id, Duration::from_millis(300)),
+            Err(PluginError::RpcTimeout { .. })
+        ));
+        process.terminate().ok();
+    }
+
+    #[test]
+    fn supervised_process_detects_a_crash_and_reports_the_exit_status() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping crash test");
+            return;
+        };
+        let mut spec = echo_spec();
+        spec.environment = vec![("CRASH_AFTER".to_owned(), "0".to_owned())];
+        let mut process =
+            SupervisedNativePluginProcess::start(spec).expect("crashing plugin starts");
+        let id = process
+            .send_request("ping", Value::Null)
+            .expect("request is sent");
+        assert!(
+            matches!(
+                process.await_response(id, Duration::from_secs(5)),
+                Err(PluginError::ProcessExited { .. })
+            ),
+            "a crashed plugin must surface as ProcessExited"
+        );
+        let status = process.try_wait().expect("try_wait succeeds");
+        assert!(status.is_some(), "the crashed process must be reaped");
+        let logs = process.logs();
+        assert!(
+            logs.iter().any(|line| line.contains("crashing now")),
+            "stderr must be captured: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn supervised_process_restarts_after_a_crash_within_the_limit() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping restart test");
+            return;
+        };
+        // CRASH_AFTER=1: answer the first request, crash on the second.
+        let mut spec = echo_spec();
+        spec.environment = vec![("CRASH_AFTER".to_owned(), "1".to_owned())];
+        let mut process = SupervisedNativePluginProcess::start(spec).expect("plugin starts");
+
+        let first = process
+            .send_request("ping", serde_json::json!({"n": 1}))
+            .expect("first request is sent");
+        assert_eq!(
+            process
+                .await_response(first, Duration::from_secs(5))
+                .unwrap(),
+            serde_json::json!({"n": 1})
+        );
+
+        let second = process
+            .send_request("ping", serde_json::json!({"n": 2}))
+            .expect("second request is sent");
+        assert!(matches!(
+            process.await_response(second, Duration::from_secs(5)),
+            Err(PluginError::ProcessExited { .. })
+        ));
+
+        process
+            .restart()
+            .expect("restart within the limit succeeds");
+        assert_eq!(process.restart_count(), 1);
+        let third = process
+            .send_request("ping", serde_json::json!({"n": 3}))
+            .expect("request after restart is sent");
+        assert_eq!(
+            process
+                .await_response(third, Duration::from_secs(5))
+                .unwrap(),
+            serde_json::json!({"n": 3}),
+            "the restarted process must answer"
+        );
+        process.terminate().ok();
+    }
+
+    #[test]
+    fn supervised_process_never_restarts_beyond_the_limit() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping restart limit test");
+            return;
+        };
+        let mut spec = echo_spec();
+        // CRASH_AFTER=0: crash on the very first request, every time.
+        spec.environment = vec![("CRASH_AFTER".to_owned(), "0".to_owned())];
+        let mut process = SupervisedNativePluginProcess::start(spec).expect("plugin starts");
+
+        let mut restarts = 0;
+        loop {
+            let id = match process.send_request("ping", Value::Null) {
+                Ok(id) => id,
+                Err(PluginError::ProcessExited { .. }) => {
+                    process
+                        .restart()
+                        .expect("restart within the limit succeeds");
+                    restarts += 1;
+                    continue;
+                }
+                Err(error) => panic!("request could not be sent: {error}"),
+            };
+            match process.await_response(id, Duration::from_secs(5)) {
+                Err(PluginError::ProcessExited { .. })
+                    if process.restart_count() < MAX_PROCESS_RESTARTS =>
+                {
+                    process
+                        .restart()
+                        .expect("restart within the limit succeeds");
+                    restarts += 1;
+                }
+                Err(PluginError::ProcessExited { .. }) => {
+                    // At the limit the next restart must be refused.
+                    assert!(matches!(
+                        process.restart(),
+                        Err(PluginError::RestartLimitReached { .. })
+                    ));
+                    break;
+                }
+                other => panic!("unexpected outcome: {other:?}"),
+            }
+        }
+        assert_eq!(restarts, MAX_PROCESS_RESTARTS as usize);
+        assert_eq!(process.restart_count(), MAX_PROCESS_RESTARTS);
+        process.terminate().ok();
     }
 }

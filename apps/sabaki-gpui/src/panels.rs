@@ -370,6 +370,42 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                                 }
                             ))
                         })
+                        .child(
+                            plugin
+                                .process_status
+                                .as_ref()
+                                .map(|status| {
+                                    let color = if status.starts_with("running") {
+                                        rgb(0x27ae60)
+                                    } else if status.starts_with("auto-disabled")
+                                        || status.starts_with("crashed")
+                                    {
+                                        rgb(0xc0392b)
+                                    } else {
+                                        rgb(0x999999)
+                                    };
+                                    div().text_color(color).child(status.clone())
+                                })
+                                .unwrap_or_else(|| div()),
+                        )
+                        .child(
+                            plugin
+                                .process_logs
+                                .iter()
+                                .rev()
+                                .take(3)
+                                .map(|line| {
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(0x8a6d3b))
+                                        .child(line.clone())
+                                })
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .fold(div().flex().flex_col().gap_1(), |container, line| {
+                                    container.child(line)
+                                }),
+                        )
                 }))
         })
         .child(format!("panel: {}", shell.panel.panel_title))
