@@ -19,22 +19,28 @@ use std::{
     cell::Cell,
     path::PathBuf,
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use gpui::{
     App, Application, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, KeyBinding,
-    Menu, MenuItem, MouseButton, MouseDownEvent, SharedString, Window, WindowBounds, WindowOptions,
-    actions, div, prelude::*, px, rgb, size,
+    Menu, MenuItem, MouseButton, MouseDownEvent, SharedString, Task, Window, WindowBounds,
+    WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
+use sabaki_domain_core::gtp::AnalysisStream;
 use sabaki_domain_core::{Color, Vertex};
-use sabaki_host::HostPersistence;
+use sabaki_host::{HostPersistence, replay_position_stream};
 
 use crate::benchmark::{LargeGameBenchmark, SnapshotBenchmark};
 use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogService};
 use crate::engine_console::{
-    EngineLogEntry, GtpEngine, MockGtpEngine, best_analysis_move, entry_for_response,
-    format_console_command, format_gtp_vertex, parse_engine_spec, parse_gtp_vertex,
+    EngineLogEntry, GtpEngine, MockGtpEngine, analysis_command_from_settings, best_analysis_move,
+    entry_for_response, format_console_command, format_gtp_vertex, merge_analysis_entries,
+    parse_engine_spec, parse_gtp_vertex, parse_stream_line,
 };
 use crate::external_file::{ExternalCheckOutcome, check_external_file, track_after_file_operation};
 use crate::file_workflow::{
@@ -101,6 +107,9 @@ struct ShellApp {
     engine_session: Option<sabaki_host::EngineSession<sabaki_host::ProcessGtpTransport>>,
     analysis: Vec<sabaki_host::AnalysisEntry>,
     analysis_best_move: Option<Vertex>,
+    analysis_task: Option<Task<()>>,
+    analysis_stop_flag: Arc<AtomicBool>,
+    analysis_generation: Arc<AtomicUsize>,
     engine: MockGtpEngine,
     engine_log: Vec<EngineLogEntry>,
     engine_input_focus_handle: FocusHandle,
@@ -211,6 +220,9 @@ impl ShellApp {
             engine_session: None,
             analysis: Vec::new(),
             analysis_best_move: None,
+            analysis_task: None,
+            analysis_stop_flag: Arc::new(AtomicBool::new(false)),
+            analysis_generation: Arc::new(AtomicUsize::new(0)),
             engine: MockGtpEngine::default(),
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
@@ -431,27 +443,130 @@ impl ShellApp {
     /// engine when none is connected), stores the entries and marks the best
     /// candidate on the board.
     fn on_analyze(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let entries = if let Some(session) = &mut self.engine_session {
-            match session.analyze("lz-analyze", vec!["".to_owned()]) {
-                Ok(entries) => entries,
-                Err(error) => {
-                    self.status = format!("analysis failed: {error}").into();
-                    cx.notify();
-                    return;
+        if let Some(task) = self.analysis_task.take() {
+            task.detach();
+        }
+        self.analysis_stop_flag.store(false, Ordering::Relaxed);
+        let generation = self.analysis_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation_flag = self.analysis_generation.clone();
+        let command = analysis_command_from_settings(&self.settings);
+
+        // Bounded `analyze` responses go through the connected session.
+        if command == "analyze" {
+            if let Some(session) = &mut self.engine_session {
+                match session.analyze(&command, vec!["".to_owned()]) {
+                    Ok(entries) => self.set_analysis(entries, cx),
+                    Err(error) => {
+                        self.status = format!("analysis failed: {error}").into();
+                        cx.notify();
+                        return;
+                    }
                 }
+                cx.notify();
+                return;
             }
-        } else {
-            match self.engine.send("lz-analyze", Vec::new()) {
-                Ok(response) => {
-                    sabaki_host::parse_analysis_response("lz-analyze", &response.content)
-                }
-                Err(error) => {
-                    self.status = format!("analysis failed: {error}").into();
-                    cx.notify();
-                    return;
-                }
+        }
+
+        // Streaming commands (kata-analyze / lz-analyze) run in a fresh
+        // analysis process with the current position replayed into it.
+        let Some(record) = self.engine_store.list().first().cloned() else {
+            self.status = "no engine configured for analysis".into();
+            cx.notify();
+            return;
+        };
+        let arguments: Vec<String> = record
+            .args
+            .split_whitespace()
+            .map(ToOwned::to_owned)
+            .collect();
+        let mut stream = match AnalysisStream::start(&record.path, &arguments) {
+            Ok(stream) => stream,
+            Err(error) => {
+                self.status = format!("analysis process failed: {error}").into();
+                cx.notify();
+                return;
             }
         };
+        let board_size = self.host.snapshot().board.width;
+        let moves = self.host.snapshot().moves.clone();
+        if let Err(error) = replay_position_stream(&mut stream, board_size, &moves) {
+            self.status = format!("analysis setup failed: {error}").into();
+            cx.notify();
+            return;
+        }
+        if let Err(error) = stream.send_command(&command) {
+            self.status = format!("analysis command failed: {error}").into();
+            cx.notify();
+            return;
+        }
+        let stop_flag = self.analysis_stop_flag.clone();
+        let task_command = command.clone();
+        self.status = format!("analysis: streaming {command}").into();
+        self.analysis_task = Some(cx.spawn(
+            move |shell_weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let mut pending: Vec<sabaki_host::AnalysisEntry> = Vec::new();
+                    let mut last_flush = Instant::now();
+                    loop {
+                        if stop_flag.load(Ordering::Relaxed)
+                            || generation_flag.load(Ordering::SeqCst) != generation
+                        {
+                            if stop_flag.load(Ordering::Relaxed) {
+                                let _ = stream.send_command("stop");
+                            }
+                            break;
+                        }
+                        match stream.recv_line_timeout(Duration::from_millis(50)) {
+                            Some(line) => {
+                                let line = line.trim();
+                                if line.is_empty() {
+                                    break;
+                                }
+                                if let Some(entry) = parse_stream_line(&task_command, line) {
+                                    pending.push(entry);
+                                }
+                                if task_command == "kata-analyze"
+                                    && pending.last().is_some_and(|entry| !entry.is_during_search)
+                                {
+                                    break;
+                                }
+                            }
+                            None => {}
+                        }
+                        if last_flush.elapsed() >= Duration::from_millis(120) && !pending.is_empty()
+                        {
+                            let batch = std::mem::take(&mut pending);
+                            let _ = shell_weak
+                                .update(&mut cx, |shell, cx| shell.push_analysis_batch(batch, cx));
+                            last_flush = Instant::now();
+                        }
+                    }
+                    if !pending.is_empty() {
+                        let batch = std::mem::take(&mut pending);
+                        let _ = shell_weak
+                            .update(&mut cx, |shell, cx| shell.push_analysis_batch(batch, cx));
+                    }
+                    let _ = shell_weak.update(&mut cx, |shell, cx| shell.analysis_finished(cx));
+                }
+            },
+        ));
+        cx.notify();
+    }
+
+    /// Replaces the analysis set with a merged batch from the streaming task
+    /// and refreshes the best-move marker.
+    fn push_analysis_batch(
+        &mut self,
+        entries: Vec<sabaki_host::AnalysisEntry>,
+        cx: &mut Context<Self>,
+    ) {
+        self.analysis = merge_analysis_entries(&self.analysis, entries);
+        self.set_analysis(self.analysis.clone(), cx);
+    }
+
+    /// Stores an analysis set and refreshes the best-move marker and status.
+    fn set_analysis(&mut self, entries: Vec<sabaki_host::AnalysisEntry>, cx: &mut Context<Self>) {
         self.analysis = entries;
         let board_size = self.host.snapshot().board.width;
         self.analysis_best_move = best_analysis_move(&self.analysis, board_size)
@@ -464,6 +579,26 @@ impl ShellApp {
                 .unwrap_or_default()
         )
         .into();
+        cx.notify();
+    }
+
+    /// Clears the running-analysis state once the streaming task ends.
+    fn analysis_finished(&mut self, cx: &mut Context<Self>) {
+        self.analysis_task = None;
+        self.analysis_stop_flag.store(false, Ordering::Relaxed);
+        self.status = "analysis finished".into();
+        cx.notify();
+    }
+
+    /// Requests the streaming analysis task to stop and emit its final
+    /// candidates.
+    fn on_analysis_stop(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.analysis_task.is_some() {
+            self.analysis_stop_flag.store(true, Ordering::Relaxed);
+            self.status = "stopping analysis".into();
+        } else {
+            self.status = "no analysis running".into();
+        }
         cx.notify();
     }
 

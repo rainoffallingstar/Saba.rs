@@ -186,3 +186,181 @@ mod tests {
         );
     }
 }
+
+/// A streaming analysis process: one command starts a continuous line stream
+/// (KataGo `kata-analyze`, Leela `lz-analyze`). A background thread reads the
+/// child's stdout and delivers every line over a channel; the caller polls
+/// lines and decides when the stream is done (blank line, `isDuringSearch:
+/// false`, or an explicit `stop`). Dropping the stream kills the child.
+pub struct AnalysisStream {
+    child: std::process::Child,
+    standard_input: ChildStdin,
+    receiver: std::sync::mpsc::Receiver<String>,
+    reader_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AnalysisStream {
+    pub fn start(executable: &str, arguments: &[String]) -> Result<Self, GtpError> {
+        let mut child = Command::new(executable)
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let standard_input = child.stdin.take().ok_or(GtpError::MissingStandardInput)?;
+        let standard_output = child.stdout.take().ok_or(GtpError::MissingStandardOutput)?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(standard_output);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let normalized = line.trim_end_matches(['\r', '\n']).to_owned();
+                        if sender.send(normalized).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            standard_input,
+            receiver,
+            reader_thread: Some(reader_thread),
+        })
+    }
+
+    /// Sends one command line to the process (no identifier framing; the
+    /// analysis protocol is a plain continuous stream per command).
+    pub fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+        self.standard_input.write_all(command.as_bytes())?;
+        self.standard_input.write_all(b"\n")?;
+        self.standard_input.flush()?;
+        Ok(())
+    }
+
+    /// Returns the next line without blocking, or `None` when nothing is
+    /// buffered yet.
+    pub fn next_line(&mut self) -> Option<String> {
+        self.receiver.try_recv().ok()
+    }
+
+    /// Waits up to `timeout` for the next line.
+    pub fn recv_line_timeout(&mut self, timeout: std::time::Duration) -> Option<String> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+
+    /// Asks a searching engine to stop and emit its final analysis.
+    pub fn stop(&mut self) -> std::io::Result<()> {
+        self.send_command("stop")
+    }
+
+    /// Kills the process and joins the reader thread.
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.child.kill()?;
+        self.join_reader();
+        Ok(())
+    }
+
+    fn join_reader(&mut self) {
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for AnalysisStream {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        self.join_reader();
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::AnalysisStream;
+    use std::time::Duration;
+
+    /// A tiny python3 process that streams three lines with delays, then
+    /// exits. Skipped when python3 is unavailable.
+    fn python3() -> Option<()> {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|_| ())
+    }
+
+    #[test]
+    fn streams_lines_from_a_subprocess_until_finished() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping stream test");
+            return;
+        };
+        let script = "\
+import sys, time
+sys.stdout.write('= ready\\n'); sys.stdout.flush()
+time.sleep(0.02)
+sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":true}\\n'); sys.stdout.flush()
+time.sleep(0.02)
+sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.stdout.flush()
+";
+        let mut stream = AnalysisStream::start("python3", &["-c".to_owned(), script.to_owned()])
+            .expect("stream process starts");
+
+        stream
+            .send_command("kata-analyze")
+            .expect("command is sent");
+
+        let mut lines = Vec::new();
+        while let Some(line) = stream.recv_line_timeout(Duration::from_millis(300)) {
+            lines.push(line);
+            if lines
+                .iter()
+                .any(|line| line.contains("\"isDuringSearch\":false"))
+            {
+                break;
+            }
+        }
+
+        assert!(
+            lines.len() >= 3,
+            "expected at least 3 streamed lines, got {lines:?}"
+        );
+        assert!(lines[0].contains("ready"));
+        stream.kill().expect("stream is killed");
+    }
+
+    #[test]
+    fn stop_asks_the_engine_to_finish() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping stop test");
+            return;
+        };
+        let script = "\
+import sys
+for line in sys.stdin:
+    sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n')
+    sys.stdout.flush()
+";
+        let mut stream = AnalysisStream::start("python3", &["-c".to_owned(), script.to_owned()])
+            .expect("stream process starts");
+
+        stream
+            .send_command("kata-analyze")
+            .expect("command is sent");
+        stream.stop().expect("stop is sent");
+
+        let line = stream
+            .recv_line_timeout(Duration::from_millis(300))
+            .expect("the engine answers the stop");
+        assert!(line.contains("isDuringSearch"));
+        stream.kill().expect("stream is killed");
+    }
+}

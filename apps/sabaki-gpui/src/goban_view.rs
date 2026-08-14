@@ -135,6 +135,7 @@ pub fn format_sgf_vertex(vertex: Vertex) -> String {
 }
 
 /// Parses an SGF point like `dd` back into a zero-based vertex.
+#[allow(dead_code)]
 pub fn parse_sgf_vertex(value: &str) -> Option<Vertex> {
     let mut characters = value.chars();
     let column_char = characters.next()?;

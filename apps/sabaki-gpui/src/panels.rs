@@ -532,6 +532,22 @@ pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                                     cx.listener(ShellApp::on_analyze),
                                 ),
                         )
+                        .child(if shell.analysis_task.is_some() {
+                            div()
+                                .px_2()
+                                .py_1()
+                                .border_1()
+                                .border_color(rgb(0xc0392b))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xf5d6d6))
+                                .child("stop analysis")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(ShellApp::on_analysis_stop),
+                                )
+                        } else {
+                            div()
+                        })
                         .child(if shell.engine_session.is_some() {
                             div()
                                 .flex()

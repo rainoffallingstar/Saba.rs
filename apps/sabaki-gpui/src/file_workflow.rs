@@ -11,12 +11,14 @@ use sabaki_host::{
 /// production adapter already lives in the Tauri side; the GPUI shell will
 /// reuse the same trait when it gains a config directory.
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct MemoryHostPersistence {
     autosave: RefCell<AutosaveStore>,
     recent_files: RefCell<RecentFilesStore>,
 }
 
 impl MemoryHostPersistence {
+    #[allow(dead_code)]
     pub fn recent_display_names(&self) -> Vec<String> {
         self.recent_files
             .borrow()

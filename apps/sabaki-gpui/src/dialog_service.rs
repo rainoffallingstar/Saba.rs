@@ -24,6 +24,7 @@ pub trait DialogService {
 /// exercises the "open a file at launch" path. A `None` open path models a
 /// cancelled dialog, so the shell can be run without touching real files.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct MockDialogService {
     pub open_path: Option<PathBuf>,
     pub save_path: Option<PathBuf>,

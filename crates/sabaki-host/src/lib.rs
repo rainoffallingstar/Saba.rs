@@ -17,7 +17,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 pub use analysis::{
-    AnalysisEntry, parse_analysis_response, parse_kata_analysis_line, parse_lz_analysis_line,
+    AnalysisCommandSink, AnalysisEntry, parse_analysis_response, parse_kata_analysis_line,
+    parse_lz_analysis_line, replay_position_stream,
 };
 pub use autosave::{AutosaveCandidate, AutosaveInfo, AutosaveStore};
 pub use close_flow::{CloseRequestAction, decide_close_request};

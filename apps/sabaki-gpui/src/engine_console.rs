@@ -272,8 +272,123 @@ pub fn best_analysis_winrate(entries: &[sabaki_host::AnalysisEntry]) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Merges a batch of streamed analysis entries into the current set, keyed by
+/// vertex: later batches replace earlier entries for the same move (KataGo
+/// re-emits candidates as the search progresses).
+pub fn merge_analysis_entries(
+    existing: &[sabaki_host::AnalysisEntry],
+    new: Vec<sabaki_host::AnalysisEntry>,
+) -> Vec<sabaki_host::AnalysisEntry> {
+    use std::collections::BTreeMap;
+    let mut by_vertex: BTreeMap<String, sabaki_host::AnalysisEntry> = existing
+        .iter()
+        .filter_map(|entry| entry.vertex.clone().map(|vertex| (vertex, entry.clone())))
+        .collect();
+    for entry in new {
+        if let Some(vertex) = entry.vertex.clone() {
+            by_vertex.insert(vertex, entry);
+        }
+    }
+    by_vertex.into_values().collect()
+}
+
+/// The analysis command to use for the streaming analyze button, from the
+/// `engines.analyze_commands` setting (first entry wins); defaults to
+/// `lz-analyze` when the setting is absent or empty.
+pub fn analysis_command_from_settings(settings: &sabaki_host::SettingsStore) -> String {
+    settings
+        .get("engines.analyze_commands")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| "lz-analyze".to_owned())
+}
+
+/// Parses one streamed analysis line for the given command: JSON for
+/// `kata-analyze`, Leela-family info lines otherwise.
+pub fn parse_stream_line(command: &str, line: &str) -> Option<sabaki_host::AnalysisEntry> {
+    if command == "kata-analyze" {
+        sabaki_host::parse_kata_analysis_line(line)
+    } else {
+        sabaki_host::parse_lz_analysis_line(line)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn streamed_batches_merge_by_vertex() {
+        use sabaki_host::AnalysisEntry;
+        let first = vec![AnalysisEntry {
+            id: None,
+            vertex: Some("D4".to_owned()),
+            visits: 10,
+            winrate: 0.5,
+            score_lead: None,
+            pv: vec![],
+            is_during_search: true,
+        }];
+        let second = vec![
+            AnalysisEntry {
+                id: None,
+                vertex: Some("D4".to_owned()),
+                visits: 500,
+                winrate: 0.8,
+                score_lead: None,
+                pv: vec![],
+                is_during_search: false,
+            },
+            AnalysisEntry {
+                id: None,
+                vertex: Some("Q16".to_owned()),
+                visits: 300,
+                winrate: 0.7,
+                score_lead: None,
+                pv: vec![],
+                is_during_search: false,
+            },
+        ];
+
+        let merged = super::merge_analysis_entries(&first, second);
+        assert_eq!(merged.len(), 2);
+        let d4 = merged
+            .iter()
+            .find(|entry| entry.vertex.as_deref() == Some("D4"))
+            .expect("D4 survives");
+        assert_eq!(d4.visits, 500, "later batches replace earlier entries");
+        assert!(!d4.is_during_search);
+    }
+
+    #[test]
+    fn analysis_command_reads_the_configured_setting() {
+        let mut settings = sabaki_host::SettingsStore::default();
+        assert_eq!(
+            super::analysis_command_from_settings(&settings),
+            "lz-analyze"
+        );
+
+        settings
+            .set(
+                "engines.analyze_commands",
+                serde_json::json!(["kata-analyze"]),
+            )
+            .expect("the setting accepts a string array");
+        assert_eq!(
+            super::analysis_command_from_settings(&settings),
+            "kata-analyze"
+        );
+
+        settings
+            .set("engines.analyze_commands", serde_json::json!([]))
+            .expect("an empty array is valid");
+        assert_eq!(
+            super::analysis_command_from_settings(&settings),
+            "lz-analyze"
+        );
+    }
+
     use super::{
         GtpEngine, MockGtpEngine, best_analysis_move, best_analysis_winrate, entry_for_response,
         format_console_command, format_gtp_vertex, parse_console_response, parse_gtp_vertex,

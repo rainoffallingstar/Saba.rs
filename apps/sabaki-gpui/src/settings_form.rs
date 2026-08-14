@@ -23,6 +23,7 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "game.default_board_size",
     "game.default_komi",
     "game.default_handicap",
+    "engines.analyze_commands",
 ];
 
 /// A single rendered settings row: the key, a human label, the value kind from
@@ -142,6 +143,7 @@ pub fn setting_label(key: &str) -> &'static str {
         "game.default_board_size" => "Default board size",
         "game.default_komi" => "Default komi",
         "game.default_handicap" => "Default handicap",
+        "engines.analyze_commands" => "Analyze commands",
         _ => "Setting",
     }
 }

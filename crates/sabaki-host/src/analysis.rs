@@ -228,4 +228,103 @@ mod tests {
             parse_analysis_response("lz-analyze", "garbage\ninfo move D4 visits 1 winrate 0.5");
         assert_eq!(garbage.len(), 1);
     }
+    use super::{AnalysisCommandSink, replay_position_stream};
+    use sabaki_domain_core::{Color, MoveDto, Vertex};
+
+    #[derive(Default)]
+    struct RecordingSink {
+        commands: Vec<String>,
+    }
+
+    impl AnalysisCommandSink for RecordingSink {
+        fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+            self.commands.push(command.to_owned());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn replay_position_stream_emits_board_setup_and_moves() {
+        let moves = vec![
+            MoveDto {
+                color: Color::Black,
+                vertex: Some(Vertex { column: 3, row: 15 }),
+            },
+            MoveDto {
+                color: Color::White,
+                vertex: None,
+            },
+            MoveDto {
+                color: Color::Black,
+                vertex: Some(Vertex { column: 8, row: 16 }),
+            },
+        ];
+        let mut sink = RecordingSink::default();
+
+        replay_position_stream(&mut sink, 19, &moves).expect("replay succeeds");
+
+        assert_eq!(
+            sink.commands,
+            vec![
+                "boardsize 19".to_owned(),
+                "clear_board".to_owned(),
+                "play B D4".to_owned(),
+                "play W pass".to_owned(),
+                "play B J3".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_position_stream_handles_empty_positions() {
+        let mut sink = RecordingSink::default();
+        replay_position_stream(&mut sink, 9, &[]).expect("empty replay succeeds");
+        assert_eq!(
+            sink.commands,
+            vec!["boardsize 9".to_owned(), "clear_board".to_owned()]
+        );
+    }
+}
+
+/// A sink that accepts GTP commands line-by-line, for streaming analysis
+/// processes that do not use request/response framing.
+pub trait AnalysisCommandSink {
+    fn send_command(&mut self, command: &str) -> std::io::Result<()>;
+}
+
+impl AnalysisCommandSink for sabaki_domain_core::gtp::AnalysisStream {
+    fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+        sabaki_domain_core::gtp::AnalysisStream::send_command(self, command)
+    }
+}
+
+/// Formats a zero-based vertex as a GTP vertex (`D4`, skipping the `I`
+/// column), for analysis-process board replay.
+fn gtp_vertex(board_size: usize, column: usize, row: usize) -> String {
+    let letter_offset = if column >= 8 { column + 1 } else { column };
+    let column_char = char::from_u32((b'A' + letter_offset as u8) as u32).unwrap_or('A');
+    format!("{column_char}{}", board_size - row)
+}
+
+/// Replays a position into a streaming analysis process: board size, clear,
+/// then every move as `play <color> <vertex>` (passes as `play <color> pass`).
+pub fn replay_position_stream(
+    sink: &mut impl AnalysisCommandSink,
+    board_size: usize,
+    moves: &[sabaki_domain_core::MoveDto],
+) -> std::io::Result<()> {
+    sink.send_command(&format!("boardsize {board_size}"))?;
+    sink.send_command("clear_board")?;
+    for move_dto in moves {
+        let color = match move_dto.color {
+            sabaki_domain_core::Color::Black => "B",
+            sabaki_domain_core::Color::White => "W",
+        };
+        let vertex = match move_dto.vertex {
+            Some(vertex) => gtp_vertex(board_size, vertex.column, vertex.row),
+            None => "pass".to_owned(),
+        };
+        sink.send_command(&format!("play {color} {vertex}"))?;
+    }
+    Ok(())
 }

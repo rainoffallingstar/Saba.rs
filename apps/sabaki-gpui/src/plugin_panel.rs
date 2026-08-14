@@ -87,6 +87,7 @@ pub fn entry_from_record(record: &PluginRecord) -> PluginPanelEntry {
 }
 
 /// Parses a manifest JSON document and validates it against the host rules.
+#[allow(dead_code)]
 pub fn parse_manifest(json: &str) -> Result<PluginManifest, String> {
     let manifest: PluginManifest =
         serde_json::from_str(json).map_err(|error| format!("invalid plugin manifest: {error}"))?;

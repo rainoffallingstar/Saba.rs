@@ -115,6 +115,7 @@ impl LargeGameBenchmark {
 
     /// A main line with a side variation of `branch_length` moves hanging off
     /// every `branch_interval`-th main-line node.
+    #[allow(dead_code)]
     pub fn teaching_game(
         width: usize,
         height: usize,
