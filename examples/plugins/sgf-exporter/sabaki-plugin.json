@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "org.sabaki.sgf-exporter",
+  "name": "SGF Exporter",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "runtime": "native",
+  "entrypoint": "bin/sabaki-sgf-exporter",
+  "activationEvents": ["onCommand:org.sabaki.sgf-exporter.export"],
+  "permissions": ["gameRead", "fileWrite"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "org.sabaki.sgf-exporter.export",
+        "title": "Export Current SGF"
+      }
+    ]
+  }
+}

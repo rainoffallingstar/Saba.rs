@@ -1,0 +1,50 @@
+{
+  "name": "variations-and-markup",
+  "sgf": "(;GM[1]FF[4]SZ[5]AB[aa:ab]AW[ee]XX[preserve];B[ac](;W[bb]TR[cc]LB[dd:X]AR[aa:bb])(;W[dd]BM[1]))",
+  "expected": {
+    "rootProperties": {
+      "AB": ["aa:ab"],
+      "AW": ["ee"],
+      "FF": ["4"],
+      "GM": ["1"],
+      "SZ": ["5"],
+      "XX": ["preserve"]
+    },
+    "nodeCount": 4,
+    "mainLineMoves": [
+      {"color": "black", "vertex": {"column": 0, "row": 2}},
+      {"color": "white", "vertex": {"column": 1, "row": 1}}
+    ],
+    "firstMoveVariationCount": 2,
+    "board": {
+      "width": 5,
+      "height": 5,
+      "signMap": [
+        [1, 0, 0, 0, 0],
+        [1, -1, 0, 0, 0],
+        [1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, -1]
+      ],
+      "currentVertex": {"column": 1, "row": 1},
+      "nextPlayer": "black"
+    },
+    "markup": {
+      "markers": [
+        {"vertex": {"column": 2, "row": 2}, "type": "triangle"},
+        {
+          "vertex": {"column": 3, "row": 3},
+          "type": "label",
+          "label": "X"
+        }
+      ],
+      "lines": [
+        {
+          "start": {"column": 0, "row": 0},
+          "end": {"column": 1, "row": 1},
+          "type": "arrow"
+        }
+      ]
+    }
+  }
+}

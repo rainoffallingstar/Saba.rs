@@ -1,0 +1,27 @@
+{
+  "name": "capture-single-stone",
+  "sgf": "(;GM[1]FF[4]SZ[3];B[ba];W[aa];B[ab])",
+  "expected": {
+    "rootProperties": {
+      "FF": ["4"],
+      "GM": ["1"],
+      "SZ": ["3"]
+    },
+    "moves": [
+      {"color": "black", "vertex": {"column": 1, "row": 0}},
+      {"color": "white", "vertex": {"column": 0, "row": 0}},
+      {"color": "black", "vertex": {"column": 0, "row": 1}}
+    ],
+    "board": {
+      "width": 3,
+      "height": 3,
+      "signMap": [
+        [0, 1, 0],
+        [1, 0, 0],
+        [0, 0, 0]
+      ],
+      "currentVertex": {"column": 0, "row": 1},
+      "nextPlayer": "white"
+    }
+  }
+}

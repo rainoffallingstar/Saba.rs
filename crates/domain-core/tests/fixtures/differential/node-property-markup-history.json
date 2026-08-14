@@ -1,0 +1,235 @@
+{
+  "name": "node-property-markup-history",
+  "schemaVersion": 1,
+  "sgf": "(;GM[1]FF[4]SZ[5];B[aa];W[bb])",
+  "ops": [
+    {
+      "op": "setNodeProperty",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}},
+      "property": "C",
+      "values": ["An interesting move"]
+    },
+    {
+      "op": "setNodeProperty",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}},
+      "property": "N",
+      "values": ["Main line"]
+    },
+    {
+      "op": "removeNodeProperty",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}},
+      "property": "N"
+    },
+    {
+      "op": "addMarkup",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}},
+      "vertex": {"column": 1, "row": 1},
+      "marker": {"type": "circle"}
+    },
+    {"op": "undo"},
+    {"op": "redo"},
+    {"op": "undo"},
+    {
+      "op": "setNodeProperty",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}},
+      "property": "C",
+      "values": ["Revised comment"]
+    }
+  ],
+  "checkpoints": [
+    {
+      "afterOp": 0,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"W": ["bb"]}
+      ],
+      "history": {
+        "canUndo": false,
+        "canRedo": false,
+        "undoDepth": 0,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 1,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 1,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 2,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "N": ["Main line"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 2,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 3,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 3,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 4,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "CR": ["bb"], "W": ["bb"]}
+      ],
+      "markup": {
+        "markers": [{"vertex": {"column": 1, "row": 1}, "type": "circle"}],
+        "lines": []
+      },
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 4,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 5,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": true,
+        "undoDepth": 3,
+        "redoDepth": 1
+      }
+    },
+    {
+      "afterOp": 6,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "CR": ["bb"], "W": ["bb"]}
+      ],
+      "markup": {
+        "markers": [{"vertex": {"column": 1, "row": 1}, "type": "circle"}],
+        "lines": []
+      },
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 4,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 7,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["An interesting move"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": true,
+        "undoDepth": 3,
+        "redoDepth": 1
+      }
+    },
+    {
+      "afterOp": 8,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 1, 0],
+      "nodeCount": 3,
+      "nodeProperties": [
+        {"FF": ["4"], "GM": ["1"], "SZ": ["5"]},
+        {"B": ["aa"]},
+        {"C": ["Revised comment"], "W": ["bb"]}
+      ],
+      "markup": {"markers": [], "lines": []},
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 4,
+        "redoDepth": 0
+      }
+    }
+  ]
+}

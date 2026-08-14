@@ -1,0 +1,120 @@
+{
+  "name": "variation-promote-remove-history",
+  "schemaVersion": 1,
+  "sgf": "(;GM[1]FF[4]SZ[5];B[aa](;W[bb])(;W[cc])(;W[dd]))",
+  "ops": [
+    {
+      "op": "promoteVariation",
+      "target": {"color": "white", "vertex": {"column": 2, "row": 2}}
+    },
+    {
+      "op": "removeVariation",
+      "target": {"color": "white", "vertex": {"column": 1, "row": 1}}
+    },
+    {"op": "undo"},
+    {"op": "redo"}
+  ],
+  "checkpoints": [
+    {
+      "afterOp": 0,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 1, "row": 1}}
+      ],
+      "mainLineChildCounts": [1, 3, 0],
+      "nodeCount": 5,
+      "history": {
+        "canUndo": false,
+        "canRedo": false,
+        "undoDepth": 0,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 1,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 2, "row": 2}}
+      ],
+      "mainLineChildCounts": [1, 3, 0],
+      "nodeCount": 5,
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 1,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 2,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 2, "row": 2}}
+      ],
+      "mainLineChildCounts": [1, 2, 0],
+      "nodeCount": 4,
+      "board": {
+        "width": 5,
+        "height": 5,
+        "signMap": [
+          [1, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0]
+        ],
+        "currentVertex": {"column": 0, "row": 0},
+        "nextPlayer": "white"
+      },
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 2,
+        "redoDepth": 0
+      }
+    },
+    {
+      "afterOp": 3,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 2, "row": 2}}
+      ],
+      "mainLineChildCounts": [1, 3, 0],
+      "nodeCount": 5,
+      "history": {
+        "canUndo": true,
+        "canRedo": true,
+        "undoDepth": 1,
+        "redoDepth": 1
+      }
+    },
+    {
+      "afterOp": 4,
+      "mainLineMoves": [
+        {"color": "black", "vertex": {"column": 0, "row": 0}},
+        {"color": "white", "vertex": {"column": 2, "row": 2}}
+      ],
+      "mainLineChildCounts": [1, 2, 0],
+      "nodeCount": 4,
+      "board": {
+        "width": 5,
+        "height": 5,
+        "signMap": [
+          [1, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+          [0, 0, 0, 0, 0]
+        ],
+        "currentVertex": {"column": 0, "row": 0},
+        "nextPlayer": "white"
+      },
+      "history": {
+        "canUndo": true,
+        "canRedo": false,
+        "undoDepth": 2,
+        "redoDepth": 0
+      }
+    }
+  ]
+}

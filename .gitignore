@@ -1,0 +1,15 @@
+/target/
+/dist/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+
+# Engine integration test cache (downloaded nets, gtp configs)
+.engine-cache/
+
+# GTP communication logs written at runtime when engines are attached
+gtp_logs/
+
+# Example plugin build artifacts
+/examples/plugins/*/org.sabaki.sgf-exporter

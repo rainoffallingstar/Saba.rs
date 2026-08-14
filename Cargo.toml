@@ -1,0 +1,8 @@
+[workspace]
+members = [
+  "crates/domain-core",
+  "crates/plugin-runtime",
+  "crates/sabaki-host",
+  "apps/sabaki-gpui",
+]
+resolver = "2"

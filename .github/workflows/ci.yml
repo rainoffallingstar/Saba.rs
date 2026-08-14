@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build dependencies
+        # GPUI (default features) needs FreeType/fontconfig for font-kit and
+        # libxkbcommon for keyboard input on X11/Wayland; pkg-config locates
+        # them. Everything else (wayland/x11 protocol code, blade) is pure
+        # Rust, and tests run headless.
+        run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libfontconfig1-dev libfreetype6-dev libxkbcommon-dev
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            target/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Test Rust workspace
+        run: cargo test --workspace

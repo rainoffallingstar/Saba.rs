@@ -1,0 +1,28 @@
+{
+  "name": "rectangular-board-pass",
+  "sgf": "(;GM[1]FF[4]SZ[3:5];B[ac];W[])",
+  "expected": {
+    "rootProperties": {
+      "FF": ["4"],
+      "GM": ["1"],
+      "SZ": ["3:5"]
+    },
+    "moves": [
+      {"color": "black", "vertex": {"column": 0, "row": 2}},
+      {"color": "white", "vertex": null}
+    ],
+    "board": {
+      "width": 3,
+      "height": 5,
+      "signMap": [
+        [0, 0, 0],
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0]
+      ],
+      "currentVertex": null,
+      "nextPlayer": "black"
+    }
+  }
+}

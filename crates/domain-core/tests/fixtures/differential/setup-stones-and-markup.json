@@ -1,0 +1,66 @@
+{
+  "name": "setup-stones-and-markup",
+  "sgf": "(;GM[1]FF[4]SZ[5]AB[aa:ab]AW[ee]AE[ab]CR[aa]MA[ac]SQ[ad]TR[ae]LB[ba:X]L[bb]AR[aa:ac]LN[ad:ae])",
+  "expected": {
+    "rootProperties": {
+      "AB": ["aa:ab"],
+      "AE": ["ab"],
+      "AR": ["aa:ac"],
+      "AW": ["ee"],
+      "CR": ["aa"],
+      "FF": ["4"],
+      "GM": ["1"],
+      "L": ["bb"],
+      "LB": ["ba:X"],
+      "LN": ["ad:ae"],
+      "MA": ["ac"],
+      "SQ": ["ad"],
+      "SZ": ["5"],
+      "TR": ["ae"]
+    },
+    "moves": [],
+    "board": {
+      "width": 5,
+      "height": 5,
+      "signMap": [
+        [1, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, -1]
+      ],
+      "currentVertex": null,
+      "nextPlayer": "black"
+    },
+    "markup": {
+      "markers": [
+        {"vertex": {"column": 0, "row": 0}, "type": "circle"},
+        {"vertex": {"column": 0, "row": 2}, "type": "cross"},
+        {"vertex": {"column": 0, "row": 3}, "type": "square"},
+        {"vertex": {"column": 0, "row": 4}, "type": "triangle"},
+        {
+          "vertex": {"column": 1, "row": 0},
+          "type": "label",
+          "label": "X"
+        },
+        {
+          "vertex": {"column": 1, "row": 1},
+          "type": "label",
+          "label": "A"
+        }
+      ],
+      "lines": [
+        {
+          "start": {"column": 0, "row": 0},
+          "end": {"column": 0, "row": 2},
+          "type": "arrow"
+        },
+        {
+          "start": {"column": 0, "row": 3},
+          "end": {"column": 0, "row": 4},
+          "type": "line"
+        }
+      ]
+    }
+  }
+}

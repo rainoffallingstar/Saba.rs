@@ -1,0 +1,28 @@
+{
+  "name": "escaped-unicode-properties",
+  "sgf": "(;GM[1]FF[4]SZ[5]C[Bracket: \\] and slash: \\\\]N[日本語]GC[中文])",
+  "expected": {
+    "rootProperties": {
+      "C": ["Bracket: ] and slash: \\"],
+      "FF": ["4"],
+      "GC": ["中文"],
+      "GM": ["1"],
+      "N": ["日本語"],
+      "SZ": ["5"]
+    },
+    "moves": [],
+    "board": {
+      "width": 5,
+      "height": 5,
+      "signMap": [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0]
+      ],
+      "currentVertex": null,
+      "nextPlayer": "black"
+    }
+  }
+}

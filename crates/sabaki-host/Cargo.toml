@@ -1,0 +1,15 @@
+[package]
+name = "sabaki-host"
+version = "0.1.0"
+description = "UI-independent Sabaki application workflows"
+edition = "2024"
+publish = false
+
+[dependencies]
+encoding_rs = "0.8.35"
+sabaki-domain-core = { path = "../domain-core" }
+sabaki-plugin-runtime = { path = "../plugin-runtime" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+thiserror = "2.0.19"
