@@ -9,16 +9,18 @@
   !define APP_VERSION "0.1.0"
 !endif
 
-; Resolve relative File/OutFile paths against the repository root
-; (the script lives in scripts/).
-!cd "${__FILEDIR__}\.."
+; File/OutFile paths resolve relative to the repository root, passed in by
+; the build as ROOT_DIR (the script itself lives in scripts/).
+!ifndef ROOT_DIR
+  !define ROOT_DIR ".."
+!endif
 
 !define APP_NAME "Saba.rs"
 !define APP_PUBLISHER "Saba.rs"
 !define APP_ID "dev.saba-rs.app"
 
 Name "${APP_NAME}"
-OutFile "dist/windows/saba-rs-setup-${APP_VERSION}.exe"
+OutFile "${ROOT_DIR}\dist\windows\saba-rs-setup-${APP_VERSION}.exe"
 InstallDir "$PROGRAMFILES64\${APP_NAME}"
 InstallDirRegKey HKCU "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel admin
@@ -32,8 +34,8 @@ UninstPage instfiles
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "dist/windows/saba-rs.exe"
-  File "LICENSE.md"
+  File "${ROOT_DIR}\dist\windows\saba-rs.exe"
+  File "${ROOT_DIR}\LICENSE.md"
 
   WriteRegStr HKCU "Software\${APP_NAME}" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}" "DisplayName" "${APP_NAME}"

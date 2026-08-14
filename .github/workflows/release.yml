@@ -75,7 +75,7 @@ jobs:
         run: |
           choco install nsis --yes --no-progress
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0' }
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DAPP_VERSION=$version scripts\installer.nsi
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /DAPP_VERSION=$version /DROOT_DIR=$env:GITHUB_WORKSPACE scripts\installer.nsi
       - name: Upload Windows artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
