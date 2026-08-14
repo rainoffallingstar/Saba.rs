@@ -6,13 +6,12 @@
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
 （路线图）的最新执行快照。
 
-**最近迭代（2026-08-15）：** 迭代 1「可用性/数据保真快速项」、迭代 2「设置面板补全」、
-迭代 3「真实引擎会话」、迭代 4「插件面板补全」、迭代 5「分析流与计分」已完成：
-基线提交（`df31d503`）、编码策略共享、rfd 原生对话框、dirty 关闭确认、
-window.maximized、外部文件变更检测、键表驱动设置表单、真实 GTP 引擎会话
-（`examples/fake-gtp-engine.py` 真实子进程冒烟）、插件扫描/授权/命令分发、
-`applyScoringOverride` 计分事务、`analyze`/`kata-analyze` 解析与胜率图/最佳着手。
-`cargo test --workspace` **230 测试全绿**。
+**最近迭代（2026-08-15）：** 迭代 1-5（可用性/数据保真、设置面板、真实引擎会话、
+插件面板、分析流与计分）与迭代 6「跨平台与工程卫生」已完成。迭代 6：CI 矩阵扩展为
+Ubuntu/macOS/Windows 三平台全绿；`main.rs`（2799 行）渲染树拆分至
+`panels.rs`（976 行），shell 只留状态/动作/装配；新增 300 手职业对局与多分支教学谱
+性能基线（打开/快照/导航）；`docs/packaging-notes.md` 打包调研。
+`cargo test --workspace` **232 测试全绿**。
 
 ---
 
@@ -129,12 +128,12 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 15 单元 + 8 差分 fixture（含计分覆盖事务） |
 | `sabaki-host` | 75 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 7 分析解析 |
-| `sabaki-gpui` | 92 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、分析选择） |
+| `sabaki-gpui` | 94 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、分析选择、大棋谱基准） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 230 个全绿）
+cargo test --workspace        # 全部测试（当前 232 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -154,14 +153,21 @@ GTP 坐标 I 列规则；`examples/fake-gtp-engine.py` 真实子进程冒烟测�
 host `analysis` 模块（lz-analyze/kata-analyze 解析）+ `EngineSession::analyze`/
 `stop_analysis`；GPUI analyze 按钮、top-3 候选、胜率条、棋盘最佳着手标记。
 
+**迭代 6（跨平台与工程卫生）已完成：** CI 矩阵（Ubuntu/macOS/Windows）全绿、
+shell 拆分（`panels.rs`）、大棋谱性能基线、打包调研文档。
+
 按优先级排序的后续候选迭代：
 
-1. **发布准备**：跨平台构建（Linux/Windows feature 拆分）、原生 e2e、
-   打包/签名；shell 拆分（`main.rs` 已 2800+ 行，按面板抽模块）；
-   CI rust job 真实 runner 验证（需推送）。
-2. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
+1. **棋盘渲染与编辑补全**：线/箭头绘制（`BoardSnapshot.lines`）、坐标/手数
+   显示（`view.show_coordinates`/`view.show_move_numbers` 键）、last-move 指示、
+   setup stones 工具（`AB`/`AW`/`AE`）、计分模式 UI（`ApplyScoringOverride` 可视化）。
+2. **分析流式更新**：KataGo `kata-analyze` 实时流（非阻塞读取 + 节流事件）、
+   `engines.analyze_commands` 配置接入。
+3. **发布准备第二阶段**：release 构建 CI、macOS bundle/dmg、Linux AppImage、
+   Windows installer、签名/公证（见 `docs/packaging-notes.md`）。
+4. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
    native 进程监督（超时/重启/日志）、NGF/GIB/UGF 导入、主题包安装、
-   SGF property tests 与大棋谱性能基准、Beta 门槛验证与 Tauri 退役决策。
+   SGF property tests、Beta 门槛验证。
 
 ## 7. 技术债 / 已知限制
 
@@ -170,6 +176,8 @@ host `analysis` 模块（lz-analyze/kata-analyze 解析）+ `EngineSession::anal
   `kata-analyze` 的实时流式搜索更新（非阻塞读取 + 节流事件）属后续监督阶段。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
+- `main.rs` 已拆分（`panels.rs`），但 `ShellApp` 状态字段与事件处理器仍集中在
+  main.rs；后续按需继续细化。
 - gpui 0.2.2 无公开窗口激活事件，外部文件检查以帧调度 + `is_active` + 节流实现
   （窗口激活会触发 refresh 帧）；无原生对话框 API，经 rfd 实现。
 - 计分覆盖已实现（`ApplyScoringOverride` + `GameSnapshot.score_overrides`），
