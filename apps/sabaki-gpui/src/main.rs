@@ -30,7 +30,7 @@ use gpui::{
 use sabaki_domain_core::{Color, Vertex};
 use sabaki_host::HostPersistence;
 
-use crate::benchmark::SnapshotBenchmark;
+use crate::benchmark::{LargeGameBenchmark, SnapshotBenchmark};
 use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogService};
 use crate::engine_console::{
     EngineLogEntry, GtpEngine, MockGtpEngine, best_analysis_move, entry_for_response,
@@ -119,6 +119,7 @@ struct ShellApp {
     comment_focus_handle: FocusHandle,
     comment_draft: SharedString,
     benchmark: SharedString,
+    large_game_benchmark: SharedString,
     status: SharedString,
 }
 
@@ -227,6 +228,10 @@ impl ShellApp {
             comment_focus_handle: cx.focus_handle(),
             comment_draft: "".into(),
             benchmark: benchmark_result.summary().into(),
+            large_game_benchmark: LargeGameBenchmark::professional_game(19, 19, 300)
+                .run(200, 200)
+                .summary()
+                .into(),
             status: status.into(),
         }
     }

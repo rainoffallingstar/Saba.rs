@@ -124,6 +124,7 @@ pub fn render_status_bar(
             external_status.display_name.as_deref().unwrap_or("")
         ))
         .child(format!("benchmark: {}", shell.benchmark))
+        .child(format!("large-game: {}", shell.large_game_benchmark))
 }
 
 /// The restore/discard recovery buttons shown while a recovery candidate is
