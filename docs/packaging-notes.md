@@ -1,6 +1,8 @@
 # 打包与发布调研（Saba.rs）
 
-> 状态：调研记录，尚未实现。实际打包脚本在 Beta 门槛临近时落地。
+> 状态：调研 + 第一阶段落地。release CI 已产出 macOS .app/dmg、Linux tar.gz、
+> Windows zip（三平台构建并上传 artifacts）；macOS bundle 脚本见
+> `scripts/bundle-macos.sh`。签名/公证、AppImage/Flatpak、installer 待后续。
 
 ## 目标平台
 
@@ -34,11 +36,13 @@
 
 ## 待办（Beta 前）
 
-1. CI 增加 release 构建 job（三个平台 `cargo build --release` + 产物上传）。
-2. macOS bundle 脚本 + dmg。
-3. Linux AppImage 构建（含依赖收集）；Flatpak manifest 实验。
-4. Windows installer 实验。
-5. 性能基准与启动时间对比（对照 Electron 参考版）。
+1. ✅ CI release 构建（三平台 `cargo build --release` + artifacts 上传）。
+2. ✅ macOS bundle 脚本 + dmg（`scripts/bundle-macos.sh`）。
+3. ⬜ Linux AppImage 构建（含依赖收集）；Flatpak manifest 实验。
+4. ⬜ Windows installer（NSIS/Inno）；当前为便携 zip。
+5. ⬜ 签名/公证（macOS Developer ID + notarytool、Windows Authenticode）。
+6. ⬜ GitHub Release 自动发布（tag 触发时附加产物）。
+7. ⬜ 性能基准与启动时间对比（对照 Electron 参考版）。
 
 ## 参考
 

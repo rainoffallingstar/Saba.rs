@@ -161,14 +161,19 @@ setup stones、计分模式 UI。
 **迭代 8（分析流式更新）已完成：** kata-analyze/lz-analyze 实时流
 （`AnalysisStream` 后台线程 + 120ms 合并刷新）、`engines.analyze_commands` 配置、
 stop analysis、generation 取消旧任务。
+**迭代 9（发布准备第二阶段）已完成：** release 构建 CI 三平台产物上传
+（macOS .app+dmg / Linux tar.gz / Windows zip），bundle 脚本可用。
 
 按优先级排序的后续候选迭代：
 
-1. **发布准备第二阶段**：release 构建 CI、macOS bundle/dmg、Linux AppImage、
-   Windows installer、签名/公证（见 `docs/packaging-notes.md`）。
-2. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
+1. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
    native 进程监督（超时/重启/日志）、NGF/GIB/UGF 导入、主题包安装、
-   SGF property tests、Beta 门槛验证。
+   SGF property tests。
+2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
+   Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
+   自动发布（tag 触发时附加产物）。
+3. **Beta 门槛验证**：设计文档 §11.3 逐项核对（数据保真、引擎对弈/分析、
+   插件边界、三平台构建、性能对比）。
 
 ## 7. 技术债 / 已知限制
 
