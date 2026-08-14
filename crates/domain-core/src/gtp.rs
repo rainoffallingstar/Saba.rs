@@ -319,13 +319,20 @@ sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.
             .expect("command is sent");
 
         let mut lines = Vec::new();
-        while let Some(line) = stream.recv_line_timeout(Duration::from_millis(300)) {
-            lines.push(line);
-            if lines
-                .iter()
-                .any(|line| line.contains("\"isDuringSearch\":false"))
-            {
-                break;
+        // Windows runners start python3 slowly (interpreter + antivirus scan),
+        // so poll with a generous budget instead of one short timeout.
+        for _ in 0..20 {
+            match stream.recv_line_timeout(Duration::from_millis(500)) {
+                Some(line) => {
+                    lines.push(line);
+                    if lines
+                        .iter()
+                        .any(|line| line.contains("\"isDuringSearch\":false"))
+                    {
+                        break;
+                    }
+                }
+                None => continue,
             }
         }
 
@@ -357,8 +364,8 @@ for line in sys.stdin:
             .expect("command is sent");
         stream.stop().expect("stop is sent");
 
-        let line = stream
-            .recv_line_timeout(Duration::from_millis(300))
+        let line = (0..10)
+            .find_map(|_| stream.recv_line_timeout(Duration::from_millis(500)))
             .expect("the engine answers the stop");
         assert!(line.contains("isDuringSearch"));
         stream.kill().expect("stream is killed");
