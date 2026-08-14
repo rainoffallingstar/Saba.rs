@@ -128,7 +128,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 15 单元 + 8 差分 fixture（含计分覆盖事务） |
 | `sabaki-host` | 75 单元 + 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 7 分析解析 |
-| `sabaki-gpui` | 94 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、分析选择、大棋谱基准） |
+| `sabaki-gpui` | 103 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、分析选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
@@ -156,16 +156,16 @@ host `analysis` 模块（lz-analyze/kata-analyze 解析）+ `EngineSession::anal
 **迭代 6（跨平台与工程卫生）已完成：** CI 矩阵（Ubuntu/macOS/Windows）全绿、
 shell 拆分（`panels.rs`）、大棋谱性能基线、打包调研文档。
 
+**迭代 7（棋盘渲染与编辑补全）已完成：** 线/箭头、坐标/手数/last-move、
+setup stones、计分模式 UI。
+
 按优先级排序的后续候选迭代：
 
-1. **棋盘渲染与编辑补全**：线/箭头绘制（`BoardSnapshot.lines`）、坐标/手数
-   显示（`view.show_coordinates`/`view.show_move_numbers` 键）、last-move 指示、
-   setup stones 工具（`AB`/`AW`/`AE`）、计分模式 UI（`ApplyScoringOverride` 可视化）。
-2. **分析流式更新**：KataGo `kata-analyze` 实时流（非阻塞读取 + 节流事件）、
+1. **分析流式更新**：KataGo `kata-analyze` 实时流（非阻塞读取 + 节流事件）、
    `engines.analyze_commands` 配置接入。
-3. **发布准备第二阶段**：release 构建 CI、macOS bundle/dmg、Linux AppImage、
+2. **发布准备第二阶段**：release 构建 CI、macOS bundle/dmg、Linux AppImage、
    Windows installer、签名/公证（见 `docs/packaging-notes.md`）。
-4. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
+3. **路线图远期项**：WASM runtime + capability imports、插件私有存储与
    native 进程监督（超时/重启/日志）、NGF/GIB/UGF 导入、主题包安装、
    SGF property tests、Beta 门槛验证。
 
@@ -182,6 +182,6 @@ shell 拆分（`panels.rs`）、大棋谱性能基线、打包调研文档。
   （窗口激活会触发 refresh 帧）；无原生对话框 API，经 rfd 实现。
 - 计分覆盖已实现（`ApplyScoringOverride` + `GameSnapshot.score_overrides`），
   但尚无计分模式 UI 与死子判定算法（`score.estimator_iterations` 键未用）。
-- `BoardSnapshot.lines` 已存在但 `render_goban` 尚未绘制线/箭头；分析胜率条
-  将 winrate 直接按黑方显示（未做手番换算）。
+- 分析胜率条将 winrate 直接按黑方显示（未做手番换算）；setup 工具与计分模式
+  已可用但缺少单独的 SGF 往返集成测试（依赖差分 fixture 的后续扩充）。
 - Tauri 冻结，其未完成项（theme/plugin 错误 DTO、原生 e2e）不再安排。
