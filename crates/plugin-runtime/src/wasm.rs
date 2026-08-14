@@ -80,10 +80,58 @@ pub struct WasmPluginInstance {
     invoke: TypedFunc<(i32, i32), i32>,
 }
 
+/// One host capability offered to a WASM plugin (design §10.3: the host
+/// provides the *minimal* capability imports matching the granted
+/// permissions; everything else stays absent). Capabilities use the same
+/// buffer ABI as `invoke`: the plugin passes `(ptr, len)` and the host
+/// writes a JSON value into the plugin memory, returning its length.
+///
+/// The capability names are stable and versioned through the plugin API:
+/// - `game.snapshot` (requires `GameRead`): returns the current game
+///   snapshot as JSON, identical to the native `game.snapshot` RPC.
+#[derive(Clone, Debug, Default)]
+pub struct WasmCapabilities {
+    /// Optional `game.snapshot` result JSON (granted `GameRead`).
+    pub game_snapshot: Option<String>,
+}
+
 impl WasmPluginInstance {
+    /// Instantiates with no host imports: a plugin declaring any `sabaki.*`
+    /// import fails to link (design: WASM runtime defaults to no imports).
     pub fn instantiate(module: &WasmPluginModule) -> Result<Self, WasmError> {
+        Self::instantiate_with_capabilities(module, &WasmCapabilities::default())
+    }
+
+    /// Instantiates with the granted host capabilities. A plugin that
+    /// imports a capability the host did not grant fails to link.
+    pub fn instantiate_with_capabilities(
+        module: &WasmPluginModule,
+        capabilities: &WasmCapabilities,
+    ) -> Result<Self, WasmError> {
         let mut store = Store::new(module.engine(), ());
-        let linker = Linker::new(module.engine());
+        let mut linker = Linker::new(module.engine());
+        if let Some(snapshot) = capabilities.game_snapshot.clone() {
+            linker
+                .func_wrap(
+                    "sabaki",
+                    "game_snapshot",
+                    move |mut caller: wasmi::Caller<'_, ()>,
+                          _ptr: i32,
+                          _len: i32|
+                          -> Result<i32, wasmi::Error> {
+                        let memory = caller
+                            .get_export("memory")
+                            .and_then(|export| export.into_memory())
+                            .ok_or_else(|| wasmi::Error::new("plugin memory is unavailable"))?;
+                        let bytes = snapshot.as_bytes();
+                        memory
+                            .write(&mut caller, 0, bytes)
+                            .map_err(|error| wasmi::Error::new(error.to_string()))?;
+                        Ok(bytes.len() as i32)
+                    },
+                )
+                .map_err(|error| WasmError::Compile(error.to_string()))?;
+        }
         let instance = linker
             .instantiate_and_start(&mut store, module.module())
             .map_err(|error| WasmError::Compile(error.to_string()))?;
@@ -252,6 +300,60 @@ mod tests {
             instance.invoke(&huge),
             Err(WasmError::PayloadTooLarge)
         ));
+    }
+
+    #[test]
+    fn granted_game_snapshot_capability_is_callable() {
+        // The plugin imports sabaki.game_snapshot and returns its length.
+        let bytes = wat::parse_str(
+            r#"(module
+  (import "sabaki" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+    local.get $ptr
+    local.get $len
+    call $snapshot))"#,
+        )
+        .expect("WAT parses");
+        let module = WasmPluginModule::compile(&bytes).expect("module compiles");
+        let capabilities = WasmCapabilities {
+            game_snapshot: Some("{\"moves\":3}".to_owned()),
+        };
+        let mut instance =
+            WasmPluginInstance::instantiate_with_capabilities(&module, &capabilities)
+                .expect("instance with granted capability starts");
+        let response = instance
+            .invoke(&serde_json::json!({}))
+            .expect("invocation succeeds");
+        // The plugin forwards the capability result verbatim.
+        assert_eq!(response, serde_json::json!({"moves": 3}));
+    }
+
+    #[test]
+    fn ungranted_game_snapshot_capability_fails_to_link() {
+        // The plugin imports sabaki.game_snapshot but the host granted
+        // nothing, so instantiation must fail (design: minimal imports).
+        let bytes = wat::parse_str(
+            r#"(module
+  (import "sabaki" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
+    local.get $ptr
+    local.get $len
+    call $snapshot))"#,
+        )
+        .expect("WAT parses");
+        let module = WasmPluginModule::compile(&bytes).expect("module compiles");
+        assert!(
+            matches!(
+                WasmPluginInstance::instantiate_with_capabilities(
+                    &module,
+                    &WasmCapabilities::default()
+                ),
+                Err(WasmError::Compile(_))
+            ),
+            "an ungranted import must fail to link"
+        );
     }
 
     #[test]

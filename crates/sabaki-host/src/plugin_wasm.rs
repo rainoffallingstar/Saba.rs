@@ -9,7 +9,8 @@
 use std::{fs, path::PathBuf};
 
 use sabaki_plugin_runtime::{
-    PluginError, PluginRecord, PluginRuntime, WasmPluginInstance, WasmPluginModule,
+    PluginError, PluginPermission, PluginRecord, PluginRuntime, WasmPluginInstance,
+    WasmPluginModule,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -74,14 +75,37 @@ pub fn load_wasm_module(record: &PluginRecord) -> Result<WasmPluginModule, WasmW
     WasmPluginModule::compile(&bytes).map_err(WasmWorkflowError::Runtime)
 }
 
+/// Builds the capability set for a plugin record from its granted
+/// permissions (design §10.3: the host provides the minimal capability
+/// imports matching the granted permissions). `game_snapshot` may be
+/// supplied by the caller; it is only wired in when the plugin was granted
+/// `GameRead`.
+pub fn wasm_capabilities_for(
+    record: &PluginRecord,
+    game_snapshot: Option<&str>,
+) -> sabaki_plugin_runtime::WasmCapabilities {
+    let has_game_read = record
+        .granted_permissions
+        .contains(&PluginPermission::GameRead);
+    sabaki_plugin_runtime::WasmCapabilities {
+        game_snapshot: if has_game_read {
+            game_snapshot.map(str::to_owned)
+        } else {
+            None
+        },
+    }
+}
+
 /// Invokes a plugin command through the sandboxed WASM instance. The request
 /// DTO mirrors the native JSON-RPC shape (`method` + `params`) so plugins
-/// implement one protocol regardless of layer.
+/// implement one protocol regardless of layer. `game_snapshot` is exposed to
+/// the plugin only when `GameRead` was granted.
 pub fn invoke_wasm_command(
     record: &PluginRecord,
     module: &WasmPluginModule,
     method: &str,
     params: Value,
+    game_snapshot: Option<&str>,
 ) -> Result<Value, WasmWorkflowError> {
     if !matches!(record.manifest.runtime, PluginRuntime::Wasm) {
         return Err(WasmWorkflowError::NotWasm(record.manifest.id.clone()));
@@ -89,8 +113,9 @@ pub fn invoke_wasm_command(
     if !record.enabled {
         return Err(WasmWorkflowError::NotEnabled);
     }
-    let mut instance =
-        WasmPluginInstance::instantiate(module).map_err(WasmWorkflowError::Runtime)?;
+    let capabilities = wasm_capabilities_for(record, game_snapshot);
+    let mut instance = WasmPluginInstance::instantiate_with_capabilities(module, &capabilities)
+        .map_err(WasmWorkflowError::Runtime)?;
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "method": method,
@@ -162,6 +187,7 @@ mod tests {
             &module,
             "game.snapshot",
             serde_json::json!({"depth": 1}),
+            None,
         )
         .expect("invocation succeeds");
 
@@ -200,6 +226,32 @@ mod tests {
             load_wasm_module(&record),
             Err(WasmWorkflowError::BadEntrypoint(_))
         ));
+        fs::remove_dir_all(&install_path).ok();
+    }
+
+    #[test]
+    fn capabilities_follow_granted_permissions() {
+        use sabaki_plugin_runtime::WasmCapabilities;
+
+        let install_path = fresh_plugin_dir("capabilities");
+        write_echo_wasm(&install_path);
+        let mut record = wasm_record(install_path.clone(), true);
+        record.granted_permissions = BTreeSet::from([PluginPermission::GameRead]);
+
+        let with_read = super::wasm_capabilities_for(&record, Some("{\"moves\":3}"));
+        assert_eq!(
+            with_read.game_snapshot.as_deref(),
+            Some("{\"moves\":3}"),
+            "GameRead must expose the game snapshot capability"
+        );
+
+        record.granted_permissions = BTreeSet::new();
+        let without_read = super::wasm_capabilities_for(&record, Some("{\"moves\":3}"));
+        assert_eq!(
+            without_read.game_snapshot, None,
+            "without GameRead the snapshot capability must stay absent"
+        );
+        let _ = &WasmCapabilities::default();
         fs::remove_dir_all(&install_path).ok();
     }
 

@@ -1006,6 +1006,8 @@ impl ShellApp {
             record.manifest.runtime,
             sabaki_plugin_runtime::PluginRuntime::Wasm
         ) {
+            let snapshot_json =
+                serde_json::to_string(&self.host.snapshot()).unwrap_or_else(|_| "{}".to_owned());
             match sabaki_host::load_wasm_module(&record)
                 .and_then(|module| {
                     sabaki_host::invoke_wasm_command(
@@ -1013,6 +1015,7 @@ impl ShellApp {
                         &module,
                         command_id,
                         serde_json::json!({}),
+                        Some(&snapshot_json),
                     )
                 })
                 .map_err(sabaki_host::WasmWorkflowError::into_plugin_error)
