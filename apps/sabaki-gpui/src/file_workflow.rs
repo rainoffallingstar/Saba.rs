@@ -167,6 +167,16 @@ pub fn plugin_install_root() -> Result<PathBuf, String> {
     Ok(install_root)
 }
 
+/// Resolves the theme root (`<config directory>/themes`), creating it on
+/// demand. Themes live next to plugins so both are host-owned and never
+/// writable by plugin code.
+pub fn theme_root() -> Result<PathBuf, String> {
+    let theme_root = current_user_config_directory()?.join("themes");
+    std::fs::create_dir_all(&theme_root)
+        .map_err(|error| format!("could not create theme directory: {error}"))?;
+    Ok(theme_root)
+}
+
 /// Writes `content` to `path` through a temporary sibling file + rename so a
 /// crash never leaves a half-written config file.
 pub(crate) fn write_file_atomically(path: &std::path::Path, content: &str) -> Result<(), String> {

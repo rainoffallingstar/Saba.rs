@@ -861,6 +861,53 @@ pub fn render_settings_panel(
                                 }),
                             )
                         })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(shell.installed_themes.iter().map(|theme| {
+                            let theme_id = theme.manifest.id.clone();
+                            div()
+                                .px_2()
+                                .py_1()
+                                .border_1()
+                                .border_color(rgb(0x8a6d3b))
+                                .rounded(px(4.0))
+                                .bg(rgb(0xe8e0d4))
+                                .child(format!(
+                                    "{} v{} (installed)",
+                                    theme.manifest.name, theme.manifest.version
+                                ))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell,
+                                                _: &MouseDownEvent,
+                                                _: &mut Window,
+                                                cx: &mut Context<ShellApp>| {
+                                        shell.on_installed_theme_selected(&theme_id, cx);
+                                    }),
+                                )
+                        })),
+                )
+                .child(
+                    shell
+                        .legacy_asar_themes
+                        .iter()
+                        .map(|path| {
+                            div().text_xs().text_color(rgb(0xc0392b)).child(format!(
+                                "{}: legacy .asar theme — migration only, not loaded",
+                                path.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("unknown")
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .fold(div().flex().flex_col().gap_1(), |container, line| {
+                            container.child(line)
+                        }),
                 ),
         )
         .child(

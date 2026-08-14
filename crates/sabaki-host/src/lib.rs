@@ -11,6 +11,7 @@ pub mod plugin_wasm;
 pub mod plugin_workflow;
 pub mod recent_files;
 pub mod settings;
+pub mod theme_workflow;
 
 use std::path::PathBuf;
 
@@ -54,6 +55,12 @@ pub use settings::{
     LoadedSettings, SettingKind, SettingValidationError, SettingsPersistence, SettingsStore,
     SettingsValidation, is_legacy_overwrite_marker, load_settings_store, persist_settings_store,
     setting_kind, validate_setting_value, validate_settings,
+};
+pub use theme_workflow::{
+    ALLOWED_THEME_ASSET_EXTENSIONS, InstalledTheme, THEME_SCHEMA_VERSION,
+    THEME_TOKEN_SCHEMA_VERSION, ThemeColor, ThemeError, ThemeManifest, ThemeScan, ThemeTokens,
+    install_theme, is_safe_relative_path, is_valid_theme_id, parse_hex_color, scan_theme_root,
+    uninstall_theme,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

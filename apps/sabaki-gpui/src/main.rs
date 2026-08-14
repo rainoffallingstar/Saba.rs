@@ -118,6 +118,8 @@ struct ShellApp {
     engine_spec_focus_handle: FocusHandle,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
+    installed_themes: Vec<sabaki_host::InstalledTheme>,
+    legacy_asar_themes: Vec<std::path::PathBuf>,
     board_size: usize,
     settings_editing_key: Option<String>,
     settings_draft: SharedString,
@@ -175,6 +177,19 @@ impl ShellApp {
         let benchmark_result = SnapshotBenchmark::new_with_moves(19, 19, 120).run(2_000);
         let theme_choice = theme_from_setting(settings.get_str("theme.current"));
         let theme = theme_choice.tokens();
+        let (installed_themes, legacy_asar_themes) = match file_workflow::theme_root() {
+            Ok(theme_root) => match sabaki_host::scan_theme_root(&theme_root) {
+                Ok(scan) => (scan.themes, scan.legacy_asar),
+                Err(error) => {
+                    status = format!("theme scan failed: {error}");
+                    (Vec::new(), Vec::new())
+                }
+            },
+            Err(error) => {
+                status = format!("theme directory unavailable: {error}");
+                (Vec::new(), Vec::new())
+            }
+        };
         let panel = PluginPanelContribution::parse(
             r#"{
                 "schemaVersion": 1,
@@ -232,6 +247,8 @@ impl ShellApp {
             engine_spec_focus_handle: cx.focus_handle(),
             theme_choice,
             theme,
+            installed_themes,
+            legacy_asar_themes,
             board_size: 19,
             settings_editing_key: None,
             settings_draft: "".into(),
@@ -733,6 +750,37 @@ impl ShellApp {
             }
         }
         self.engine_spec_draft = draft.into();
+        cx.notify();
+    }
+
+    /// Applies an installed theme package: swaps the active tokens and
+    /// records the choice as `theme:<id>` under `theme.current`.
+    fn on_installed_theme_selected(&mut self, theme_id: &str, cx: &mut Context<Self>) {
+        let Some(theme) = self
+            .installed_themes
+            .iter()
+            .find(|theme| theme.manifest.id == theme_id)
+        else {
+            self.status = format!("theme {theme_id} is not installed").into();
+            cx.notify();
+            return;
+        };
+        self.theme = theme.tokens.clone();
+        match self.settings.set(
+            "theme.current",
+            serde_json::json!(format!("theme:{theme_id}")),
+        ) {
+            Ok(_) => match sabaki_host::persist_settings_store(
+                &self.settings,
+                &mut self.settings_persistence,
+            ) {
+                Ok(()) => self.status = format!("applied theme {theme_id}").into(),
+                Err(error) => self.status = format!("theme not persisted: {error}").into(),
+            },
+            Err(error) => {
+                self.status = format!("theme not accepted: {error}").into();
+            }
+        }
         cx.notify();
     }
 

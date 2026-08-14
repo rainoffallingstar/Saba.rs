@@ -6,10 +6,7 @@
 //! the same enable/permission gate as native plugins, and invoking commands
 //! with bounded fuel/memory/payload.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 use sabaki_plugin_runtime::{
     PluginError, PluginRecord, PluginRuntime, WasmPluginInstance, WasmPluginModule,
@@ -148,7 +145,7 @@ mod tests {
         dir
     }
 
-    fn write_echo_wasm(install_path: &Path) {
+    fn write_echo_wasm(install_path: &std::path::Path) {
         let bytes = wat::parse_str(ECHO_WAT).expect("WAT parses");
         fs::write(install_path.join("echo.wasm"), bytes).expect("wasm is written");
     }

@@ -128,13 +128,13 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 7 wasm 沙箱 + 2 帧/校验 |
-| `sabaki-host` | 85 单元（含 2 监督进程冒烟、4 wasm 工作流）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 106 测试（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-host` | 93 单元（含 2 监督进程冒烟、4 wasm 工作流、8 主题包）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-gpui` | 102 测试（theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 265 个全绿）
+cargo test --workspace        # 全部测试（当前 269 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -193,10 +193,19 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 （JSON-RPC 形状 DTO）、错误映射到共享 `PluginError` 词汇。GPUI 命令按钮
 对 wasm 插件真实调用并显示结果（declarative 仍为占位）。
 
+**迭代 13（主题包安装）已完成：** `sabaki-host::theme_workflow`（设计 §8.2）：
+`ThemeManifest`（theme.json：schemaVersion/id/name/version/assets 允许列表）、
+`ThemeTokens` 从 gpui 上移至 host（schema 版本 + hex 颜色校验）、`InstalledTheme`
+加载（manifest+tokens+资源存在性与 10MiB 大小上限）、`scan_theme_root`（扫描
+已安装主题 + **旧 `.asar` 主题只报告迁移说明、不执行不解包**）、
+`install_theme`（校验后复制）/`uninstall_theme`；路径穿越/非法扩展名/坏 token
+均拒绝。GPUI 设置面板列出已安装主题（点击应用 `theme:<id>` 并持久化）、
+`.asar` 主题显示红色迁移提示；`crate::theme` 改为 host re-export 消除重复。
+
 按优先级排序的后续候选迭代：
 
 1. **路线图远期项**：WASM capability imports（按已授权权限注入最小
-   import，如 gameRead→快照读取）、主题包安装。
+   import，如 gameRead→快照读取）。
 2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
    Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
    自动发布（tag 触发时附加产物）。
@@ -212,6 +221,9 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
   Supervisor RPC）仍待接 UI。
 - WASM runtime 默认无 host import；按权限注入 capability import（如
   gameRead 快照）属下一轮候选。
+- 主题包安装/校验已实现（host `theme_workflow`），但 GPUI 尚无「安装主题
+  包」入口（面板只显示已安装与 .asar 迁移提示）；`tokens.json` 暂只支持
+  颜色 token（材质/尺寸 token 留待 schema v2）。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
 - `main.rs` 已拆分（`panels.rs`），但 `ShellApp` 状态字段与事件处理器仍集中在
