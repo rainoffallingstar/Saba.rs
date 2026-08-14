@@ -51,12 +51,15 @@ jobs:
           cp target/release/sabaki-gpui dist/linux/saba-rs
           cp README.md LICENSE.md dist/linux/
           tar -czf dist/linux/saba-rs-linux-x86_64.tar.gz -C dist/linux saba-rs README.md LICENSE.md
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        run: ./scripts/bundle-linux-appimage.sh
       - name: Upload Linux artifacts
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: saba-rs-linux
-          path: dist/linux/*.tar.gz
+          path: dist/linux/*
 
       - name: Package Windows zip
         if: runner.os == 'Windows'
@@ -66,9 +69,35 @@ jobs:
           Copy-Item target/release/sabaki-gpui.exe dist/windows/saba-rs.exe
           Copy-Item README.md, LICENSE.md dist/windows/
           Compress-Archive -Path dist/windows/saba-rs.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath dist/windows/saba-rs-windows-x86_64.zip -Force
+      - name: Package Windows installer (NSIS)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0' }
+          makensis /DAPP_VERSION=$version scripts\installer.nsi
       - name: Upload Windows artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: saba-rs-windows
-          path: dist/windows/*.zip
+          path: dist/windows/*
+
+  publish:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Strip bundle directories from release assets
+        run: find artifacts -maxdepth 2 -name '*.app' -type d -exec rm -rf {} +
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
