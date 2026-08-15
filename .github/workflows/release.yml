@@ -79,7 +79,8 @@ jobs:
           $nsisZip = "$env:RUNNER_TEMP\nsis.zip"
           $nsisDir = "$env:RUNNER_TEMP\nsis"
           Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/nsis/NSIS%203/$nsisVersion/nsis-$nsisVersion.zip" -OutFile $nsisZip
-          Expand-Archive -Path $nsisZip -DestinationPath $nsisDir -Force
+          New-Item -ItemType Directory -Force $nsisDir | Out-Null
+          tar -xf $nsisZip -C $nsisDir
           $makensis = Get-ChildItem -Path $nsisDir -Recurse -Filter makensis.exe | Select-Object -First 1 -ExpandProperty FullName
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0' }
           & $makensis /DAPP_VERSION=$version /DROOT_DIR=$env:GITHUB_WORKSPACE scripts\installer.nsi
