@@ -5,6 +5,11 @@ use thiserror::Error;
 
 pub mod gtp;
 pub mod legacy;
+pub mod scoring;
+
+pub use scoring::{
+    DEFAULT_KOMI, ScoreResult, StoneChain, find_chains, mark_surrounded_chains, score_board,
+};
 
 pub const CURRENT_GAME_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_TRANSACTION_SCHEMA_VERSION: u32 = 1;

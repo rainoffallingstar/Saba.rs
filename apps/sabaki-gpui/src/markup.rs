@@ -267,8 +267,92 @@ where
         }))
 }
 
+/// Computes the scoring summary line for the status area: territory,
+/// stones, captures, komi and margin. Pure function so the panel logic is
+/// unit-testable without a view.
+pub fn scoring_summary(snapshot: &sabaki_domain_core::GameSnapshot) -> String {
+    let komi = snapshot
+        .root_properties
+        .get("KM")
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<f64>().ok())
+        .or(Some(sabaki_domain_core::DEFAULT_KOMI));
+    let result = sabaki_domain_core::score_board(&snapshot.board, komi, &snapshot.score_overrides);
+    let winner = match result.winner {
+        Some(sabaki_domain_core::Color::Black) => "Black",
+        Some(sabaki_domain_core::Color::White) => "White",
+        None => "Draw",
+    };
+    format!(
+        "B {:.1} ({} ter + {} stones + {} cap) — W {:.1} ({} ter + {} stones + {} cap + {:.1} komi) → {} by {:.1}",
+        result.black_total,
+        result.black_territory,
+        result.black_stones,
+        result.black_captured,
+        result.white_total,
+        result.white_territory,
+        result.white_stones,
+        result.white_captured,
+        result.komi,
+        winner,
+        result.margin
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoring_summary_reports_black_win_by_margin() {
+        use sabaki_domain_core::{Color, GameDocument, Vertex};
+
+        // Build a tiny game: black owns a 2x2 block; score with komi 0.
+        let mut game = GameDocument::new(3, 3).unwrap();
+        for vertex in [
+            Vertex { column: 0, row: 0 },
+            Vertex { column: 0, row: 1 },
+            Vertex { column: 1, row: 0 },
+            Vertex { column: 1, row: 1 },
+        ] {
+            game.play_move(Color::Black, Some(vertex))
+                .expect("setup moves are legal");
+        }
+        let mut snapshot = game.snapshot();
+        snapshot
+            .root_properties
+            .insert("KM".to_owned(), vec!["0".to_owned()]);
+        let summary = super::scoring_summary(&snapshot);
+        assert!(
+            summary.contains("B 9.0"),
+            "black total must be territory 5 + stones 4: {summary}"
+        );
+        assert!(summary.contains("→ Black by 9.0"), "summary: {summary}");
+    }
+
+    #[test]
+    fn scoring_summary_reports_white_win_with_komi() {
+        use sabaki_domain_core::{Color, GameDocument, Vertex};
+
+        let mut game = GameDocument::new(3, 3).unwrap();
+        for vertex in [
+            Vertex { column: 0, row: 0 },
+            Vertex { column: 0, row: 1 },
+            Vertex { column: 1, row: 0 },
+            Vertex { column: 1, row: 1 },
+        ] {
+            game.play_move(Color::Black, Some(vertex))
+                .expect("setup moves are legal");
+        }
+        let mut snapshot = game.snapshot();
+        snapshot
+            .root_properties
+            .insert("KM".to_owned(), vec!["10".to_owned()]);
+        let summary = super::scoring_summary(&snapshot);
+        assert!(
+            summary.contains("+ 10.0 komi") && summary.contains("→ White"),
+            "komi must flip the winner: {summary}"
+        );
+    }
+
     use super::{MarkupTool, create_markup_transaction, markup_symbol};
     use sabaki_domain_core::{GameDocument, GameTransactionType, Vertex};
 

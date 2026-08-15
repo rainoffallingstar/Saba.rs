@@ -126,15 +126,15 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 | 目标 | 数量 |
 |---|---|
-| `domain-core` | 17 单元 + 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
+| `domain-core` | 26 单元（含 9 计分器）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
 | `sabaki-host` | 99 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 102 测试（theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-gpui` | 104 测试（含 2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 281 个全绿（迭代 17 为纯 UI 接线））
+cargo test --workspace        # 全部测试（当前 290 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -232,6 +232,14 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 20（计分器与计分摘要）已完成：** `domain-core::scoring` 区域计分
+（Chinese rules,area scoring）:链检测（连通+气）、无气链死子启发
+（`mark_surrounded_chains`,边界链保活）、空区域归属（双色边界区域计 seki
+均不计）、用户 `score_overrides` 按链覆盖死活（rescue/kill）、捕获计入
+对方、贴目与胜负/差距;GPUI 计分模式开启时面板实时显示计分摘要
+（`markup::scoring_summary`:目/子/捕获/贴目/胜者与差距）。9 个 domain
+测试 + 2 个 summary 测试;`score.estimator_iterations`(Monte Carlo)留待
+后续。
 **迭代 19（native 插件命令调用链）已完成：** GPUI `on_plugin_command`
 新增 Native 分支——经 `PluginSupervisor::request` 走 JSON-RPC 调用监督
 进程,进程按需启动,崩溃时自动重启一次,超预算自动禁用(§10.4);新增
@@ -277,8 +285,8 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   main.rs；后续按需继续细化。
 - gpui 0.2.2 无公开窗口激活事件，外部文件检查以帧调度 + `is_active` + 节流实现
   （窗口激活会触发 refresh 帧）；无原生对话框 API，经 rfd 实现。
-- 计分覆盖已实现（`ApplyScoringOverride` + `GameSnapshot.score_overrides`），
-  但尚无计分模式 UI 与死子判定算法（`score.estimator_iterations` 键未用）。
+- 计分已闭环（覆盖事务 + 死子启发 + 区域计分 + GPUI 摘要）;死子判定为
+  无气启发式,Monte Carlo 估算（`score.estimator_iterations`）未用。
 - `decode_legacy_bytes` 的编码候选顺序（UTF-8→Shift_JIS→EUC-JP→GBK→Big5）
   对字节重叠的多编码文本（如 GBK 与 Shift_JIS 共用字节对）按固定顺序确定性
   决策，可能选错编码（与上游 jschardet 统计检测同为不确定性）；中文 NGF

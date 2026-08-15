@@ -1020,7 +1020,15 @@ pub fn render_settings_panel(
                                 cx.listener(ShellApp::on_scoring_mode_toggle),
                             ),
                     ),
-                ),
+                )
+                .child(if shell.scoring_mode {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8a6d3b))
+                        .child(crate::markup::scoring_summary(&shell.host.snapshot()))
+                } else {
+                    div()
+                }),
         )
         .child(
             div()
