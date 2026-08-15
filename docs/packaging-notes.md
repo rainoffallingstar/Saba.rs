@@ -1,10 +1,11 @@
 # 打包与发布调研（Saba.rs）
 
 > 状态：调研 + 三阶段落地。release CI 产出 macOS .app/dmg、Linux tar.gz +
-> AppImage、Windows zip + NSIS installer（三平台构建并上传 artifacts，tag
-> 推送自动发布 GitHub Release）；脚本见 `scripts/bundle-macos.sh`、
-> `scripts/bundle-linux-appimage.sh`、`scripts/installer.nsi`。
-> 签名/公证（需证书）、Flatpak 待后续。
+> AppImage + Flatpak、Windows zip + NSIS installer（三平台构建并上传
+> artifacts，tag 推送自动发布 GitHub Release）；脚本见
+> `scripts/bundle-macos.sh`、`scripts/bundle-linux-appimage.sh`、
+> `scripts/installer.nsi`、`flatpak/dev.saba-rs.app.yml`。
+> 签名/公证（需证书）待后续。
 
 ## 目标平台
 
@@ -40,7 +41,9 @@
 
 1. ✅ CI release 构建（三平台 `cargo build --release` + artifacts 上传）。
 2. ✅ macOS bundle 脚本 + dmg（`scripts/bundle-macos.sh`）。
-3. ✅ Linux AppImage 构建（linuxdeploy + appimagetool，含依赖收集）；Flatpak manifest 实验待后续。
+3. ✅ Linux AppImage 构建（linuxdeploy + appimagetool，含依赖收集）；Flatpak
+   manifest（`flatpak/dev.saba-rs.app.yml`，Freedesktop 24.08 + rust-stable
+   extension）已入 release 工作流并实测产出 `.flatpak`。
 4. ✅ Windows installer（NSIS）；便携 zip 保留。
 5. ⬜ 签名/公证（macOS Developer ID + notarytool、Windows Authenticode，需证书）。
 6. ✅ GitHub Release 自动发布（tag 触发时附加产物，softprops/action-gh-release）。

@@ -83,8 +83,31 @@ jobs:
           name: saba-rs-windows
           path: dist/windows/*
 
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
+            org.freedesktop.Platform//24.08 \
+            org.freedesktop.Sdk//24.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//24.08
+      - name: Build Flatpak bundle
+        run: |
+          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.saba-rs.app.yml
+          flatpak build-bundle flatpak-repo saba-rs-linux-x86_64.flatpak dev.saba-rs.app
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: saba-rs-flatpak
+          path: saba-rs-linux-x86_64.flatpak
+
   publish:
-    needs: release
+    needs: [release, flatpak]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

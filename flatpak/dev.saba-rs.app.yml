@@ -1,0 +1,36 @@
+# Saba.rs Flatpak manifest.
+#
+# Build: flatpak-builder --user --install build-dir flatpak/dev.saba-rs.app.yml
+# Package: flatpak build-bundle repo saba-rs.flatpak dev.saba-rs.app
+#
+# The Freedesktop SDK provides the graphics/runtime stack (X11, Wayland,
+# DRI); the rust-stable extension supplies the toolchain. `finish-args`
+# grant only what a Go-board client needs: display sockets and GPU.
+
+app-id: dev.saba-rs.app
+runtime: org.freedesktop.Platform//24.08
+sdk: org.freedesktop.Sdk//24.08
+command: saba-rs
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=xdg-config/sabaki-gpui:create
+
+modules:
+  - name: saba-rs
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/saba-rs/cargo-home
+        CARGO_TARGET_DIR: /run/build/saba-rs/target
+    build-commands:
+      - cargo build --release --locked -p sabaki-gpui
+      - install -Dm755 target/release/sabaki-gpui /app/bin/saba-rs
+      - install -Dm644 LICENSE.md /app/share/licenses/saba-rs/LICENSE.md
+    sources:
+      - type: dir
+        path: ..
