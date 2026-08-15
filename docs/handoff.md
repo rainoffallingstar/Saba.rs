@@ -336,17 +336,24 @@ release.yml 增 Linux AppImage 步骤、Windows NSIS 步骤与 `publish` job
 手动触发实测:三平台 job 全绿,产物齐全（macOS .app/dmg、Linux
 tar.gz/AppImage、Windows zip/setup.exe）。
 
+**长期目标（2026-08 设定）：** 接近 Sabaki 原版界面：三栏主布局
+（左引擎/GTP 栏 + 中央棋盘/模式栏 + 右胜率图/GameGraph/注释栏）、
+可拖拽分栏、原版菜单/抽屉/主题/输入体验。完整阶段计划见
+[`docs/ui-parity-plan.md`](ui-parity-plan.md)。
+
 按优先级排序的后续候选迭代：
 
-1. **Beta #10 收尾**：迭代 26-27 已把 headless 覆盖推进到完整窗口
-   layout/paint + 鼠标输入 dispatch（落子 + Pass）；剩余唯一缺口是原生
-   screenshot/GPU frame capture（gpui 0.2.2 无稳定 offscreen/screenshot
-   API，跟踪上游 snapshot API，或引入 blade offscreen 渲染冒烟）。
-2. **发布收尾（需外部条件，本次按用户要求暂不做）**：签名/公证（macOS
+1. **M0 三栏布局基座（迭代 28）**：`SplitPane`/`TripleSplit` 拖拽分栏、
+   左右栏显隐与 `view.*_width/height` 持久化，现有面板归位到三栏。
+2. **M1 中央棋盘与模式栏（迭代 29-30）**：棋盘显示设置补齐、play/
+   scoring/estimator/edit/find/guess/autoplay 模式栏。
+3. **M2 左栏引擎区（迭代 31）**：引擎角色列表 + GTP 控制台上下分栏。
+4. **M3 右栏（迭代 32-33）**：WinrateGraph + GameGraph + CommentBox。
+5. **M4/M5（迭代 34-37）**：Drawer、菜单、原生输入、主题 schema v2、
+   声音、Screenshot/Beta #10 收尾。
+6. **发布收尾（需外部条件，本次按用户要求暂不做）**：签名/公证（macOS
    Developer ID + notarytool、Windows Authenticode，需开发者证书）；
    Flatpak 发布验证。
-3. **Beta 门槛验证**：设计文档 §11.3 逐项核对（数据保真、引擎对弈/分析、
-   插件边界、三平台构建、性能对比）。
 
 ## 7. 技术债 / 已知限制
 
