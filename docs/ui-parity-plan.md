@@ -187,7 +187,7 @@
 
 | 依赖/风险 | 影响 | 策略 |
 |---|---|---|
-| gpui 0.2.2 无成熟 SplitContainer/拖拽 | 三栏布局要自研 | 先做鼠标 down/move/up 状态机 + `frontend_smoke` 拖拽测试 |
+| gpui 0.2.2 无成熟 SplitContainer/拖拽 | 三栏布局要自研 | 先移植最小 SplitPane 状态机（参考 §7 的 `gpui-component::resizable`、`open-gpui/ui_components/splitter.rs`），并用 `frontend_smoke` 做拖拽测试 |
 | 无 popup/context menu 现成组件 | PlayBar 菜单、节点右键菜单 | 优先用 GPUI `Menu`/action；若不足则自研 lightweight popup |
 | 无 canvas-like 高性能图组件 | GameGraph/WinrateGraph | MVP 用绝对定位 Div，数据量超阈值后下沉 custom `Element` paint |
 | 分析数据当前不落 SGF | 胜率图刷新后丢失 | 扩展 domain SGF `SBKV`/`SBKS` 读写 |
@@ -202,3 +202,70 @@
 3. 更新 `docs/handoff.md` 与 `docs/beta-gate.md`。
 4. 提交推送，`gh run` 三平台 CI 全绿。
 5. 不引入 WebView/Electron/Node 依赖。
+
+## 7. 可借鉴项目调研（2026-08 查询）
+
+经 `gh search` 与本地 clone 核对，当前生态已有可直接参考的实现，不需要从零发明：
+
+### 7.1 首选参考：longbridge/gpui-component（约 12.8k stars）
+
+- 仓库：`https://github.com/longbridge/gpui-component`
+- 定位：基于 GPUI 的 shadcn 风格组件库，分两层：
+  - `gpui-component`：带样式的完整组件
+  - `gpui-base`：无样式的基础行为/状态/焦点/主题设施
+- 与本项目直接相关：
+  - `crates/ui/src/dock/`：`DockArea` 原生支持 **left/right/bottom dock + center**，
+    有 `DockAreaState`/`PanelState` 可序列化恢复，适合 M0 三栏布局；
+  - `crates/ui/src/resizable/` / `gpui-base::ResizablePanelGroup`：可拖拽分栏；
+  - `crates/ui/src/sidebar/`：sidebar 显隐、折叠、分组菜单；
+  - `crates/ui/src/chart/`：line/area/bar/pie 等图表，WinrateGraph 可优先移植；
+  - `crates/ui/src/input/`：`InputState`/textarea/选区/弹层，解决 M5 输入问题；
+  - `crates/ui/src/menu/`：popup/dropdown/context menu；
+  - `crates/ui/src/dialog/`、`sheet.rs`、`popover.rs`：Drawer 可参考；
+  - `crates/ui/src/setting/`：设置面板；
+  - `crates/ui/src/theme/`：主题 token schema，可参考做 theme schema v2。
+- 关键注意：
+  - 它依赖 `gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }`
+    与 `gpui_platform`。我们当前固定 crates.io `gpui = "0.2.2"`，**直接添加依赖
+    很可能出现两个 GPUI 源码包、类型不兼容**。
+  - 因此建议：M0 只借鉴其 SplitPane/DockState 设计并移植最小实现；如要整体
+    采用，需先在一个 spike 分支把本项目 GPUI 依赖切到同一 git revision，
+    验证三平台 CI、macos-blade、`font-kit` 后再决定。
+
+### 7.2 社区分栏/停靠参考
+
+| 项目 | Stars | 可借鉴点 | 注意 |
+|---|---|---|---|
+| `Latias94/open-gpui` | 见仓库 | `crates/ui_components/src/splitter.rs`、`sidebar.rs`、`text_input.rs`、`slider.rs`、`context_menu/`；`crates/gpui_docking` 是完整的 retained docking 系统，含持久化、tab stack、分栏、测试 | 它是 GPUI 的 fork（`open-gpui` 0.2.0），不能直接依赖，只作实现参考 |
+| `ignition-is-go/gpui-mullion` | 见仓库 | 轻量 split panes + activity bar；`model`/`tree`/`command_actions` 把 pane 拓扑、分栏比例、resize 命令拆成纯逻辑，适合我们 M0 的“可测试状态机”设计 | 依赖 zed git GPUI，版本较新 |
+| `ColinEspinas/jerry` | 较小 | `crates/app/src/sidebar` 提供简洁 sidebar 实例 | 仅模式参考 |
+
+### 7.3 官方/上游参考
+
+- `zed-industries/zed`：GPUI 本体。重点目录：
+  - `crates/workspace/src/dock.rs`：Zed 的 dock 布局；
+  - `crates/sidebar/src/sidebar.rs`：产品级 sidebar；
+  - `crates/ui/src/components/`：官方 UI 组件；
+  - `crates/gpui/examples/`：本地 cargo registry 已有 `data_table.rs`、
+    `drag_drop.rs`、`scrollable.rs`、`input.rs`、`tree.rs`、`uniform_list.rs`
+    等，可作为不引第三方时的最稳妥写法。
+- `zed-industries/awesome-gpui`：GPUI 项目索引，后续可继续按“dock/sidebar/chart”
+  检索新出现的成熟项目。
+- 已确认可参考的成熟应用：`Zedis`（Redis GUI）、`Loungy`、`Waku`、
+  `OpenLogi`、`oxideterm`、`hummingbird`；它们可验证 GPUI 在列表、终端、
+  输入、图表等场景的实际做法。
+
+### 7.4 采纳策略
+
+1. **M0 采用“读码移植”而非直接引依赖**：只移植 SplitPane/DockArea 的
+   状态模型与命中测试，保持本项目 `gpui = 0.2.2 crates.io` 不变。
+2. **M1-M4 逐组件评估**：优先移植最小可用实现；若某组件超过阈值（例如
+   WinrateGraph、TextInput、Menu），再评估引入/照抄 gpui-component 对应模块。
+3. **切换 GPUI 源作为独立 spike**：
+   - 分支：`spike/gpui-component-adoption`
+   - 验证：`cargo tree` 无重复 gpui、三平台 CI、`macos-blade`/`font-kit`、
+     `test-support`、release 打包。
+   - 通过后再决定是否把 `gpui`/`gpui-platform` 切到 zed git 并启用
+     `gpui-base` 或 `gpui-component`。
+4. **不切换到 open-gpui fork**：除非 zed 上游停更且社区 fork 成为事实标准；
+   本项目目标是 Sabaki 产品，不应承担 fork 框架的升级成本。

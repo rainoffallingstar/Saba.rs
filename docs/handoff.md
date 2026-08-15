@@ -338,7 +338,8 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 
 **长期目标（2026-08 设定）：** 接近 Sabaki 原版界面：三栏主布局
 （左引擎/GTP 栏 + 中央棋盘/模式栏 + 右胜率图/GameGraph/注释栏）、
-可拖拽分栏、原版菜单/抽屉/主题/输入体验。完整阶段计划见
+可拖拽分栏、原版菜单/抽屉/主题/输入体验。完整阶段计划与可借鉴项目
+（`gpui-component`/`open-gpui`/`gpui-mullion`/Zed 上游）见
 [`docs/ui-parity-plan.md`](ui-parity-plan.md)。
 
 按优先级排序的后续候选迭代：
