@@ -139,6 +139,31 @@ struct ShellApp {
     status: SharedString,
 }
 
+/// Replays the current position into a connected engine session before a
+/// streaming analysis command, using the session's own GTP transport.
+fn replay_position_session(
+    session: &mut sabaki_host::EngineSession<sabaki_host::ProcessGtpTransport>,
+    board_size: usize,
+    moves: &[sabaki_domain_core::MoveDto],
+) -> Result<(), sabaki_domain_core::gtp::GtpError> {
+    session.send_command("boardsize", vec![board_size.to_string()])?;
+    session.send_command("clear_board", Vec::new())?;
+    for move_dto in moves {
+        let color = match move_dto.color {
+            sabaki_domain_core::Color::Black => "B",
+            sabaki_domain_core::Color::White => "W",
+        };
+        let vertex = match move_dto.vertex {
+            Some(vertex) => {
+                crate::engine_console::format_gtp_vertex(board_size, vertex.column, vertex.row)
+            }
+            None => "pass".to_owned(),
+        };
+        session.play(color, &vertex)?;
+    }
+    Ok(())
+}
+
 impl ShellApp {
     fn new(
         settings: sabaki_host::SettingsStore,
@@ -486,8 +511,106 @@ impl ShellApp {
             }
         }
 
-        // Streaming commands (kata-analyze / lz-analyze) run in a fresh
-        // analysis process with the current position replayed into it.
+        // Streaming commands (kata-analyze / lz-analyze): reuse the already
+        // connected engine session when it supports streaming (no second
+        // process), otherwise fall back to a fresh analysis process with the
+        // current position replayed into it.
+        let board_size = self.host.snapshot().board.width;
+        let moves = self.host.snapshot().moves.clone();
+
+        // Session mode: replay the position into the connected session and
+        // stream from it. On any failure we fall back to a fresh process.
+        let mut session_mode = false;
+        if let Some(session) = self.engine_session.as_mut() {
+            if let Err(error) = replay_position_session(session, board_size, &moves) {
+                self.status = format!("analysis session setup failed: {error}").into();
+                cx.notify();
+                return;
+            }
+            match session.stream_analyze(&command, Vec::new()) {
+                Ok(()) => session_mode = true,
+                Err(sabaki_domain_core::gtp::GtpError::UnsupportedStreaming) => {
+                    // Connected engine cannot stream; fall through.
+                }
+                Err(error) => {
+                    self.status = format!("analysis command failed: {error}").into();
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+
+        let stop_flag = self.analysis_stop_flag.clone();
+        let task_command = command.clone();
+
+        if session_mode {
+            let mut session = self
+                .engine_session
+                .take()
+                .expect("session mode implies a connected session");
+            self.status = format!("analysis: streaming {command} on connected session").into();
+            self.analysis_task = Some(cx.spawn(
+                move |shell_weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let mut pending: Vec<sabaki_host::AnalysisEntry> = Vec::new();
+                        let mut last_flush = Instant::now();
+                        loop {
+                            if stop_flag.load(Ordering::Relaxed)
+                                || generation_flag.load(Ordering::SeqCst) != generation
+                            {
+                                if stop_flag.load(Ordering::Relaxed) {
+                                    let _ = session.stop_analysis();
+                                }
+                                break;
+                            }
+                            match session.recv_analysis_line(Duration::from_millis(50)) {
+                                Some(line) => {
+                                    let line = line.trim();
+                                    if line.is_empty() {
+                                        break;
+                                    }
+                                    if let Some(entry) = parse_stream_line(&task_command, line) {
+                                        pending.push(entry);
+                                    }
+                                    if task_command == "kata-analyze"
+                                        && pending
+                                            .last()
+                                            .is_some_and(|entry| !entry.is_during_search)
+                                    {
+                                        break;
+                                    }
+                                }
+                                None => {}
+                            }
+                            if last_flush.elapsed() >= Duration::from_millis(120)
+                                && !pending.is_empty()
+                            {
+                                let batch = std::mem::take(&mut pending);
+                                let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                    shell.push_analysis_batch(batch, cx)
+                                });
+                                last_flush = Instant::now();
+                            }
+                        }
+                        if !pending.is_empty() {
+                            let batch = std::mem::take(&mut pending);
+                            let _ = shell_weak
+                                .update(&mut cx, |shell, cx| shell.push_analysis_batch(batch, cx));
+                        }
+                        // Give the session back to the shell so later
+                        // analysis and play requests reuse it.
+                        let _ = shell_weak.update(&mut cx, |shell, cx| {
+                            shell.engine_session = Some(session);
+                            shell.analysis_finished(cx);
+                        });
+                    }
+                },
+            ));
+            cx.notify();
+            return;
+        }
+
         let Some(record) = self.engine_store.list().first().cloned() else {
             self.status = "no engine configured for analysis".into();
             cx.notify();
@@ -506,8 +629,6 @@ impl ShellApp {
                 return;
             }
         };
-        let board_size = self.host.snapshot().board.width;
-        let moves = self.host.snapshot().moves.clone();
         if let Err(error) = replay_position_stream(&mut stream, board_size, &moves) {
             self.status = format!("analysis setup failed: {error}").into();
             cx.notify();
@@ -518,8 +639,6 @@ impl ShellApp {
             cx.notify();
             return;
         }
-        let stop_flag = self.analysis_stop_flag.clone();
-        let task_command = command.clone();
         self.status = format!("analysis: streaming {command}").into();
         self.analysis_task = Some(cx.spawn(
             move |shell_weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {

@@ -11,6 +11,19 @@ use crate::engine_workflow::EngineRecord;
 pub trait GtpTransport {
     fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError>;
 
+    /// Writes a streaming command without waiting for a complete response
+    /// (e.g. `kata-analyze`); output is read with `recv_line_timeout` until
+    /// `stop` is sent. Transports that cannot stream return
+    /// `GtpError::UnsupportedStreaming`.
+    fn send_streaming(&mut self, _name: &str, _arguments: Vec<String>) -> Result<(), GtpError> {
+        Err(GtpError::UnsupportedStreaming)
+    }
+
+    /// Waits up to `timeout` for the next line of a streaming command.
+    fn recv_line_timeout(&mut self, _timeout: std::time::Duration) -> Option<String> {
+        None
+    }
+
     fn stop(&mut self) -> Result<(), std::io::Error>;
 }
 
@@ -30,6 +43,14 @@ impl ProcessGtpTransport {
 impl GtpTransport for ProcessGtpTransport {
     fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
         self.supervisor.send(name, arguments)
+    }
+
+    fn send_streaming(&mut self, name: &str, arguments: Vec<String>) -> Result<(), GtpError> {
+        self.supervisor.send_streaming(name, arguments)
+    }
+
+    fn recv_line_timeout(&mut self, timeout: std::time::Duration) -> Option<String> {
+        self.supervisor.recv_line_timeout(timeout)
     }
 
     fn stop(&mut self) -> Result<(), std::io::Error> {
@@ -229,6 +250,23 @@ impl<T: GtpTransport> EngineSession<T> {
         self.transport.send("stop", Vec::new())
     }
 
+    /// Starts a streaming analysis on the already-connected session (no new
+    /// process). Fails with `GtpError::UnsupportedStreaming` when the
+    /// transport cannot stream; callers then fall back to a fresh
+    /// `AnalysisStream` process.
+    pub fn stream_analyze(
+        &mut self,
+        command: &str,
+        arguments: Vec<String>,
+    ) -> Result<(), GtpError> {
+        self.transport.send_streaming(command, arguments)
+    }
+
+    /// Reads the next line of the running streaming analysis with a timeout.
+    pub fn recv_analysis_line(&mut self, timeout: std::time::Duration) -> Option<String> {
+        self.transport.recv_line_timeout(timeout)
+    }
+
     pub fn stop(&mut self) -> Result<(), std::io::Error> {
         self.transport.stop()?;
         self.state = EngineSessionState::Stopped;
@@ -241,12 +279,20 @@ mod tests {
     use super::{EngineSession, EngineSessionError, EngineSessionState, GtpTransport};
     use crate::engine_workflow::EngineRecord;
     use sabaki_domain_core::gtp::{GtpError, GtpResponse};
-    use std::{cell::RefCell, collections::BTreeMap};
+    use std::{
+        cell::RefCell,
+        collections::{BTreeMap, VecDeque},
+        time::Duration,
+    };
 
     #[derive(Default, Debug)]
     struct MockTransport {
         responses: RefCell<BTreeMap<String, GtpResponse>>,
         calls: RefCell<Vec<String>>,
+        /// Streaming lines consumed by `recv_line_timeout`.
+        stream_lines: RefCell<std::collections::VecDeque<String>>,
+        /// When true, `send_streaming` fails with `UnsupportedStreaming`.
+        streaming_unsupported: bool,
     }
 
     impl MockTransport {
@@ -290,6 +336,18 @@ mod tests {
                 }))
         }
 
+        fn send_streaming(&mut self, name: &str, _arguments: Vec<String>) -> Result<(), GtpError> {
+            self.calls.borrow_mut().push(name.to_owned());
+            if self.streaming_unsupported {
+                return Err(GtpError::UnsupportedStreaming);
+            }
+            Ok(())
+        }
+
+        fn recv_line_timeout(&mut self, _timeout: std::time::Duration) -> Option<String> {
+            self.stream_lines.borrow_mut().pop_front()
+        }
+
         fn stop(&mut self) -> Result<(), std::io::Error> {
             Ok(())
         }
@@ -301,6 +359,54 @@ mod tests {
             record.commands = Some(commands.to_owned());
         }
         record
+    }
+
+    #[test]
+    fn streaming_analysis_reuses_the_connected_session() {
+        let transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+            ("list_commands", true, "play\ngenmove\nkata-analyze"),
+        ]);
+        let record = record_with_commands(None);
+        let mut session = EngineSession::start(transport, &record, 19).expect("session starts");
+
+        session
+            .stream_analyze("kata-analyze", Vec::new())
+            .expect("streaming command is sent");
+        assert_eq!(
+            session.transport().calls().last().map(String::as_str),
+            Some("kata-analyze"),
+            "the streaming command must go through the connected session, not a new process"
+        );
+        assert_eq!(
+            session.recv_analysis_line(Duration::from_millis(50)),
+            None,
+            "the mock has no streamed lines yet"
+        );
+        session.stop();
+    }
+
+    #[test]
+    fn streaming_analysis_reports_unsupported_transports() {
+        let mut transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+            ("list_commands", true, "play\ngenmove\nkata-analyze"),
+        ]);
+        transport.streaming_unsupported = true;
+        let record = record_with_commands(None);
+        let mut session = EngineSession::start(transport, &record, 19).expect("session starts");
+
+        assert!(matches!(
+            session.stream_analyze("kata-analyze", Vec::new()),
+            Err(GtpError::UnsupportedStreaming)
+        ));
+        session.stop();
     }
 
     #[test]

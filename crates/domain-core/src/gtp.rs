@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, BufReader, Write},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
 };
 
 use thiserror::Error;
@@ -35,6 +35,8 @@ pub enum GtpError {
     MissingStandardOutput,
     #[error("GTP engine stopped before completing a response")]
     UnexpectedEndOfStream,
+    #[error("this transport does not support streaming commands")]
+    UnsupportedStreaming,
 }
 
 impl GtpCommand {
@@ -89,7 +91,8 @@ pub fn parse_response(lines: impl IntoIterator<Item = String>) -> Result<GtpResp
 pub struct GtpProcessSupervisor {
     child: Child,
     standard_input: ChildStdin,
-    standard_output: BufReader<ChildStdout>,
+    receiver: std::sync::mpsc::Receiver<String>,
+    reader_thread: Option<std::thread::JoinHandle<()>>,
     next_identifier: u64,
 }
 
@@ -102,15 +105,30 @@ impl GtpProcessSupervisor {
             .stderr(Stdio::piped())
             .spawn()?;
         let standard_input = child.stdin.take().ok_or(GtpError::MissingStandardInput)?;
-        let standard_output = child
-            .stdout
-            .take()
-            .map(BufReader::new)
-            .ok_or(GtpError::MissingStandardOutput)?;
+        let standard_output = child.stdout.take().ok_or(GtpError::MissingStandardOutput)?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader_thread = std::thread::spawn(move || {
+            let mut reader = BufReader::new(standard_output);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let normalized = line.trim_end_matches(['\r', '\n']).to_owned();
+                        if sender.send(normalized).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
         Ok(Self {
             child,
             standard_input,
-            standard_output,
+            receiver,
+            reader_thread: Some(reader_thread),
             next_identifier: 1,
         })
     }
@@ -132,23 +150,51 @@ impl GtpProcessSupervisor {
 
         let mut response_lines = Vec::new();
         loop {
-            let mut line = String::new();
-            let bytes_read = self.standard_output.read_line(&mut line)?;
-            if bytes_read == 0 {
-                return Err(GtpError::UnexpectedEndOfStream);
-            }
-            let normalized_line = line.trim_end_matches(['\r', '\n']).to_owned();
-            let is_complete = normalized_line.is_empty();
-            response_lines.push(normalized_line);
-            if is_complete {
-                break;
+            match self.receiver.recv() {
+                Ok(normalized_line) => {
+                    let is_complete = normalized_line.is_empty();
+                    response_lines.push(normalized_line);
+                    if is_complete {
+                        break;
+                    }
+                }
+                Err(_) => return Err(GtpError::UnexpectedEndOfStream),
             }
         }
         parse_response(response_lines)
     }
 
+    /// Writes a command line without waiting for the response, for streaming
+    /// commands (e.g. `kata-analyze`) whose output continues until `stop`.
+    pub fn send_streaming(
+        &mut self,
+        name: impl Into<String>,
+        arguments: Vec<String>,
+    ) -> Result<(), GtpError> {
+        let command = GtpCommand {
+            identifier: self.next_identifier,
+            name: name.into(),
+            arguments,
+        };
+        self.next_identifier += 1;
+        self.standard_input
+            .write_all(command.format()?.as_bytes())?;
+        self.standard_input.flush()?;
+        Ok(())
+    }
+
+    /// Waits up to `timeout` for the next output line from a streaming
+    /// command.
+    pub fn recv_line_timeout(&mut self, timeout: std::time::Duration) -> Option<String> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+
     pub fn stop(&mut self) -> Result<(), std::io::Error> {
-        self.child.kill()
+        self.child.kill()?;
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
+        Ok(())
     }
 }
 

@@ -128,13 +128,13 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 26 单元（含 9 计分器）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
-| `sabaki-host` | 99 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-host` | 101 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
 | `sabaki-gpui` | 104 测试（含 2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 290 个全绿）
+cargo test --workspace        # 全部测试（当前 292 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -232,6 +232,14 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 21（引擎会话复用）已完成：** `GtpProcessSupervisor` 改为
+channel+读线程模型（同步 `send` 与流式共享同一 reader,与 AnalysisStream
+一致）;`GtpTransport` trait 增加 `send_streaming`/`recv_line_timeout`
+（默认 `UnsupportedStreaming`,不支持流式的 transport 显式报告）;
+`EngineSession::stream_analyze`/`recv_analysis_line` 在已连接会话上执行
+流式分析（**不新起进程**）;GPUI 流式分析优先复用已连接会话
+（boardsize/clear_board/重放 → kata/lz-analyze → 读循环 → 会话归还
+shell）,`UnsupportedStreaming` 或未连接时回退独立 AnalysisStream 进程。
 **迭代 20（计分器与计分摘要）已完成：** `domain-core::scoring` 区域计分
 （Chinese rules,area scoring）:链检测（连通+气）、无气链死子启发
 （`mark_surrounded_chains`,边界链保活）、空区域归属（双色边界区域计 seki
@@ -291,7 +299,7 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   对字节重叠的多编码文本（如 GBK 与 Shift_JIS 共用字节对）按固定顺序确定性
   决策，可能选错编码（与上游 jschardet 统计检测同为不确定性）；中文 NGF
   建议另存为 UTF-8 后再导入。
-- 分析胜率条将 winrate 直接按黑方显示（未做手番换算）；流式分析每次启动独立
-  进程（未复用已连接会话，`kata-analyze` 配置参数来自 `engines.analyze_commands`
-  的命令名，无额外参数透传）。
+- 流式分析已复用已连接会话（session 优先、不支持时回退独立进程）；分析胜率
+  条仍按黑方显示（未做手番换算），`engines.analyze_commands` 仅命令名无参数
+  透传。
 - Tauri 冻结，其未完成项（theme/plugin 错误 DTO、原生 e2e）不再安排。
