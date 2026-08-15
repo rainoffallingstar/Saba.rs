@@ -14,13 +14,13 @@
 | 7 | WASM 与原生插件边界可验证 | 🟢 | WASM 沙箱(无 host import 默认、fuel/内存/payload 限制、capability import 按授权注入、未授权 link 失败);原生进程监督(超时/崩溃/重启上限/自动禁用);插件 UI 仅 host 校验的声明式贡献 |
 | 8 | 正式支持平台可构建、安装、升级和回滚 | 🟢 | CI 矩阵 ubuntu/macos/windows 全绿;release 工作流三平台产物(macOS .app+dmg、Linux tar.gz、Windows zip);安装/回滚流程待真实用户环境验证 |
 | 9 | 基准结果无未解释的严重回归 | 🟢 | 大棋谱基准测试(120 手 2000ms、300 手对局)在 CI 中运行;与 Electron 的实测对比待定 |
-| 10 | 原生 screenshot/交互与 headless/GPU CI 已建立 | 🟡 | headless CI 已覆盖两层:(a) 应用逻辑——gpui test-support 的 TestAppContext 构造完整 ShellApp,4 个冒烟测试(开局/落子、计分覆盖、主题 token、分析命令);(b) 完整窗口渲染帧——`frontend_smoke` 用 gpui test platform 绘制 ShellApp,经 debug selector 断言 goban 尺寸/木底偏移/board-column 与 sidebar 不重叠/sidebar 面板顺序堆叠,并模拟真实鼠标点击第 17 个交点后断言落子;原生 screenshot 渲染仍受 gpui 0.2.2 无稳定 offscreen/screenshot API 限制 |
+| 10 | 原生 screenshot/交互与 headless/GPU CI 已建立 | 🟡 | headless CI 已覆盖两层:(a) 应用逻辑——gpui test-support 的 TestAppContext 构造完整 ShellApp,4 个冒烟测试(开局/落子、计分覆盖、主题 token、分析命令);(b) 完整窗口渲染帧——`frontend_smoke` 用 gpui test platform 绘制 ShellApp,经 debug selector 断言 goban 尺寸/木底偏移/board-column 与 sidebar 不重叠/sidebar 面板顺序堆叠,并模拟真实鼠标点击第 17 个交点与 Pass 按钮;原生 screenshot 渲染仍受 gpui 0.2.2 无稳定 offscreen/screenshot API 限制 |
 
 ## 结论
 
 §11.3 十项门槛中九项已满足、一项部分满足。**#10 原生 screenshot/
 headless GPU CI** 已覆盖应用逻辑层(TestAppContext 冒烟测试,迭代 25)与
-完整窗口 layout/paint/输入 dispatch(渲染帧冒烟测试,迭代 26);
+完整窗口 layout/paint/输入 dispatch(渲染帧冒烟测试,迭代 26-27);
 渲染截图层仍受 gpui 0.2.2 平台能力限制,建议:
 - 短期:维持"完整窗口 headless 渲染帧冒烟 + 人工冒烟"策略(现已落地);
 - 中期:跟踪 gpui 上游 snapshot/screenshot API 进展,或引入

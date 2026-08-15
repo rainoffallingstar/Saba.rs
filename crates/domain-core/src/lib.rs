@@ -511,6 +511,16 @@ impl GameDocument {
         self.revision = self.revision.saturating_add(1);
     }
 
+    /// Sets one root property in place, without creating history or marking
+    /// the document dirty. This is intended only for constructing a fresh
+    /// document (for example applying new-game defaults); existing documents
+    /// must continue to use `SetNodeProperty` transactions.
+    pub fn set_root_property(&mut self, property: &str, values: Vec<String>) {
+        if let Some(root) = self.node_store.get_mut(&self.root_node_id) {
+            root.properties.insert(property.to_owned(), values);
+        }
+    }
+
     pub fn snapshot(&self) -> GameSnapshot {
         let path = self.path_to_root(&self.current_node_id).unwrap_or_default();
         let moves = self.moves_for_path(&path).unwrap_or_default();

@@ -18,7 +18,6 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "view.show_move_numbers",
     "view.show_comments",
     "view.show_graph",
-    "sound.enable",
     "gtp.console_log_enabled",
     "game.default_board_size",
     "game.default_komi",
@@ -138,7 +137,6 @@ pub fn setting_label(key: &str) -> &'static str {
         "view.show_move_numbers" => "Show move numbers",
         "view.show_comments" => "Show comments",
         "view.show_graph" => "Show game graph",
-        "sound.enable" => "Enable sounds",
         "gtp.console_log_enabled" => "Log GTP console",
         "game.default_board_size" => "Default board size",
         "game.default_komi" => "Default komi",
@@ -174,45 +172,45 @@ mod tests {
     fn panel_rows_reflect_stored_values() {
         let mut store = SettingsStore::default();
         store
-            .set("sound.enable", json!(false))
+            .set("view.show_graph", json!(false))
             .expect("boolean value is valid");
         store
             .set("game.default_komi", json!(6.5))
             .expect("number value is valid");
 
         let rows = panel_setting_rows(&store);
-        let sound = rows
+        let graph = rows
             .iter()
-            .find(|row| row.key == "sound.enable")
-            .expect("sound row exists");
+            .find(|row| row.key == "view.show_graph")
+            .expect("graph row exists");
         let komi = rows
             .iter()
             .find(|row| row.key == "game.default_komi")
             .expect("komi row exists");
 
-        assert_eq!(sound.value, Some(json!(false)));
+        assert_eq!(graph.value, Some(json!(false)));
         assert_eq!(komi.value, Some(json!(6.5)));
     }
 
     #[test]
     fn boolean_toggle_flips_the_current_value() {
         let row = SettingRow {
-            key: "sound.enable".to_owned(),
-            label: "Enable sounds",
+            key: "view.show_graph".to_owned(),
+            label: "Show game graph",
             kind: SettingKind::Boolean,
             value: Some(json!(false)),
         };
         assert_eq!(
             toggle_boolean_edit(&row),
             SettingEdit::Set {
-                key: "sound.enable".to_owned(),
+                key: "view.show_graph".to_owned(),
                 value: json!(true),
             }
         );
 
         let mut store = SettingsStore::default();
         apply_setting_edit(&mut store, toggle_boolean_edit(&row)).expect("toggle applies");
-        assert_eq!(store.get_bool("sound.enable"), Some(true));
+        assert_eq!(store.get_bool("view.show_graph"), Some(true));
     }
 
     #[test]

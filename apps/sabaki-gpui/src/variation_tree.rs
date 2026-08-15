@@ -6,6 +6,8 @@ use gpui::{
 };
 use sabaki_domain_core::{GameSnapshot, NodeId};
 
+use crate::theme::UiPalette;
+
 /// Horizontal distance between a node and its children in the tree layout.
 const HORIZONTAL_SPACING_PX: f32 = 26.0;
 /// Vertical distance between sibling branches in the tree layout.
@@ -143,13 +145,17 @@ fn connector(from: (f32, f32), to: (f32, f32), color: u32) -> Div {
 
 /// Renders the variation tree as a flat node graph. Clicking a node invokes
 /// `on_node_clicked` with that node's id.
-pub fn render_variation_tree<F>(layout: &VariationTreeLayout, on_node_clicked: F) -> Div
+pub fn render_variation_tree<F>(
+    layout: &VariationTreeLayout,
+    palette: UiPalette,
+    on_node_clicked: F,
+) -> Div
 where
     F: Fn(&NodeId, &mut Window, &mut App) + 'static,
 {
-    let line_color = 0x8a6d3b;
-    let default_node_color = 0x3a2410;
-    let current_node_color = 0xc0392b;
+    let line_color = palette.accent;
+    let default_node_color = palette.text;
+    let current_node_color = palette.danger_text;
     let on_node_clicked = Rc::new(on_node_clicked);
 
     let mut children: Vec<Div> = Vec::new();

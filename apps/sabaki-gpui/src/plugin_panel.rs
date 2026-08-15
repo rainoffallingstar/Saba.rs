@@ -1,4 +1,6 @@
-use sabaki_plugin_runtime::{PluginManifest, PluginRecord};
+use sabaki_plugin_runtime::{
+    PluginManifest, PluginPanelContribution, PluginPermission, PluginRecord,
+};
 
 /// A rendered summary row for an installed plugin panel. The panel renders a
 /// closed set of host widgets derived from the manifest; plugins never drive
@@ -13,6 +15,11 @@ pub struct PluginPanelEntry {
     pub commands: Vec<String>,
     pub command_ids: Vec<String>,
     pub menu_contributions: Vec<String>,
+    /// Closed-set panel contributions declared by the plugin manifest.
+    pub panels: Vec<PluginPanelContribution>,
+    /// Whether the user granted the `UiPanel` permission required to render
+    /// panel contributions.
+    pub ui_panel_granted: bool,
     /// Manifest permissions not yet granted to the plugin.
     pub missing_permissions: Vec<String>,
     /// Whether the plugin runs as a native process.
@@ -57,6 +64,8 @@ pub fn entry_from_manifest(manifest: &PluginManifest) -> PluginPanelEntry {
             .iter()
             .map(|menu| format!("{} → {}", menu.menu, menu.command))
             .collect(),
+        panels: manifest.contributes.panels.clone(),
+        ui_panel_granted: false,
         missing_permissions: manifest
             .ungranted_permissions(&Default::default())
             .into_iter()
@@ -78,6 +87,9 @@ pub fn entry_from_manifest(manifest: &PluginManifest) -> PluginPanelEntry {
 pub fn entry_from_record(record: &PluginRecord) -> PluginPanelEntry {
     let mut entry = entry_from_manifest(&record.manifest);
     entry.enabled = record.enabled;
+    entry.ui_panel_granted = record
+        .granted_permissions
+        .contains(&PluginPermission::UiPanel);
     entry.permissions = record
         .granted_permissions
         .iter()
@@ -150,6 +162,17 @@ mod tests {
                     ],
                     "menus": [
                         {"menu": "game", "command": "org.example.opening-trainer.start"}
+                    ],
+                    "panels": [
+                        {
+                            "schemaVersion": 1,
+                            "pluginId": "org.example.opening-trainer",
+                            "panelTitle": "Training",
+                            "widgets": [
+                                {"type": "label", "text": "Ready"},
+                                {"type": "button", "id": "org.example.opening-trainer.start", "title": "Start"}
+                            ]
+                        }
                     ]
                 }
             }"#,
@@ -174,6 +197,9 @@ mod tests {
             vec!["Start Training".to_owned(), "Stop Training".to_owned()]
         );
         assert_eq!(entry.menu_contributions.len(), 1);
+        assert_eq!(entry.panels.len(), 1);
+        assert_eq!(entry.panels[0].panel_title, "Training");
+        assert!(!entry.ui_panel_granted);
     }
 
     #[test]
@@ -193,6 +219,7 @@ mod tests {
         assert!(!entry.enabled);
         assert_eq!(entry.permissions, vec!["GameRead".to_owned()]);
         assert_eq!(entry.missing_permissions, vec!["UiPanel".to_owned()]);
+        assert!(!entry.ui_panel_granted);
         assert!(!entry.native_runtime);
     }
 

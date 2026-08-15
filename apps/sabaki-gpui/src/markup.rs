@@ -9,6 +9,8 @@ use sabaki_domain_core::{
     NodeId, Vertex,
 };
 
+use crate::theme::UiPalette;
+
 /// The markup tools exposed by the shell toolbar. `Play` falls through to the
 /// normal board interaction; the markup tools attach a marker to the clicked
 /// vertex via the `AddMarkup` transaction; the setup tools write `AB`/`AW`/
@@ -218,13 +220,15 @@ pub fn markup_symbol(marker_type: &str, label: Option<&str>) -> String {
 
 /// Renders the tool picker row. Clicking a tool invokes `on_tool_clicked` with
 /// that tool; the active tool is highlighted.
-pub fn render_markup_toolbar<F>(active_tool: MarkupTool, on_tool_clicked: F) -> Div
+pub fn render_markup_toolbar<F>(
+    active_tool: MarkupTool,
+    palette: UiPalette,
+    on_tool_clicked: F,
+) -> Div
 where
     F: Fn(&MarkupTool, &mut Window, &mut App) + 'static,
 {
     let on_tool_clicked = Rc::new(on_tool_clicked);
-    let active_background = 0xf7ecd8;
-    let inactive_background = 0xe8e0d4;
 
     div()
         .flex()
@@ -238,14 +242,14 @@ where
                 .px_2()
                 .py_1()
                 .border_1()
-                .border_color(rgb(0x8a6d3b))
+                .border_color(rgb(palette.accent))
                 .rounded(px(4.0))
                 .bg(if is_active {
-                    rgb(active_background)
+                    rgb(palette.button)
                 } else {
-                    rgb(inactive_background)
+                    rgb(palette.button_active)
                 })
-                .text_color(rgb(0x3a2410))
+                .text_color(rgb(palette.text))
                 .text_sm()
                 .child(match tool {
                     MarkupTool::Play => "●".to_owned(),

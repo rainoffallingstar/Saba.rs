@@ -17,6 +17,7 @@ mod variation_tree;
 
 use std::{
     cell::Cell,
+    collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -32,6 +33,7 @@ use gpui::{
     WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 use sabaki_domain_core::gtp::AnalysisStream;
+use sabaki_domain_core::legacy::handicap_placement;
 use sabaki_domain_core::{Color, Vertex};
 use sabaki_host::{HostPersistence, replay_position_stream};
 
@@ -47,6 +49,7 @@ use crate::file_workflow::{
     NativeHostPersistence, NativePluginPersistence, NativeSettingsPersistence, capture_autosave,
     clear_autosave, record_opened_file,
 };
+use crate::goban_view::format_sgf_vertex;
 use crate::markup::{
     MarkupTool, create_markup_transaction, create_scoring_transaction, create_setup_transactions,
     next_scoring_override,
@@ -58,7 +61,6 @@ use crate::node_inspector::{
     VariationAction, create_comment_transaction, create_variation_transaction,
     current_node_metadata,
 };
-use crate::plugin_contribution::PluginPanelContribution;
 use crate::plugin_panel::{PluginPanelEntry, apply_process_info, entry_from_record};
 use crate::settings::{
     BOARD_SIZE_OPTIONS, THEME_CHOICES, ThemeChoice, theme_from_setting,
@@ -68,7 +70,7 @@ use crate::settings_form::{
     SettingEdit, SettingRow, apply_setting_edit, display_setting_value, number_edit,
     panel_setting_rows, string_array_edit, toggle_boolean_edit,
 };
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeTokens, UiPalette, ui_palette};
 use crate::variation_tree::build_variation_tree_layout;
 
 const BOARD_PIXEL_SIZE: f32 = 420.0;
@@ -115,13 +117,13 @@ struct ShellApp {
     engine_spec_focus_handle: FocusHandle,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
+    palette: UiPalette,
     installed_themes: Vec<sabaki_host::InstalledTheme>,
     legacy_asar_themes: Vec<std::path::PathBuf>,
     board_size: usize,
     settings_editing_key: Option<String>,
     settings_draft: SharedString,
     settings_input_focus_handle: FocusHandle,
-    panel: PluginPanelContribution,
     plugin_store: sabaki_host::PluginStore,
     plugin_persistence: NativePluginPersistence,
     plugin_supervisors: std::collections::BTreeMap<String, sabaki_host::PluginSupervisor>,
@@ -161,6 +163,59 @@ fn replay_position_session(
     Ok(())
 }
 
+/// Resolves the new-game defaults stored in the settings store and returns
+/// the board size plus root SGF properties (`KM`, `HA`, and standard `AB`
+/// handicap stones). Missing values fall back to the upstream Sabaki defaults.
+fn default_board_size(settings: &sabaki_host::SettingsStore) -> usize {
+    settings
+        .get("game.default_board_size")
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value.round() as i64)
+        .filter(|value| (2..=25).contains(value))
+        .unwrap_or(19) as usize
+}
+
+fn default_new_game_properties_for_size(
+    settings: &sabaki_host::SettingsStore,
+    size: usize,
+) -> BTreeMap<String, Vec<String>> {
+    let komi = settings
+        .get("game.default_komi")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(6.5);
+    let handicap = settings
+        .get("game.default_handicap")
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value.round() as usize)
+        .unwrap_or(0);
+
+    let mut properties = BTreeMap::new();
+    properties.insert("KM".to_owned(), vec![komi.to_string()]);
+    let stones = handicap_placement(size, handicap);
+    if !stones.is_empty() {
+        properties.insert("HA".to_owned(), vec![handicap.to_string()]);
+        properties.insert(
+            "AB".to_owned(),
+            stones
+                .into_iter()
+                .map(|(column, row)| format_sgf_vertex(Vertex { column, row }))
+                .collect(),
+        );
+    }
+    properties
+}
+
+/// Resolves the new-game defaults stored in the settings store and returns
+/// the board size plus root SGF properties (`KM`, `HA`, and standard `AB`
+/// handicap stones). Missing values fall back to the upstream Sabaki defaults.
+fn default_new_game_properties(
+    settings: &sabaki_host::SettingsStore,
+) -> (usize, BTreeMap<String, Vec<String>>) {
+    let size = default_board_size(settings);
+    let properties = default_new_game_properties_for_size(settings, size);
+    (size, properties)
+}
+
 impl ShellApp {
     fn new(
         settings: sabaki_host::SettingsStore,
@@ -175,6 +230,7 @@ impl ShellApp {
         let mut host = sabaki_host::HostApplication::default();
         let file_access = NativeGameFileAccess::default();
         let mut events = RecordingSink::default();
+        let (default_size, default_properties) = default_new_game_properties(&settings);
 
         let mut status = initial_status;
         if let Some(path) = startup_file {
@@ -183,22 +239,24 @@ impl ShellApp {
                 Err(error) => status = format!("could not open {}: {error}", path.display()),
             }
         } else {
-            for (index, (column, row)) in [(3, 3), (3, 4), (4, 4), (4, 3)].into_iter().enumerate() {
-                let color = if index % 2 == 0 {
-                    Color::Black
-                } else {
-                    Color::White
-                };
-                host.play_move(color, Some(Vertex { column, row }), &mut events)
-                    .expect("shell setup moves are legal");
+            match host.create_new_with_properties(
+                default_size,
+                default_size,
+                &default_properties,
+                &mut events,
+            ) {
+                Ok(_) => {}
+                Err(error) => status = format!("could not create new game: {error}"),
             }
         }
+        let board_size = host.snapshot().board.width;
 
         let recent_files = persistence.load_recent_files().unwrap_or_default();
         let autosave = persistence.load_autosave();
         let benchmark_result = SnapshotBenchmark::new_with_moves(19, 19, 120).run(2_000);
         let theme_choice = theme_from_setting(settings.get_str("theme.current"));
         let theme = theme_choice.tokens();
+        let palette = ui_palette(&theme);
         let (installed_themes, legacy_asar_themes) = match file_workflow::theme_root() {
             Ok(theme_root) => match sabaki_host::scan_theme_root(&theme_root) {
                 Ok(scan) => (scan.themes, scan.legacy_asar),
@@ -212,20 +270,6 @@ impl ShellApp {
                 (Vec::new(), Vec::new())
             }
         };
-        let panel = PluginPanelContribution::parse(
-            r#"{
-                "schemaVersion": 1,
-                "pluginId": "org.example.opening-trainer",
-                "panelTitle": "Opening Trainer",
-                "widgets": [
-                    {"type": "label", "text": "Play three moves"},
-                    {"type": "value", "label": "Accuracy", "value": "87%"},
-                    {"type": "button", "id": "start", "title": "Start"},
-                    {"type": "select", "id": "level", "options": ["easy", "hard"], "selected": "easy"}
-                ]
-            }"#,
-        )
-        .expect("shell panel contribution is valid");
         let plugin_install_root = match file_workflow::plugin_install_root() {
             Ok(root) => root,
             Err(error) => {
@@ -269,13 +313,13 @@ impl ShellApp {
             engine_spec_focus_handle: cx.focus_handle(),
             theme_choice,
             theme,
+            palette,
             installed_themes,
             legacy_asar_themes,
-            board_size: 19,
+            board_size,
             settings_editing_key: None,
             settings_draft: "".into(),
             settings_input_focus_handle: cx.focus_handle(),
-            panel,
             plugin_store,
             plugin_persistence,
             plugin_supervisors: std::collections::BTreeMap::new(),
@@ -341,6 +385,18 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Records a console transcript entry only while the persisted
+    /// `gtp.console_log_enabled` setting permits it.
+    fn record_engine_log(&mut self, entry: EngineLogEntry) {
+        if self
+            .settings
+            .get_bool("gtp.console_log_enabled")
+            .unwrap_or(true)
+        {
+            self.engine_log.push(entry);
+        }
+    }
+
     fn send_engine_command(&mut self, draft: &str, cx: &mut Context<Self>) {
         let draft = draft.trim();
         if draft.is_empty() {
@@ -351,8 +407,7 @@ impl ShellApp {
         if let Some(session) = &mut self.engine_session {
             match session.send_command(&name, arguments) {
                 Ok(response) => {
-                    self.engine_log
-                        .push(entry_for_response(formatted.clone(), &response));
+                    self.record_engine_log(entry_for_response(formatted.clone(), &response));
                     if response.success && name == "boardsize" {
                         if let Some(size) = draft
                             .split_whitespace()
@@ -365,7 +420,7 @@ impl ShellApp {
                     self.status = format!("engine: {formatted}").into();
                 }
                 Err(error) => {
-                    self.engine_log.push(EngineLogEntry {
+                    self.record_engine_log(EngineLogEntry {
                         command: formatted.clone(),
                         success: false,
                         response: format!("protocol error: {error}"),
@@ -377,8 +432,7 @@ impl ShellApp {
             let result = self.engine.send(&name, arguments);
             match result {
                 Ok(response) => {
-                    self.engine_log
-                        .push(entry_for_response(formatted.clone(), &response));
+                    self.record_engine_log(entry_for_response(formatted.clone(), &response));
                     if response.success && name == "boardsize" {
                         if let Some(size) = draft
                             .split_whitespace()
@@ -391,7 +445,7 @@ impl ShellApp {
                     self.status = format!("engine: {formatted}").into();
                 }
                 Err(error) => {
-                    self.engine_log.push(EngineLogEntry {
+                    self.record_engine_log(EngineLogEntry {
                         command: formatted.clone(),
                         success: false,
                         response: format!("protocol error: {error}"),
@@ -758,7 +812,7 @@ impl ShellApp {
         };
         match session.generate_move(color_str) {
             Ok(response) => {
-                self.engine_log.push(entry_for_response(
+                self.record_engine_log(entry_for_response(
                     format!("genmove {color_str}"),
                     &response,
                 ));
@@ -887,6 +941,7 @@ impl ShellApp {
             return;
         };
         self.theme = theme.tokens.clone();
+        self.palette = ui_palette(&self.theme);
         match self.settings.set(
             "theme.current",
             serde_json::json!(format!("theme:{theme_id}")),
@@ -979,6 +1034,7 @@ impl ShellApp {
     fn on_theme_selected(&mut self, choice: ThemeChoice, cx: &mut Context<Self>) {
         self.theme_choice = choice;
         self.theme = choice.tokens();
+        self.palette = ui_palette(&self.theme);
         match self
             .settings
             .set("theme.current", serde_json::json!(choice.setting_value()))
@@ -1316,18 +1372,10 @@ impl ShellApp {
         self.refresh_plugin_processes();
     }
 
-    /// Resets the board to the given size as a fresh game.
+    /// Resets the board to the given size as a fresh game using the persisted
+    /// new-game defaults for komi and handicap.
     fn on_board_size_selected(&mut self, size: usize, cx: &mut Context<Self>) {
-        self.board_size = size;
-        let mut events = RecordingSink::default();
-        match self.host.create_new(size, size, &mut events) {
-            Ok(_) => self.status = format!("new {size}x{size} board").into(),
-            Err(error) => self.status = format!("new game failed: {error}").into(),
-        }
-        self.last_vertex = None;
-        self.external_file.detach_file();
-        self.disconnect_engine_session();
-        cx.notify();
+        self.new_game_at(size, cx);
     }
 
     /// Stops and drops the connected engine session, if any.
@@ -1547,14 +1595,55 @@ impl ShellApp {
     }
 
     fn new_game(&mut self, cx: &mut Context<Self>) {
+        let (size, _) = default_new_game_properties(&self.settings);
+        self.new_game_at(size, cx);
+    }
+
+    /// Creates a clean document at `size` and applies the persisted new-game
+    /// defaults. Used by both the New Game action and board-size buttons.
+    fn new_game_at(&mut self, size: usize, cx: &mut Context<Self>) {
+        let properties = default_new_game_properties_for_size(&self.settings, size);
         let mut events = RecordingSink::default();
-        match self.host.create_new(19, 19, &mut events) {
-            Ok(_) => self.status = "new game".into(),
-            Err(error) => self.status = format!("new game failed: {error}").into(),
+        match self
+            .host
+            .create_new_with_properties(size, size, &properties, &mut events)
+        {
+            Ok(_) => {
+                self.board_size = size;
+                self.status = format!("new {size}x{size} game").into();
+            }
+            Err(error) => {
+                self.status = format!("new game failed: {error}").into();
+                cx.notify();
+                return;
+            }
         }
         self.last_vertex = None;
         self.external_file.detach_file();
         self.disconnect_engine_session();
+        cx.notify();
+    }
+
+    fn on_pass(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let color = self.host.snapshot().board.next_player;
+        let mut events = RecordingSink::default();
+        match self.host.play_move(color, None, &mut events) {
+            Ok(_) => {
+                self.last_vertex = None;
+                self.status = format!(
+                    "{} passed",
+                    if color == Color::Black {
+                        "black"
+                    } else {
+                        "white"
+                    }
+                )
+                .into();
+                self.synchronize_recovery();
+                self.sync_engine_position(color, None);
+            }
+            Err(error) => self.status = format!("pass rejected: {error}").into(),
+        }
         cx.notify();
     }
 
@@ -2086,6 +2175,8 @@ impl Render for ShellApp {
                 | sabaki_host::ExternalFileStatus::Missing
                 | sabaki_host::ExternalFileStatus::Unreadable
         );
+        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
+        let palette = self.palette;
         let weak_shell = cx.entity().downgrade();
         let on_node_clicked =
             move |node_id: &sabaki_domain_core::NodeId, _window: &mut Window, cx: &mut App| {
@@ -2099,8 +2190,8 @@ impl Render for ShellApp {
             .flex()
             .flex_col()
             .bg(rgb(theme_color))
-            .text_color(rgb(0x222222))
-            .child(panels::render_header(&snapshot, &status))
+            .text_color(rgb(palette.text))
+            .child(panels::render_header(&snapshot, &status, palette))
             .child(
                 div()
                     .id("workspace")
@@ -2131,11 +2222,13 @@ impl Render for ShellApp {
                                 self.active_tool,
                                 availability,
                                 &position,
+                                palette,
                                 cx,
                             ))
                             .child(panels::render_recovery_buttons(self, cx))
                             .child(panels::render_external_conflict_buttons(
                                 external_conflict,
+                                palette,
                                 cx,
                             )),
                     )
@@ -2151,10 +2244,15 @@ impl Render for ShellApp {
                             .gap_3()
                             .pr_1()
                             .child(panels::render_plugins_panel(self, cx))
-                            .child(panels::render_variation_tree_panel(
-                                &variation_layout,
-                                on_node_clicked,
-                            ))
+                            .child(if show_graph {
+                                panels::render_variation_tree_panel(
+                                    &variation_layout,
+                                    palette,
+                                    on_node_clicked,
+                                )
+                            } else {
+                                div().id("variation-tree-panel-hidden")
+                            })
                             .child(panels::render_engine_panel(self, cx))
                             .child(panels::render_node_inspector_panel(
                                 &inspector_metadata,
@@ -2188,6 +2286,7 @@ impl sabaki_host::HostEventSink for RecordingSink {
 fn navigation_bar<A, B, C, D>(
     availability: crate::navigation::NavigationAvailability,
     position: &str,
+    palette: UiPalette,
     on_first: A,
     on_previous: B,
     on_next: C,
@@ -2207,26 +2306,23 @@ where
                 .px_2()
                 .py_1()
                 .border_1()
-                .border_color(rgb(0x8a6d3b))
+                .border_color(rgb(palette.accent))
                 .rounded(px(4.0))
                 .bg(if enabled {
-                    rgb(0xf7ecd8)
+                    rgb(palette.button)
                 } else {
-                    rgb(0xe8e0d4)
+                    rgb(palette.button_active)
                 })
                 .text_color(if enabled {
-                    rgb(0x3a2410)
+                    rgb(palette.text)
                 } else {
-                    rgb(0x999999)
+                    rgb(palette.subtle)
                 })
                 .child(label.to_owned())
                 .on_mouse_down(MouseButton::Left, on_click)
         };
 
     div()
-        .absolute()
-        .left(px(24.0))
-        .top(px(524.0))
         .flex()
         .items_center()
         .gap_2()
@@ -2244,7 +2340,7 @@ where
             div()
                 .px_2()
                 .text_sm()
-                .text_color(rgb(0x444444))
+                .text_color(rgb(palette.muted))
                 .child(position.to_owned()),
         )
         .child(button_style(
@@ -2403,6 +2499,7 @@ fn main() {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(window_bounds),
+                    window_min_size: Some(size(px(960.0), px(640.0))),
                     ..Default::default()
                 },
                 move |_, cx| {
@@ -2544,8 +2641,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{CloseChoice, close_decision};
-    use sabaki_host::{CloseRequestAction, decide_close_request};
+    use super::{
+        CloseChoice, close_decision, default_new_game_properties,
+        default_new_game_properties_for_size,
+    };
+    use sabaki_host::{CloseRequestAction, SettingsStore, decide_close_request};
+    use serde_json::json;
 
     #[test]
     fn clean_documents_skip_the_close_confirmation() {
@@ -2574,6 +2675,55 @@ mod tests {
         assert!(!close_decision(CloseChoice::Cancel, false));
         assert!(!close_decision(CloseChoice::Save, false));
         assert!(!close_decision(CloseChoice::Cancel, true));
+    }
+
+    #[test]
+    fn new_game_defaults_fall_back_to_upstream_values() {
+        let settings = SettingsStore::default();
+        let (size, properties) = default_new_game_properties(&settings);
+
+        assert_eq!(size, 19);
+        assert_eq!(properties.get("KM").unwrap(), &vec!["6.5".to_owned()]);
+        assert!(!properties.contains_key("HA"));
+    }
+
+    #[test]
+    fn new_game_defaults_apply_size_komi_and_standard_handicap_stones() {
+        let mut settings = SettingsStore::default();
+        settings.set("game.default_board_size", json!(13)).unwrap();
+        settings.set("game.default_komi", json!(0.5)).unwrap();
+        settings.set("game.default_handicap", json!(4)).unwrap();
+
+        let (size, properties) = default_new_game_properties(&settings);
+        assert_eq!(size, 13);
+        assert_eq!(properties.get("KM").unwrap(), &vec!["0.5".to_owned()]);
+        assert_eq!(properties.get("HA").unwrap(), &vec!["4".to_owned()]);
+        assert_eq!(
+            properties.get("AB").unwrap(),
+            &vec![
+                "dj".to_owned(),
+                "jd".to_owned(),
+                "jj".to_owned(),
+                "dd".to_owned()
+            ]
+        );
+
+        // Selecting a board-size button must place stones for that size,
+        // not for the default size stored in settings.
+        let size_nine_properties = default_new_game_properties_for_size(&settings, 9);
+        assert_eq!(
+            size_nine_properties.get("HA").unwrap(),
+            &vec!["4".to_owned()]
+        );
+        assert_eq!(
+            size_nine_properties.get("AB").unwrap(),
+            &vec![
+                "cg".to_owned(),
+                "gc".to_owned(),
+                "gg".to_owned(),
+                "cc".to_owned()
+            ]
+        );
     }
 }
 
@@ -2637,9 +2787,17 @@ mod headless_smoke {
         with_headless_shell("open-play", |shell| {
             let snapshot = shell.host.snapshot();
             assert_eq!(snapshot.board.width, 19);
-            // ShellApp::new seeds four demonstration moves.
+            // ShellApp::new now creates a clean default game instead of
+            // seeding demonstration moves.
             let initial_moves = snapshot.moves.len();
-            assert_eq!(initial_moves, 4);
+            assert_eq!(initial_moves, 0);
+            assert_eq!(
+                snapshot
+                    .root_properties
+                    .get("KM")
+                    .and_then(|values| values.first()),
+                Some(&"6.5".to_owned())
+            );
 
             let mut events = RecordingSink::default();
             shell
@@ -2860,6 +3018,24 @@ mod frontend_smoke {
             (after.0, after.1),
             (before + 1, 1),
             "clicking the rendered 17th intersection must place the next black stone"
+        );
+        let pass_bounds = vcx
+            .debug_bounds("pass-button")
+            .expect("the pass button must have a debug selector");
+        vcx.simulate_click(pass_bounds.center(), gpui::Modifiers::none());
+        let after_pass = window_handle
+            .read_with(&vcx.cx, |shell, _| {
+                let snapshot = shell.host.snapshot();
+                (
+                    snapshot.moves.len(),
+                    snapshot.moves.last().map(|m| m.vertex),
+                )
+            })
+            .unwrap();
+        assert_eq!(after_pass.0, after.0 + 1);
+        assert!(
+            matches!(after_pass.1, Some(None)),
+            "pass must append a pass move"
         );
         let _ = std::fs::remove_dir_all(&config);
     }

@@ -7,7 +7,7 @@ use gpui::{
 use sabaki_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
 
 use crate::markup::markup_symbol;
-use crate::theme::ThemeTokens;
+use crate::theme::{ThemeColor, ThemeTokens};
 
 const BOARD_MARGIN_PX: f32 = 28.0;
 const STONE_SIZE_PX: f32 = 22.0;
@@ -243,6 +243,13 @@ where
     layer
 }
 
+fn wood_is_dark(color: ThemeColor) -> bool {
+    let luminance = 0.2126 * f32::from(color.red)
+        + 0.7152 * f32::from(color.green)
+        + 0.0722 * f32::from(color.blue);
+    luminance < 128.0
+}
+
 pub fn render_goban(
     board: &BoardSnapshot,
     board_pixel_size: f32,
@@ -253,6 +260,12 @@ pub fn render_goban(
     let height = board.height;
     let board_size = board_pixel_size;
     let wood_color = theme.board_wood_color().rgb_u32();
+    let wood_theme_color = theme.board_wood_color();
+    let coordinate_color = if wood_is_dark(wood_theme_color) {
+        0xe8d9c2
+    } else {
+        0x6b4f2a
+    };
     let line_color = theme.board_line_color().rgb_u32();
     let star_point_color = theme.star_point_color().rgb_u32();
     let stone_black = theme.stone_black_color().rgb_u32();
@@ -398,7 +411,7 @@ pub fn render_goban(
                     .items_center()
                     .justify_center()
                     .text_xs()
-                    .text_color(rgb(0x6b4f2a))
+                    .text_color(rgb(coordinate_color))
                     .child(column_letter(column).to_string()),
             );
         }
@@ -415,7 +428,7 @@ pub fn render_goban(
                     .items_center()
                     .justify_center()
                     .text_xs()
-                    .text_color(rgb(0x6b4f2a))
+                    .text_color(rgb(coordinate_color))
                     .child((row + 1).to_string()),
             );
         }

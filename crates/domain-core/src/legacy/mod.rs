@@ -87,9 +87,38 @@ pub fn tygem_handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)
     result
 }
 
+/// Standard (non-Tygem) handicap placement for a square board, mirroring
+/// `@sabaki/go-board`'s `getHandicapPlacement(count)`.
+/// Returns at most `count` points as `(column, row)`.
+pub fn handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)> {
+    if size <= 6 || count < 2 {
+        return Vec::new();
+    }
+    let near = if size >= 13 { 3 } else { 2 };
+    let far = size - near - 1;
+    let middle = (size - 1) / 2;
+
+    let mut result = vec![(near, far), (far, near), (far, far), (near, near)];
+
+    if size % 2 != 0 && size != 7 {
+        if count == 5 {
+            result.push((middle, middle));
+        }
+        result.extend([(near, middle), (far, middle)]);
+
+        if count == 7 {
+            result.push((middle, middle));
+        }
+        result.extend([(middle, near), (middle, far), (middle, middle)]);
+    }
+
+    result.truncate(count);
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use super::tygem_handicap_placement;
+    use super::{handicap_placement, tygem_handicap_placement};
 
     #[test]
     fn tygem_handicap_placements_match_the_reference_order() {
@@ -123,5 +152,21 @@ mod tests {
         assert_eq!(tygem_handicap_placement(7, 2), vec![(2, 4), (4, 2)]);
         assert!(tygem_handicap_placement(6, 2).is_empty());
         assert!(tygem_handicap_placement(19, 1).is_empty());
+    }
+
+    #[test]
+    fn standard_handicap_placements_match_the_reference_order() {
+        assert_eq!(handicap_placement(19, 2), vec![(3, 15), (15, 3)]);
+        assert_eq!(
+            handicap_placement(19, 4),
+            vec![(3, 15), (15, 3), (15, 15), (3, 3)]
+        );
+        assert_eq!(
+            handicap_placement(19, 5),
+            vec![(3, 15), (15, 3), (15, 15), (3, 3), (9, 9)]
+        );
+        assert_eq!(handicap_placement(7, 2), vec![(2, 4), (4, 2)]);
+        assert!(handicap_placement(6, 2).is_empty());
+        assert!(handicap_placement(19, 1).is_empty());
     }
 }

@@ -16,7 +16,7 @@ pub mod theme_workflow;
 
 use std::path::PathBuf;
 
-use sabaki_domain_core::{Color, GameDocument, GameSnapshot, GameTransaction, Vertex};
+use sabaki_domain_core::{Color, GameDocument, GameSnapshot, GameTransaction, Properties, Vertex};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -150,6 +150,25 @@ impl HostApplication {
         events: &mut impl HostEventSink,
     ) -> Result<GameSnapshot, HostError> {
         self.game = GameDocument::new(width, height)?;
+        self.source_encoding = SourceEncoding::Utf8;
+        Ok(self.emit_snapshot(events))
+    }
+
+    /// Creates a fresh document and applies root properties while it is still
+    /// being constructed, so new-game defaults (komi, handicap, setup stones)
+    /// are part of the clean initial document rather than dirty edits.
+    pub fn create_new_with_properties(
+        &mut self,
+        width: usize,
+        height: usize,
+        root_properties: &Properties,
+        events: &mut impl HostEventSink,
+    ) -> Result<GameSnapshot, HostError> {
+        let mut game = GameDocument::new(width, height)?;
+        for (property, values) in root_properties {
+            game.set_root_property(property, values.clone());
+        }
+        self.game = game;
         self.source_encoding = SourceEncoding::Utf8;
         Ok(self.emit_snapshot(events))
     }
@@ -509,5 +528,29 @@ mod tests {
             events.events.last(),
             Some(HostEvent::GameChanged { .. })
         ));
+    }
+
+    #[test]
+    fn creating_a_new_game_with_root_defaults_stays_clean() {
+        let mut application = HostApplication::default();
+        let mut events = RecordedEvents::default();
+        let root_properties = BTreeMap::from([
+            ("KM".to_owned(), vec!["6.5".to_owned()]),
+            ("HA".to_owned(), vec!["2".to_owned()]),
+            ("AB".to_owned(), vec!["dp".to_owned(), "pd".to_owned()]),
+        ]);
+
+        let snapshot = application
+            .create_new_with_properties(19, 19, &root_properties, &mut events)
+            .expect("new game with defaults succeeds");
+
+        assert!(!snapshot.file_state.is_dirty);
+        assert_eq!(snapshot.root_properties.get("KM").unwrap(), &vec!["6.5"]);
+        assert_eq!(snapshot.root_properties.get("HA").unwrap(), &vec!["2"]);
+        assert_eq!(
+            snapshot.root_properties.get("AB").unwrap(),
+            &vec!["dp", "pd"]
+        );
+        assert_eq!(events.events.len(), 1);
     }
 }

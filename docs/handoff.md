@@ -6,16 +6,18 @@
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
 （路线图）的最新执行快照。
 
-**最近迭代（2026-08-15）：** 迭代 26「前端审查与 Beta #10 渲染帧冒烟」已完成。
-修复前端 Beta 阻断问题：棋盘点击 hitbox 由隐式零尺寸改为按交点渲染的显式 hit
-layer（点击直接携带 vertex，不再用窗口全局坐标反推）；棋盘木底与网格不再双重
-偏移；绝对定位混排改为 header / 左棋盘列 / 右可滚动 sidebar / status bar 的
-flex 布局，各功能面板改为卡片式流式堆叠，默认窗口尺寸调整为 1240×800。
-新增 `frontend_smoke` 测试：用 gpui test platform 绘制完整窗口，断言
-goban/木底尺寸与位置、board-column 与 sidebar 不重叠、sidebar 面板顺序堆叠，
-并模拟真实鼠标点击第 17 个交点验证落子。`cargo test --workspace`
-**294 测试全绿**（新增 1 个渲染帧冒烟）。原生 screenshot 仍待 gpui 上游
-能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
+**最近迭代（2026-08-15）：** 迭代 26 已完成棋盘 hitbox / 棋盘渲染偏移 /
+flex 布局修复与 `frontend_smoke` 渲染帧测试。迭代 27「GPUI 前端接线与
+声明式插件面板」已完成：设置面板中的高频键全部接线（`game.default_*`
+驱动干净的新建棋局与标准让子摆子，`view.show_graph` 控制变化树面板，
+`view.show_comments` 控制注释编辑区，`board.show_analysis` 控制分析标记，
+`gtp.console_log_enabled` 控制控制台记录；`sound.enable` 在音频子系统
+落地前从设置面板移除）；新增 Pass 按钮；新增从 theme background 亮度推导
+的明暗 `UiPalette`，修复 Dark/Mist 下文字与面板对比度；插件声明式面板
+类型上移至 `plugin-runtime` manifest `contributes.panels`，GPUI 渲染真实
+已启用且已授权 `uiPanel` 的插件面板；窗口设置 960×640 最小尺寸。
+`cargo test --workspace` **297 测试全绿**。原生 screenshot 仍待 gpui
+上游能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
 
 ---
 
@@ -97,7 +99,8 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 - **插件面板**：启动时 `PluginStore::restore` 扫描 `<config>/plugins` 安装根目录；
   行内显示缺失权限与 native 运行时状态；「grant & enable」授予 manifest 权限并启用，
   「authorize native」经 rfd 二次确认后授权+授予+启用；启用插件渲染
-  `contributes.commands` 为可点击分发按钮（declarative 暂记录状态栏）；
+  `contributes.commands` 为可点击分发按钮与 `contributes.panels` 声明式
+  面板（迭代 27 起读取真实 manifest，不再使用硬编码 demo）；
   每次变更 persist，重启恢复启用态；空安装根显示提示。
 - **真实配置目录**（`$HOME/.config/sabaki-gpui` 或 `SABAKI_CONFIG_DIR`）：
 
@@ -130,15 +133,15 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 | 目标 | 数量 |
 |---|---|
-| `domain-core` | 26 单元（含 9 计分器）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
-| `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
-| `sabaki-host` | 101 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 109 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `domain-core` | 27 单元（含 9 计分器、标准/Tygem 让子摆位）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
+| `plugin-runtime` | 26 测试：8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 + 2 声明式面板 manifest 校验 |
+| `sabaki-host` | 102 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析、干净新局根属性）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `sabaki-gpui` | 108 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 294 个全绿）
+cargo test --workspace        # 全部测试（当前 297 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -195,7 +198,8 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 死循环 fuel trap，7 个 WAT 内嵌测试。host `plugin_wasm` 工作流：加载
 `.wasm` entrypoint（runtime/enable/扩展名校验）、`invoke_wasm_command`
 （JSON-RPC 形状 DTO）、错误映射到共享 `PluginError` 词汇。GPUI 命令按钮
-对 wasm 插件真实调用并显示结果（declarative 仍为占位）。
+对 wasm 插件真实调用并显示结果（声明式面板在迭代 27 改为 manifest
+`contributes.panels` 真实渲染）。
 
 **迭代 13（主题包安装）已完成：** `sabaki-host::theme_workflow`（设计 §8.2）：
 `ThemeManifest`（theme.json：schemaVersion/id/name/version/assets 允许列表）、
@@ -264,6 +268,28 @@ sidebar（插件、变化树、引擎、节点检查器、设置五个卡片）/
 “仅应用逻辑 headless”前进到“完整窗口 layout/paint + 输入 dispatch”；
 原生 screenshot 仍待上游能力。
 
+**迭代 27（GPUI 前端接线与声明式插件面板）已完成：**
+（1）设置面板接线——`game.default_board_size/komi/handicap` 现在驱动
+New Game 与启动新局；host 新增 `create_new_with_properties`，在构造阶段
+写入 `KM`/`HA`/标准 `AB` 让子，保持初始文档 clean；domain 新增标准让子
+摆位函数（与 legacy Tygem 摆位并存）；`view.show_graph` 控制变化树面板，
+`view.show_comments` 控制注释编辑区，`board.show_analysis` 控制分析标记，
+`gtp.console_log_enabled` 控制控制台记录与展示；`sound.enable` 在音频
+子系统落地前从设置面板移除。
+（2）Pass 按钮——工具栏新增 Pass，经 `Pass` 事务同步引擎并写 recovery；
+渲染帧测试现在同时模拟棋盘落子与 Pass。
+（3）明暗 UI 调色板——`theme.rs` 新增 `UiPalette`，从 theme background
+亮度推导文本/面板/边框/按钮/危险/成功等 shell 颜色；GPUI 面板、按钮、
+输入框、状态栏、变化树与棋盘坐标标签全部改用调色板，修复 Dark/Mist
+下深色文字不可读问题；`render_variation_tree` 节点色也随调色板切换。
+（4）声明式插件面板真实化——`PanelWidget`/`PluginPanelContribution`
+上移至 `plugin-runtime`，manifest `contributes.panels` 可携带面板贡献；
+`PluginPanelEntry` 暴露 `panels` 与 `ui_panel_granted`；GPUI 插件面板
+移除硬编码 Opening Trainer demo，改为渲染已启用且已授权 `uiPanel` 的
+真实 manifest 面板，按钮经 `on_plugin_command` 分发。
+（5）窗口最小尺寸 960×640，避免固定棋盘列在窗口过小时裁切。
+
+
 **迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
@@ -312,10 +338,10 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 
 按优先级排序的后续候选迭代：
 
-1. **Beta #10 收尾**：迭代 26 已把 headless 覆盖推进到完整窗口
-   layout/paint + 鼠标输入 dispatch；剩余唯一缺口是原生 screenshot/GPU
-   frame capture（gpui 0.2.2 无稳定 offscreen/screenshot API，跟踪上游
-   snapshot API，或引入 blade offscreen 渲染冒烟）。
+1. **Beta #10 收尾**：迭代 26-27 已把 headless 覆盖推进到完整窗口
+   layout/paint + 鼠标输入 dispatch（落子 + Pass）；剩余唯一缺口是原生
+   screenshot/GPU frame capture（gpui 0.2.2 无稳定 offscreen/screenshot
+   API，跟踪上游 snapshot API，或引入 blade offscreen 渲染冒烟）。
 2. **发布收尾（需外部条件，本次按用户要求暂不做）**：签名/公证（macOS
    Developer ID + notarytool、Windows Authenticode，需开发者证书）；
    Flatpak 发布验证。
@@ -331,6 +357,14 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   可执行。
 - WASM capability imports 已实现（gameRead→`sabaki.game_snapshot`，未授权
   link 失败）；事务写入（gameWrite）等其余能力未接。
+- 插件 `contributes.panels` 已真实渲染；`contributes.settings` 尚未接入
+  设置面板，`contributes.menus` 尚未接入应用菜单。
+- 文本输入仍为 `track_focus` + `on_key_down` 的简化实现，无光标/选区/
+  剪贴板/IME/字段级 undo；后续应迁移 gpui `TextElement`/`EntityInputHandler`。
+- `view.show_graph` 当前控制变化树面板显隐；真正的胜率历史图
+  （`view.show_winrategraph`）仍未实现。
+- `sound.enable` 仍保留在 host 键表中，但 GPUI 尚未实现音频子系统，故本
+  迭代从设置面板移除该行。
 - 主题包安装/校验/入口 UI 已闭环（迭代 13+17）;`tokens.json` 暂只支持
   颜色 token（材质/尺寸 token 留待 schema v2）。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
