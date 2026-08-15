@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
-use gpui::{Div, ParentElement, Pixels, Point, Styled, div, px, rgb};
+use gpui::{
+    App, Div, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
+    Stateful, Styled, Window, div, px, rgb,
+};
 use sabaki_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
 
 use crate::markup::markup_symbol;
@@ -207,12 +210,45 @@ fn star_point_vertices(width: usize, height: usize) -> Vec<(usize, usize)> {
     result
 }
 
+/// Renders the transparent hit-testing layer for the goban. Each vertex gets
+/// its own explicit hitbox, so clicks work without converting window-global
+/// coordinates back through whatever layout surrounds the board.
+pub fn render_goban_click_layer<F>(
+    board: &BoardSnapshot,
+    board_pixel_size: f32,
+    on_vertex_clicked: Rc<F>,
+) -> Div
+where
+    F: Fn(Vertex, &MouseDownEvent, &mut Window, &mut App) + 'static,
+{
+    let spacing = board_spacing(board, board_pixel_size);
+    let mut layer = div().absolute().top_0().left_0().size(px(board_pixel_size));
+    for row in 0..board.height {
+        for column in 0..board.width {
+            let vertex = Vertex { column, row };
+            let handler = on_vertex_clicked.clone();
+            let (x, y) = intersection_position(board, board_pixel_size, column, row);
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .left(px(x - spacing / 2.0))
+                    .top(px(y - spacing / 2.0))
+                    .size(px(spacing))
+                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                        handler(vertex, event, window, cx);
+                    }),
+            );
+        }
+    }
+    layer
+}
+
 pub fn render_goban(
     board: &BoardSnapshot,
     board_pixel_size: f32,
     theme: &ThemeTokens,
     options: &GobanRenderOptions,
-) -> Div {
+) -> Stateful<Div> {
     let width = board.width;
     let height = board.height;
     let board_size = board_pixel_size;
@@ -386,12 +422,20 @@ pub fn render_goban(
     }
 
     div()
-        .absolute()
-        .left(px(BOARD_MARGIN_PX / 2.0))
-        .top(px(BOARD_MARGIN_PX / 2.0))
-        .size(px(board_size - BOARD_MARGIN_PX))
-        .bg(rgb(wood_color))
-        .child(div().relative().size(px(board_size)).children(children))
+        .id("goban")
+        .debug_selector(|| "goban".to_owned())
+        .relative()
+        .size(px(board_size))
+        .child(
+            div()
+                .debug_selector(|| "goban-wood".to_owned())
+                .absolute()
+                .left(px(BOARD_MARGIN_PX / 2.0))
+                .top(px(BOARD_MARGIN_PX / 2.0))
+                .size(px(board_size - BOARD_MARGIN_PX))
+                .bg(rgb(wood_color)),
+        )
+        .children(children)
 }
 
 #[cfg(test)]

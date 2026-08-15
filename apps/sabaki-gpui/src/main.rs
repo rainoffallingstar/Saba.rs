@@ -47,7 +47,6 @@ use crate::file_workflow::{
     NativeHostPersistence, NativePluginPersistence, NativeSettingsPersistence, capture_autosave,
     clear_autosave, record_opened_file,
 };
-use crate::goban_view::vertex_at;
 use crate::markup::{
     MarkupTool, create_markup_transaction, create_scoring_transaction, create_setup_transactions,
     next_scoring_override,
@@ -73,8 +72,6 @@ use crate::theme::ThemeTokens;
 use crate::variation_tree::build_variation_tree_layout;
 
 const BOARD_PIXEL_SIZE: f32 = 420.0;
-const BOARD_WINDOW_OFFSET_X: f32 = 24.0;
-const BOARD_WINDOW_OFFSET_Y: f32 = 96.0;
 
 actions!(
     sabaki_gpui,
@@ -1801,20 +1798,10 @@ impl ShellApp {
         cx.notify();
     }
 
-    fn on_board_clicked(
-        &mut self,
-        event: &MouseDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let relative = gpui::Point::new(
-            px(f32::from(event.position.x) - BOARD_WINDOW_OFFSET_X),
-            px(f32::from(event.position.y) - BOARD_WINDOW_OFFSET_Y),
-        );
-        let Some(vertex) = vertex_at(&self.host.snapshot().board, BOARD_PIXEL_SIZE, relative)
-        else {
-            return;
-        };
+    /// Board interaction entry point. The goban's per-vertex hit layer maps
+    /// the click to a vertex before calling this, so the handler no longer
+    /// depends on the board's window-global origin or the surrounding layout.
+    fn on_board_vertex_clicked(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
         if self.scoring_mode {
             self.scoring_at(vertex, cx);
         } else if self.active_tool.is_setup_tool() {
@@ -2109,45 +2096,80 @@ impl Render for ShellApp {
 
         div()
             .size_full()
+            .flex()
+            .flex_col()
             .bg(rgb(theme_color))
             .text_color(rgb(0x222222))
             .child(panels::render_header(&snapshot, &status))
-            .child(panels::render_toolbar_row(
-                self.active_tool,
-                availability,
-                &position,
-                cx,
-            ))
+            .child(
+                div()
+                    .id("workspace")
+                    .flex_1()
+                    .flex()
+                    .min_h_0()
+                    .p_4()
+                    .gap_4()
+                    .child(
+                        div()
+                            .id("board-column")
+                            .debug_selector(|| "board-column".to_owned())
+                            .flex_none()
+                            .w(px(BOARD_PIXEL_SIZE + 48.0))
+                            .h_full()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(panels::render_goban_area(
+                                &snapshot,
+                                &self.theme,
+                                self.analysis_best_move,
+                                self,
+                                cx,
+                            ))
+                            .child(panels::render_toolbar_row(
+                                self.active_tool,
+                                availability,
+                                &position,
+                                cx,
+                            ))
+                            .child(panels::render_recovery_buttons(self, cx))
+                            .child(panels::render_external_conflict_buttons(
+                                external_conflict,
+                                cx,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("sidebar")
+                            .debug_selector(|| "sidebar".to_owned())
+                            .flex_1()
+                            .h_full()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .pr_1()
+                            .child(panels::render_plugins_panel(self, cx))
+                            .child(panels::render_variation_tree_panel(
+                                &variation_layout,
+                                on_node_clicked,
+                            ))
+                            .child(panels::render_engine_panel(self, cx))
+                            .child(panels::render_node_inspector_panel(
+                                &inspector_metadata,
+                                self,
+                                cx,
+                            ))
+                            .child(panels::render_settings_panel(&settings_rows, self, cx)),
+                    ),
+            )
             .child(panels::render_status_bar(
                 self,
                 &status,
                 dirty_label,
                 path_label,
                 &external_status,
-            ))
-            .child(panels::render_recovery_buttons(self, cx))
-            .child(panels::render_external_conflict_buttons(
-                external_conflict,
-                cx,
-            ))
-            .child(panels::render_plugins_panel(self, cx))
-            .child(panels::render_variation_tree_panel(
-                &variation_layout,
-                on_node_clicked,
-            ))
-            .child(panels::render_engine_panel(self, cx))
-            .child(panels::render_node_inspector_panel(
-                &inspector_metadata,
-                self,
-                cx,
-            ))
-            .child(panels::render_settings_panel(&settings_rows, self, cx))
-            .child(panels::render_goban_area(
-                &snapshot,
-                &self.theme,
-                self.analysis_best_move,
-                self,
-                cx,
             ))
     }
 }
@@ -2364,7 +2386,7 @@ fn main() {
                 sabaki_host::SettingsStore::default()
             }
         };
-        let default_size = (1060.0, 640.0);
+        let default_size = (1240.0, 800.0);
         let (initial_width, initial_height) =
             window_bounds_from_settings(&settings).unwrap_or(default_size);
         let bounds = Bounds::centered(
@@ -2680,5 +2702,165 @@ mod headless_smoke {
             assert_eq!(command, "lz-analyze");
             assert!(arguments.is_empty());
         });
+    }
+}
+
+#[cfg(test)]
+mod frontend_smoke {
+    use super::*;
+    use crate::dialog_service::MockDialogService;
+    use crate::file_workflow::{
+        NativeHostPersistence, NativePluginPersistence, NativeSettingsPersistence,
+    };
+    use gpui::{TestAppContext, TestDispatcher, VisualTestContext, px};
+    use rand::SeedableRng;
+    use sabaki_host::SettingsStore;
+    use std::ops::Deref;
+    use std::path::PathBuf;
+
+    fn temp_config(test_name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sabaki-frontend-{test_name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp config dir is created");
+        dir
+    }
+
+    /// Renders the full window with the gpui test platform and simulates a
+    /// real left click on a rendered intersection. This catches the original
+    /// Beta frontend regression: the goban hitbox was zero-sized and the
+    /// board visuals were offset by half the board margin.
+    #[test]
+    fn goban_hit_layer_places_a_stone_and_panes_do_not_overlap() {
+        let config = temp_config("board-click");
+        let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(7));
+        let mut cx = TestAppContext::build(dispatcher, None);
+        let window_handle = cx.add_window(|_, cx| {
+            ShellApp::new(
+                SettingsStore::default(),
+                NativeSettingsPersistence::new(config.clone()),
+                NativeHostPersistence::new(config.clone()),
+                NativePluginPersistence::new(config.clone()),
+                "frontend smoke".to_owned(),
+                None,
+                Box::new(MockDialogService::default()),
+                cx,
+            )
+        });
+        let vcx = VisualTestContext::from_window(*window_handle.deref(), &cx).into_mut();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        let goban_bounds = vcx
+            .debug_bounds("goban")
+            .expect("the rendered goban must have a debug selector");
+        assert_eq!(goban_bounds.size.width, px(BOARD_PIXEL_SIZE));
+        assert_eq!(goban_bounds.size.height, px(BOARD_PIXEL_SIZE));
+        let wood_bounds = vcx
+            .debug_bounds("goban-wood")
+            .expect("the wood background must have a debug selector");
+        assert!(
+            (f32::from(wood_bounds.origin.x) - f32::from(goban_bounds.origin.x) - 14.0).abs() < 0.5,
+            "wood {:?} must sit one half-margin inside goban {:?}",
+            wood_bounds,
+            goban_bounds
+        );
+        assert!(
+            (f32::from(wood_bounds.origin.y) - f32::from(goban_bounds.origin.y) - 14.0).abs() < 0.5,
+            "wood {:?} must sit one half-margin inside goban {:?}",
+            wood_bounds,
+            goban_bounds
+        );
+        assert_eq!(wood_bounds.size.width, px(BOARD_PIXEL_SIZE - 28.0));
+
+        let board_column = vcx
+            .debug_bounds("board-column")
+            .expect("the board column must have a debug selector");
+        let sidebar = vcx
+            .debug_bounds("sidebar")
+            .expect("the sidebar must have a debug selector");
+        assert!(
+            board_column.right() <= sidebar.origin.x,
+            "board column {:?} must not overlap sidebar {:?}",
+            board_column,
+            sidebar
+        );
+        let panels = [
+            (
+                "plugins-panel",
+                vcx.debug_bounds("plugins-panel")
+                    .expect("plugins panel must have a debug selector"),
+            ),
+            (
+                "variation-tree-panel",
+                vcx.debug_bounds("variation-tree-panel")
+                    .expect("variation panel must have a debug selector"),
+            ),
+            (
+                "engine-panel",
+                vcx.debug_bounds("engine-panel")
+                    .expect("engine panel must have a debug selector"),
+            ),
+            (
+                "node-inspector-panel",
+                vcx.debug_bounds("node-inspector-panel")
+                    .expect("node inspector panel must have a debug selector"),
+            ),
+            (
+                "settings-panel",
+                vcx.debug_bounds("settings-panel")
+                    .expect("settings panel must have a debug selector"),
+            ),
+        ];
+        for (name, bounds) in &panels {
+            assert!(
+                f32::from(bounds.origin.x) >= f32::from(sidebar.origin.x) - 0.5
+                    && f32::from(bounds.right()) <= f32::from(sidebar.right()) + 0.5,
+                "{name} {:?} must stay inside the sidebar {:?}",
+                bounds,
+                sidebar
+            );
+        }
+        for pair in panels.windows(2) {
+            assert!(
+                f32::from(pair[0].1.bottom()) <= f32::from(pair[1].1.origin.y) + 0.5,
+                "{} {:?} must be stacked above {} {:?}",
+                pair[0].0,
+                pair[0].1,
+                pair[1].0,
+                pair[1].1
+            );
+        }
+
+        let board = window_handle
+            .read_with(&vcx.cx, |shell, _| shell.host.snapshot().board.clone())
+            .unwrap();
+        let spacing = crate::goban_view::board_spacing(&board, BOARD_PIXEL_SIZE);
+        let click = gpui::point(
+            px(f32::from(goban_bounds.origin.x) + 28.0 + 16.0 * spacing),
+            px(f32::from(goban_bounds.origin.y) + 28.0 + 16.0 * spacing),
+        );
+        let before = window_handle
+            .read_with(&vcx.cx, |shell, _| shell.host.snapshot().moves.len())
+            .unwrap();
+        vcx.simulate_click(click, gpui::Modifiers::none());
+        let after = window_handle
+            .read_with(&vcx.cx, |shell, _| {
+                (
+                    shell.host.snapshot().moves.len(),
+                    shell.host.snapshot().board.sign_map[16][16],
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            (after.0, after.1),
+            (before + 1, 1),
+            "clicking the rendered 17th intersection must place the next black stone"
+        );
+        let _ = std::fs::remove_dir_all(&config);
     }
 }

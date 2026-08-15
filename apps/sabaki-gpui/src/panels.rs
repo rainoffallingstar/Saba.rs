@@ -3,46 +3,43 @@
 //! `ShellApp` state plus precomputed values; listeners are built with
 //! `cx.listener` against `ShellApp` handlers.
 
+use std::rc::Rc;
+
 use gpui::{
-    App, Context, Div, FocusHandle, MouseButton, MouseDownEvent, StatefulInteractiveElement,
-    Window, div, prelude::*, px, rgb,
+    App, Context, Div, FocusHandle, InteractiveElement, MouseButton, MouseDownEvent, Stateful,
+    StatefulInteractiveElement, Window, div, prelude::*, px, rgb,
 };
 
 use sabaki_domain_core::GameSnapshot;
 
 use crate::engine_console::best_analysis_winrate;
-use crate::goban_view::render_goban;
+use crate::goban_view::{render_goban, render_goban_click_layer};
 use crate::markup::{MarkupTool, render_markup_toolbar};
 use crate::navigation::NavigationAvailability;
 use crate::node_inspector::NodeInspectorMetadata;
 use crate::settings_form::{SettingRow, display_setting_value};
 use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
-use crate::{BOARD_PIXEL_SIZE, BOARD_WINDOW_OFFSET_X, BOARD_WINDOW_OFFSET_Y, ShellApp};
+use crate::{BOARD_PIXEL_SIZE, ShellApp};
 
-/// The top-left title and subtitle block.
+/// The top title and subtitle block. This is part of the normal flex column
+/// instead of being absolutely positioned over the window.
 pub fn render_header(snapshot: &GameSnapshot, status: &str) -> Div {
     div()
-        .child(
-            div()
-                .absolute()
-                .left(px(24.0))
-                .top(px(16.0))
-                .text_lg()
-                .child("Sabaki GPUI shell"),
-        )
-        .child(
-            div()
-                .absolute()
-                .left(px(24.0))
-                .top(px(48.0))
-                .text_base()
-                .child(format!(
-                    "{} moves · board {}x{} · {status}",
-                    snapshot.moves.len(),
-                    snapshot.board.width,
-                    snapshot.board.height
-                )),
-        )
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_6()
+        .py_3()
+        .border_b_1()
+        .border_color(rgb(0xd8cfc0))
+        .child(div().text_lg().child("Sabaki GPUI shell"))
+        .child(div().text_base().child(format!(
+            "{} moves · board {}x{} · {status}",
+            snapshot.moves.len(),
+            snapshot.board.width,
+            snapshot.board.height
+        )))
 }
 
 /// The markup toolbar and navigation bar row.
@@ -59,10 +56,8 @@ pub fn render_toolbar_row(
             .ok();
     };
     div()
-        .absolute()
-        .left(px(24.0))
-        .top(px(524.0))
         .flex()
+        .flex_wrap()
         .items_center()
         .gap_3()
         .child(render_markup_toolbar(active_tool, on_tool_clicked))
@@ -86,12 +81,14 @@ pub fn render_status_bar(
     external_status: &sabaki_host::ExternalFileStatusDto,
 ) -> Div {
     div()
-        .absolute()
-        .left(px(24.0))
-        .top(px(560.0))
+        .flex_none()
         .flex()
         .flex_col()
         .gap_1()
+        .px_6()
+        .py_2()
+        .border_t_1()
+        .border_color(rgb(0xd8cfc0))
         .text_sm()
         .text_color(rgb(0x444444))
         .child(format!("status: {status}"))
@@ -132,9 +129,6 @@ pub fn render_status_bar(
 pub fn render_recovery_buttons(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     if shell.autosave.info().is_available {
         div()
-            .absolute()
-            .left(px(24.0))
-            .top(px(524.0))
             .flex()
             .gap_2()
             .child(
@@ -175,9 +169,6 @@ pub fn render_recovery_buttons(shell: &ShellApp, cx: &Context<ShellApp>) -> Div 
 pub fn render_external_conflict_buttons(external_conflict: bool, cx: &Context<ShellApp>) -> Div {
     if external_conflict {
         div()
-            .absolute()
-            .left(px(24.0))
-            .top(px(620.0))
             .flex()
             .gap_2()
             .child(
@@ -213,14 +204,17 @@ pub fn render_external_conflict_buttons(external_conflict: bool, cx: &Context<Sh
 /// The plugin list panel: installed plugins with enable/disable, grant,
 /// native authorization and command dispatch, plus the declarative widget
 /// demo panel.
-pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     div()
-        .absolute()
-        .left(px(480.0))
-        .top(px(96.0))
+        .id("plugins-panel")
+        .debug_selector(|| "plugins-panel".to_owned())
         .flex()
         .flex_col()
         .gap_2()
+        .p_3()
+        .border_1()
+        .border_color(rgb(0xd8cfc0))
+        .rounded(px(6.0))
         .text_base()
         .child("plugins")
         .child(if shell.installed_plugins.is_empty() {
@@ -444,14 +438,17 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
 pub fn render_variation_tree_panel(
     layout: &VariationTreeLayout,
     on_node_clicked: impl Fn(&sabaki_domain_core::NodeId, &mut Window, &mut App) + 'static,
-) -> Div {
+) -> Stateful<Div> {
     div()
-        .absolute()
-        .left(px(760.0))
-        .top(px(96.0))
+        .id("variation-tree-panel")
+        .debug_selector(|| "variation-tree-panel".to_owned())
         .flex()
         .flex_col()
         .gap_2()
+        .p_3()
+        .border_1()
+        .border_color(rgb(0xd8cfc0))
+        .rounded(px(6.0))
         .text_base()
         .child("variation tree")
         .child(render_variation_tree(layout, on_node_clicked))
@@ -459,14 +456,17 @@ pub fn render_variation_tree_panel(
 
 /// The engine console panel: engine list and management, analyze/engine-move
 /// actions, analysis candidates and winrate bar, and the console transcript.
-pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     div()
-        .absolute()
-        .left(px(760.0))
-        .top(px(340.0))
+        .id("engine-panel")
+        .debug_selector(|| "engine-panel".to_owned())
         .flex()
         .flex_col()
         .gap_2()
+        .p_3()
+        .border_1()
+        .border_color(rgb(0xd8cfc0))
+        .rounded(px(6.0))
         .text_base()
         .child("engine console")
         .child(
@@ -720,14 +720,17 @@ pub fn render_node_inspector_panel(
     metadata: &NodeInspectorMetadata,
     shell: &ShellApp,
     cx: &Context<ShellApp>,
-) -> Div {
+) -> Stateful<Div> {
     div()
-        .absolute()
-        .left(px(480.0))
-        .top(px(340.0))
+        .id("node-inspector-panel")
+        .debug_selector(|| "node-inspector-panel".to_owned())
         .flex()
         .flex_col()
         .gap_2()
+        .p_3()
+        .border_1()
+        .border_color(rgb(0xd8cfc0))
+        .rounded(px(6.0))
         .text_base()
         .child(format!(
             "node inspector · {} · {}",
@@ -821,14 +824,17 @@ pub fn render_settings_panel(
     settings_rows: &[SettingRow],
     shell: &ShellApp,
     cx: &Context<ShellApp>,
-) -> Div {
+) -> Stateful<Div> {
     div()
-        .absolute()
-        .left(px(480.0))
-        .top(px(500.0))
+        .id("settings-panel")
+        .debug_selector(|| "settings-panel".to_owned())
         .flex()
         .flex_col()
         .gap_2()
+        .p_3()
+        .border_1()
+        .border_color(rgb(0xd8cfc0))
+        .rounded(px(6.0))
         .text_base()
         .child("settings")
         .child(
@@ -1070,7 +1076,7 @@ pub fn render_goban_area(
     best_move: Option<sabaki_domain_core::Vertex>,
     shell: &ShellApp,
     cx: &Context<ShellApp>,
-) -> Div {
+) -> Stateful<Div> {
     let board = &snapshot.board;
     let options = crate::goban_view::GobanRenderOptions {
         show_coordinates: shell
@@ -1084,15 +1090,25 @@ pub fn render_goban_area(
         move_numbers: crate::goban_view::move_numbers_from_moves(&snapshot.moves),
         score_overrides: snapshot.score_overrides.clone(),
     };
+    let weak_shell = cx.entity().downgrade();
+    let on_vertex_clicked = Rc::new(
+        move |vertex: sabaki_domain_core::Vertex,
+              _: &MouseDownEvent,
+              _window: &mut Window,
+              cx: &mut App| {
+            weak_shell
+                .update(cx, |shell, cx| shell.on_board_vertex_clicked(vertex, cx))
+                .ok();
+        },
+    );
+    let board_element = render_goban(board, BOARD_PIXEL_SIZE, theme, &options).child(
+        render_goban_click_layer(board, BOARD_PIXEL_SIZE, on_vertex_clicked),
+    );
     div()
-        .child(
-            div()
-                .absolute()
-                .left(px(BOARD_WINDOW_OFFSET_X))
-                .top(px(BOARD_WINDOW_OFFSET_Y))
-                .child(render_goban(board, BOARD_PIXEL_SIZE, theme, &options))
-                .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_board_clicked)),
-        )
+        .id("goban-area")
+        .relative()
+        .size(px(BOARD_PIXEL_SIZE))
+        .child(board_element)
         .child(if let Some(vertex) = best_move {
             let (x, y) = crate::goban_view::intersection_position(
                 board,
@@ -1102,8 +1118,8 @@ pub fn render_goban_area(
             );
             div()
                 .absolute()
-                .left(px(BOARD_WINDOW_OFFSET_X + x - 8.0))
-                .top(px(BOARD_WINDOW_OFFSET_Y + y - 8.0))
+                .left(px(x - 8.0))
+                .top(px(y - 8.0))
                 .size(px(16.0))
                 .rounded_full()
                 .border_2()

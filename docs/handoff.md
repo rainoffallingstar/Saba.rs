@@ -6,12 +6,16 @@
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
 （路线图）的最新执行快照。
 
-**最近迭代（2026-08-15）：** 迭代 1-5（可用性/数据保真、设置面板、真实引擎会话、
-插件面板、分析流与计分）与迭代 6「跨平台与工程卫生」已完成。迭代 6：CI 矩阵扩展为
-Ubuntu/macOS/Windows 三平台全绿；`main.rs`（2799 行）渲染树拆分至
-`panels.rs`（976 行），shell 只留状态/动作/装配；新增 300 手职业对局与多分支教学谱
-性能基线（打开/快照/导航）；`docs/packaging-notes.md` 打包调研。
-`cargo test --workspace` **201 测试全绿**。
+**最近迭代（2026-08-15）：** 迭代 26「前端审查与 Beta #10 渲染帧冒烟」已完成。
+修复前端 Beta 阻断问题：棋盘点击 hitbox 由隐式零尺寸改为按交点渲染的显式 hit
+layer（点击直接携带 vertex，不再用窗口全局坐标反推）；棋盘木底与网格不再双重
+偏移；绝对定位混排改为 header / 左棋盘列 / 右可滚动 sidebar / status bar 的
+flex 布局，各功能面板改为卡片式流式堆叠，默认窗口尺寸调整为 1240×800。
+新增 `frontend_smoke` 测试：用 gpui test platform 绘制完整窗口，断言
+goban/木底尺寸与位置、board-column 与 sidebar 不重叠、sidebar 面板顺序堆叠，
+并模拟真实鼠标点击第 17 个交点验证落子。`cargo test --workspace`
+**294 测试全绿**（新增 1 个渲染帧冒烟）。原生 screenshot 仍待 gpui 上游
+能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
 
 ---
 
@@ -129,12 +133,12 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | `domain-core` | 26 单元（含 9 计分器）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
 | `sabaki-host` | 101 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 108 测试（含 4 headless 冒烟、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-gpui` | 109 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 297 个全绿）
+cargo test --workspace        # 全部测试（当前 294 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -238,6 +242,28 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 （4 测试,`apps/sabaki-gpui` dev-deps 增加 gpui test-support + rand）。
 这是 Beta #10 的务实部分:渲染截图仍受 gpui 0.2.2 能力限制（见
 `docs/beta-gate.md`）,但应用逻辑层已纳入 headless CI。
+
+**迭代 26（前端审查与 Beta #10 渲染帧冒烟）已完成：** 修复实测前端阻断项：
+（1）棋盘点击无法落子——原 `render_goban_area` 把 `on_mouse_down` 挂在仅含
+absolute 子元素、自身为 0×0 的 div 上，命中框为空；且事件坐标先减窗口偏移再
+反推 vertex，叠加渲染根又额外偏移半 margin，命中即偏。现改为
+`render_goban_click_layer` 为每个交点生成显式 `spacing×spacing` 透明 hitbox，
+closure 直接携带 `Vertex` 调用 `on_board_vertex_clicked`，不再依赖窗口全局坐标。
+（2）棋盘渲染偏移——`render_goban` 木底 absolute 半 margin 内又嵌套一个 relative
+全尺寸画布，导致线条/棋子/标记整体再偏移半 margin；现木底为 absolute 子层，
+线条/棋子/标记直接位于全尺寸 relative 根中。
+（3）页面排版混乱——原窗口所有区块均为绝对定位硬编码坐标，在默认窗口下插件/
+变化树/引擎/节点检查器/设置互相重叠或超出窗口；现改为 flex 列布局（header /
+左侧 468px 棋盘列（棋盘、工具栏、recovery/外部冲突按钮）/ 右侧可滚动
+sidebar（插件、变化树、引擎、节点检查器、设置五个卡片）/ status bar），
+面板之间不再重叠，窄窗口纵向可滚动。默认窗口尺寸 1060×640 → 1240×800。
+（4）回归测试——新增 `frontend_smoke` 完整窗口测试：gpui test platform 绘制
+`ShellApp`，经 debug selector 断言 goban 420×420、木底 392×392 且距 goban
+原点 14px、board-column 与 sidebar 不重叠、五个面板均在 sidebar 内且垂直顺序
+堆叠，并模拟鼠标点击第 17 个交点后断言黑子落于 (16,16)。这使 Beta #10 从
+“仅应用逻辑 headless”前进到“完整窗口 layout/paint + 输入 dispatch”；
+原生 screenshot 仍待上游能力。
+
 **迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
@@ -286,14 +312,13 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 
 按优先级排序的后续候选迭代：
 
-1. **Beta #10 跟踪**：原生 screenshot/headless GPU CI（受 gpui 0.2.2 能力
-   限制,见 `docs/beta-gate.md`;跟踪上游 snapshot API,或将渲染纯逻辑
-   继续下沉单测）。
-2. **发布收尾（需外部条件）**：签名/公证（macOS Developer ID +
-   notarytool、Windows Authenticode,需开发者证书）、Flatpak manifest。
-2. **发布收尾（需外部条件）**：签名/公证（需开发者证书）、Linux AppImage/
-   Flatpak（依赖收集验证）、Windows installer（NSIS/Inno）、GitHub Release
-   自动发布（tag 触发时附加产物）。
+1. **Beta #10 收尾**：迭代 26 已把 headless 覆盖推进到完整窗口
+   layout/paint + 鼠标输入 dispatch；剩余唯一缺口是原生 screenshot/GPU
+   frame capture（gpui 0.2.2 无稳定 offscreen/screenshot API，跟踪上游
+   snapshot API，或引入 blade offscreen 渲染冒烟）。
+2. **发布收尾（需外部条件，本次按用户要求暂不做）**：签名/公证（macOS
+   Developer ID + notarytool、Windows Authenticode，需开发者证书）；
+   Flatpak 发布验证。
 3. **Beta 门槛验证**：设计文档 §11.3 逐项核对（数据保真、引擎对弈/分析、
    插件边界、三平台构建、性能对比）。
 
