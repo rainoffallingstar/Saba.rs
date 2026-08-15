@@ -365,11 +365,13 @@ while True:
         }
         let bin_dir = plugin_dir.join("bin");
         let _ = fs::remove_dir_all(&bin_dir);
+        let go_cache = std::env::temp_dir().join("saba-go-cache");
+        let go_path = std::env::temp_dir().join("saba-go-path");
         let build = std::process::Command::new("go")
             .args(["build", "-o", "bin/sabaki-sgf-exporter", "."])
             .current_dir(&plugin_dir)
-            .env("GOCACHE", "/tmp/saba-go-cache")
-            .env("GOPATH", "/tmp/saba-go-path")
+            .env("GOCACHE", &go_cache)
+            .env("GOPATH", &go_path)
             .output()
             .expect("go build runs");
         assert!(
