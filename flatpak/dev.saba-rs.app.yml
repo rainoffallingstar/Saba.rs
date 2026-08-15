@@ -23,6 +23,9 @@ modules:
   - name: saba-rs
     buildsystem: simple
     build-options:
+      # Allow cargo to reach crates.io (flatpak-builder defaults to
+      # no-network); vendoring would bloat the manifest for every dep.
+      no-network: false
       append-path: /usr/lib/sdk/rust-stable/bin
       env:
         CARGO_HOME: /run/build/saba-rs/cargo-home
