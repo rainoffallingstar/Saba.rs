@@ -99,7 +99,7 @@ jobs:
       - name: Build Flatpak bundle
         run: |
           flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.saba-rs.app.yml
-          flatpak build-bundle flatpak-repo saba-rs-linux-x86_64.flatpak dev.saba-rs.app
+          flatpak build-bundle flatpak-repo saba-rs-linux-x86_64.flatpak dev.sabars.app
       - name: Upload Flatpak artifact
         uses: actions/upload-artifact@v4
         with:

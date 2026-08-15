@@ -7,7 +7,7 @@
 # DRI); the rust-stable extension supplies the toolchain. `finish-args`
 # grant only what a Go-board client needs: display sockets and GPU.
 
-app-id: dev.saba-rs.app
+app-id: dev.sabars.app
 runtime: org.freedesktop.Platform//24.08
 sdk: org.freedesktop.Sdk//24.08
 command: saba-rs
