@@ -264,12 +264,23 @@ pub fn best_analysis_move(
 }
 
 /// The black winrate fraction of the best candidate, for the winrate bar.
-pub fn best_analysis_winrate(entries: &[sabaki_host::AnalysisEntry]) -> f64 {
-    entries
+///
+/// Engines evaluate from the perspective of the player to move; when it is
+/// White to play, the reported winrate is converted to the black-perspective
+/// fraction (`1 - winrate`) so the bar always reads "black vs white".
+pub fn best_analysis_winrate(
+    entries: &[sabaki_host::AnalysisEntry],
+    next_player: sabaki_domain_core::Color,
+) -> f64 {
+    let raw = entries
         .iter()
         .max_by_key(|entry| entry.visits)
         .map(|entry| entry.winrate.clamp(0.0, 1.0))
-        .unwrap_or(0.0)
+        .unwrap_or(0.0);
+    match next_player {
+        sabaki_domain_core::Color::Black => raw,
+        sabaki_domain_core::Color::White => 1.0 - raw,
+    }
 }
 
 /// Merges a batch of streamed analysis entries into the current set, keyed by
@@ -532,11 +543,20 @@ mod tests {
             "info move D4 visits 90 winrate 0.44\ninfo move Q16 visits 320 winrate 0.55",
         );
         assert_eq!(best_analysis_move(&entries, 19), Some((15, 3)));
-        assert!((best_analysis_winrate(&entries) - 0.55).abs() < 1e-9);
+        assert!(
+            (best_analysis_winrate(&entries, sabaki_domain_core::Color::Black) - 0.55).abs() < 1e-9
+        );
+        // With White to play the bar must flip to the black perspective.
+        assert!(
+            (best_analysis_winrate(&entries, sabaki_domain_core::Color::White) - 0.45).abs() < 1e-9
+        );
 
         let empty: Vec<sabaki_host::AnalysisEntry> = Vec::new();
         assert_eq!(best_analysis_move(&empty, 19), None);
-        assert_eq!(best_analysis_winrate(&empty), 0.0);
+        assert_eq!(
+            best_analysis_winrate(&empty, sabaki_domain_core::Color::Black),
+            0.0
+        );
     }
 
     #[test]

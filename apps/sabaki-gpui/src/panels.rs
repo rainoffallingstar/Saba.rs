@@ -665,10 +665,11 @@ pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                                 .child(
                                     div()
                                         .h_full()
-                                        .w(
-                                            px(140.0
-                                                * best_analysis_winrate(&shell.analysis) as f32),
-                                        )
+                                        .w(px(140.0
+                                            * best_analysis_winrate(
+                                                &shell.analysis,
+                                                shell.host.snapshot().board.next_player,
+                                            ) as f32))
                                         .bg(rgb(0x222222)),
                                 ),
                         )

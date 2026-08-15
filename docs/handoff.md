@@ -232,6 +232,9 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 22（胜率手番换算）已完成：** `best_analysis_winrate` 接受
+`next_player` 参数——白方行棋时引擎胜率换算为黑方视角（1 - winrate），
+胜率条始终表示黑 vs 白;测试覆盖黑/白视角与空集。
 **迭代 21（引擎会话复用）已完成：** `GtpProcessSupervisor` 改为
 channel+读线程模型（同步 `send` 与流式共享同一 reader,与 AnalysisStream
 一致）;`GtpTransport` trait 增加 `send_streaming`/`recv_line_timeout`
@@ -284,8 +287,7 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   可执行。
 - WASM capability imports 已实现（gameRead→`sabaki.game_snapshot`，未授权
   link 失败）；事务写入（gameWrite）等其余能力未接。
-- 主题包安装/校验已实现（host `theme_workflow`），但 GPUI 尚无「安装主题
-  包」入口（面板只显示已安装与 .asar 迁移提示）；`tokens.json` 暂只支持
+- 主题包安装/校验/入口 UI 已闭环（迭代 13+17）;`tokens.json` 暂只支持
   颜色 token（材质/尺寸 token 留待 schema v2）。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
@@ -299,7 +301,7 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   对字节重叠的多编码文本（如 GBK 与 Shift_JIS 共用字节对）按固定顺序确定性
   决策，可能选错编码（与上游 jschardet 统计检测同为不确定性）；中文 NGF
   建议另存为 UTF-8 后再导入。
-- 流式分析已复用已连接会话（session 优先、不支持时回退独立进程）；分析胜率
-  条仍按黑方显示（未做手番换算），`engines.analyze_commands` 仅命令名无参数
-  透传。
+- 流式分析已复用已连接会话（session 优先、不支持时回退独立进程）;胜率条
+  已按行棋方换算为黑方视角（迭代 22）；`engines.analyze_commands` 仅命令名
+  无参数透传。
 - Tauri 冻结，其未完成项（theme/plugin 错误 DTO、原生 e2e）不再安排。
