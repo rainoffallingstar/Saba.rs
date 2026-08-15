@@ -14,14 +14,14 @@
 | 7 | WASM 与原生插件边界可验证 | 🟢 | WASM 沙箱(无 host import 默认、fuel/内存/payload 限制、capability import 按授权注入、未授权 link 失败);原生进程监督(超时/崩溃/重启上限/自动禁用);插件 UI 仅 host 校验的声明式贡献 |
 | 8 | 正式支持平台可构建、安装、升级和回滚 | 🟢 | CI 矩阵 ubuntu/macos/windows 全绿;release 工作流三平台产物(macOS .app+dmg、Linux tar.gz、Windows zip);安装/回滚流程待真实用户环境验证 |
 | 9 | 基准结果无未解释的严重回归 | 🟢 | 大棋谱基准测试(120 手 2000ms、300 手对局)在 CI 中运行;与 Electron 的实测对比待定 |
-| 10 | 原生 screenshot/交互与 headless/GPU CI 已建立 | 🔴 | gpui 0.2.2 无稳定 headless 渲染/screenshot API;CI 目前只跑逻辑测试(注明 tests run headless)。这是唯一未满足项 |
+| 10 | 原生 screenshot/交互与 headless/GPU CI 已建立 | 🟡 | 应用逻辑层已纳入 headless CI(gpui test-support 的 TestAppContext 构造完整 ShellApp,4 个冒烟测试:开局/落子、计分覆盖、主题 token、分析命令);原生 screenshot 渲染仍受 gpui 0.2.2 无稳定 offscreen/screenshot API 限制 |
 
 ## 结论
 
-§11.3 十项门槛中九项已满足或部分满足;唯一缺口是 **#10 原生
-screenshot/交互与 headless/GPU CI**,受 gpui 0.2.2 平台能力限制,建议:
-- 短期:维持"逻辑测试 headless + 人工冒烟"策略,把 GPUI 渲染层函数
-  (goban 几何、面板布局)的纯逻辑部分继续下沉到可单测的模块;
+§11.3 十项门槛中九项已满足、一项部分满足。**#10 原生 screenshot/
+headless GPU CI** 已覆盖应用逻辑层(TestAppContext 冒烟测试,迭代 25);
+渲染截图层仍受 gpui 0.2.2 平台能力限制,建议:
+- 短期:维持"headless 逻辑冒烟 + 人工冒烟"策略(现已落地);
 - 中期:跟踪 gpui 上游 snapshot/screenshot API 进展,或引入
   `blade` 的 offscreen 渲染冒烟(启动 → 渲染一帧 → 退出);
-- 里程碑:该门槛满足后再评估「GPUI 达到 Beta 质量 → Tauri 退役决策」。
+- 里程碑:该门槛完全满足后再评估「GPUI 达到 Beta 质量 → Tauri 退役决策」。
