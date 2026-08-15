@@ -73,23 +73,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Portable NSIS from the official mirror; avoids the chocolatey
-          # feed which has been flaky (503s) on CI. The release zip is the
-          # plain file at the sourceforge mirror root.
-          $nsisVersion = '3.12.0'
-          $nsisZip = "$env:RUNNER_TEMP\nsis.zip"
-          $nsisDir = "$env:RUNNER_TEMP\nsis"
-          $attempts = 0
-          do {
-            $attempts++
-            Invoke-WebRequest -Uri "https://downloads.sourceforge.net/project/nsis/NSIS%203/$nsisVersion/nsis-$nsisVersion.zip" -OutFile $nsisZip -UseBasicParsing
-            $isZip = (Get-Item $nsisZip).Length -gt 1000000
-            if (-not $isZip) { Start-Sleep -Seconds 5 }
-          } while (-not $isZip -and $attempts -lt 5)
-          if (-not $isZip) { throw "NSIS download failed: $((Get-Item $nsisZip).Length) bytes" }
-          New-Item -ItemType Directory -Force $nsisDir | Out-Null
-          tar -xf $nsisZip -C $nsisDir
-          $makensis = Get-ChildItem -Path $nsisDir -Recurse -Filter makensis.exe | Select-Object -First 1 -ExpandProperty FullName
+          # NSIS through chocolatey with retries: the community feed has
+          # been intermittently 503 on CI, and sourceforge direct links
+          # serve HTML in this environment. choco --attempts retries the
+          # whole install.
+          choco install nsis --yes --no-progress --attempts=5 --random-wait
+          if (Get-Command makensis.exe -ErrorAction SilentlyContinue) {
+            $makensis = (Get-Command makensis.exe).Source
+          } else {
+            $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
+          }
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0' }
           & $makensis /DAPP_VERSION=$version /DROOT_DIR=$env:GITHUB_WORKSPACE scripts\installer.nsi
       - name: Upload Windows artifacts
