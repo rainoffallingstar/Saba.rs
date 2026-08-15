@@ -51,7 +51,7 @@
 | 原版 Electron/Preact | GPUI 目标实现 | 状态 |
 |---|---|---|
 | `App.js` | `ShellApp` 根布局 + 窗口/menu/actions | 已有雏形，需重构为三栏 |
-| `TripleSplitContainer` / `SplitContainer` | `SplitPane` / `TripleSplit` 原生组件，鼠标拖拽 + min + 持久化 | 未开始 |
+| `TripleSplitContainer` / `SplitContainer` | `SplitPane` / 三栏布局，鼠标拖拽 + min + 持久化 | M0 已完成（迭代 28） |
 | `LeftSidebar` + `PeerList` + `GtpConsole` | 左栏：引擎会话列表 + GTP 控制台，可上下分栏 | 部分：engine panel 在右侧堆叠 |
 | `MainView` + `Goban` | 中央棋盘组件 | 部分：goban_view 可点击/标记/分析点 |
 | `bars/PlayBar` | 对局栏：黑白棋手、提子、引擎忙碌、Pass/Resign/Estimate/Score/Edit/Find 菜单 | 部分：仅 Pass 按钮 |
@@ -75,9 +75,10 @@
 
 ## 4. 里程碑与迭代计划
 
-### M0：三栏布局基座（下一迭代 28）
+### M0：三栏布局基座（迭代 28，已完成）
 
-**目标：先立骨架，再迁移组件。**
+**状态：基础三栏、分栏拖拽、显隐按钮与宽度持久化已落地。**
+下一步按 M1 继续。
 
 - 实现 `SplitPane`（水平/垂直，可拖拽，min/max，finish 持久化）。
 - 实现 `TripleSplit`：左栏 / 中央 / 右栏，宽度来自 `view.leftsidebar_width`、

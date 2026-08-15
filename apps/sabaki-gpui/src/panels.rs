@@ -14,6 +14,7 @@ use sabaki_domain_core::GameSnapshot;
 
 use crate::engine_console::best_analysis_winrate;
 use crate::goban_view::{render_goban, render_goban_click_layer};
+use crate::layout::SplitPane;
 use crate::markup::{MarkupTool, render_markup_toolbar};
 use crate::navigation::NavigationAvailability;
 use crate::node_inspector::NodeInspectorMetadata;
@@ -49,6 +50,8 @@ pub fn render_toolbar_row(
     active_tool: MarkupTool,
     availability: NavigationAvailability,
     position: &str,
+    show_left_sidebar: bool,
+    show_right_sidebar: bool,
     palette: UiPalette,
     cx: &Context<ShellApp>,
 ) -> Div {
@@ -78,6 +81,56 @@ pub fn render_toolbar_row(
                 .child("Pass")
                 .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_pass)),
         )
+        .child(
+            div()
+                .id("left-sidebar-toggle")
+                .debug_selector(|| "left-sidebar-toggle".to_owned())
+                .px_2()
+                .py_1()
+                .border_1()
+                .border_color(rgb(palette.accent))
+                .rounded(px(4.0))
+                .bg(if show_left_sidebar {
+                    rgb(palette.button)
+                } else {
+                    rgb(palette.button_active)
+                })
+                .text_sm()
+                .child(if show_left_sidebar {
+                    "Engines ✓"
+                } else {
+                    "Engines"
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(ShellApp::on_toggle_left_sidebar),
+                ),
+        )
+        .child(
+            div()
+                .id("right-sidebar-toggle")
+                .debug_selector(|| "right-sidebar-toggle".to_owned())
+                .px_2()
+                .py_1()
+                .border_1()
+                .border_color(rgb(palette.accent))
+                .rounded(px(4.0))
+                .bg(if show_right_sidebar {
+                    rgb(palette.button)
+                } else {
+                    rgb(palette.button_active)
+                })
+                .text_sm()
+                .child(if show_right_sidebar {
+                    "Panels ✓"
+                } else {
+                    "Panels"
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(ShellApp::on_toggle_right_sidebar),
+                ),
+        )
         .child(crate::navigation_bar(
             availability,
             position,
@@ -87,6 +140,25 @@ pub fn render_toolbar_row(
             cx.listener(ShellApp::on_navigate_next),
             cx.listener(ShellApp::on_navigate_last),
         ))
+}
+
+/// Renders the draggable divider between the center pane and a side pane.
+pub fn render_split_handle(pane: SplitPane, palette: UiPalette, cx: &Context<ShellApp>) -> Div {
+    div()
+        .debug_selector(move || pane.debug_selector().to_owned())
+        .flex_none()
+        .w(px(5.0))
+        .h_full()
+        .bg(rgb(palette.border))
+        .cursor_col_resize()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(
+                move |shell, event: &MouseDownEvent, _window: &mut Window, cx| {
+                    shell.begin_split_drag(pane, f32::from(event.position.x), cx);
+                },
+            ),
+        )
 }
 
 /// The status bar: status text, file state, recent files, recovery, external

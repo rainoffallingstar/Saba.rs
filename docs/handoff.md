@@ -6,18 +6,16 @@
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
 （路线图）的最新执行快照。
 
-**最近迭代（2026-08-15）：** 迭代 26 已完成棋盘 hitbox / 棋盘渲染偏移 /
-flex 布局修复与 `frontend_smoke` 渲染帧测试。迭代 27「GPUI 前端接线与
-声明式插件面板」已完成：设置面板中的高频键全部接线（`game.default_*`
-驱动干净的新建棋局与标准让子摆子，`view.show_graph` 控制变化树面板，
-`view.show_comments` 控制注释编辑区，`board.show_analysis` 控制分析标记，
-`gtp.console_log_enabled` 控制控制台记录；`sound.enable` 在音频子系统
-落地前从设置面板移除）；新增 Pass 按钮；新增从 theme background 亮度推导
-的明暗 `UiPalette`，修复 Dark/Mist 下文字与面板对比度；插件声明式面板
-类型上移至 `plugin-runtime` manifest `contributes.panels`，GPUI 渲染真实
-已启用且已授权 `uiPanel` 的插件面板；窗口设置 960×640 最小尺寸。
-`cargo test --workspace` **297 测试全绿**。原生 screenshot 仍待 gpui
-上游能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
+**最近迭代（2026-08-15）：** 迭代 28「M0 三栏布局基座」已完成。新增
+`layout.rs` 纯布局数学与设置回退；`ShellApp` 增加左右栏宽度缓存、分栏
+拖拽状态机与窗口级拖拽覆盖层；渲染树改为左引擎/GTP 栏 + 中央棋盘/
+工具栏 + 右插件/变化树/节点检查器/设置栏，分栏 handle 可拖拽，松手后
+写入 `view.leftsidebar_width` / `view.sidebar_width`；工具栏新增
+Engines/Panels 显隐按钮；`frontend_smoke` 断言三栏不重叠、左右栏初始
+宽度、引擎面板位于左栏、其他面板位于右栏，并模拟拖拽左分栏 +60px 后
+宽度与设置持久化。`cargo test --workspace` **301 测试全绿**。原生
+screenshot 仍待 gpui 上游能力或 blade offscreen 方案（见
+`docs/beta-gate.md`）。
 
 ---
 
@@ -136,12 +134,12 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | `domain-core` | 27 单元（含 9 计分器、标准/Tygem 让子摆位）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 26 测试：8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 + 2 声明式面板 manifest 校验 |
 | `sabaki-host` | 102 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析、干净新局根属性）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 108 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-gpui` | 112 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟（三栏 bounds、落子、Pass、分栏拖拽与持久化）、4 分栏纯函数、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 297 个全绿）
+cargo test --workspace        # 全部测试（当前 301 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -290,6 +288,26 @@ New Game 与启动新局；host 新增 `create_new_with_properties`，在构造�
 （5）窗口最小尺寸 960×640，避免固定棋盘列在窗口过小时裁切。
 
 
+
+**迭代 28（M0 三栏布局基座）已完成：**
+（1）新增 `apps/sabaki-gpui/src/layout.rs`：`SplitPane`、分栏拖拽尺寸
+纯函数、min/max clamp、设置回退（`view.leftsidebar_width=250` /
+`view.sidebar_width=200`）、右栏显隐推导（`show_graph || show_comments`）。
+（2）`ShellApp` 新增 `left_sidebar_width` / `right_sidebar_width` 缓存与
+`SplitDrag` 状态机：分栏 handle `on_mouse_down` 开始拖拽；拖拽期间渲染
+全窗口透明 overlay 接收 move/up，避免鼠标移出 handle 后丢事件；松手后
+写入并持久化 `view.leftsidebar_width` / `view.sidebar_width`。
+（3）渲染树改为三栏：左栏承载 engine panel（GTP 控制台），中央承载
+goban/工具栏/recovery/外部冲突，右栏承载 plugins、variation tree（受
+`view.show_graph` 控制）、node inspector、settings；左右分栏 handle 宽
+5px 可拖拽，工具栏新增 Engines / Panels 显隐按钮。
+（4）默认显隐对齐原版：左栏 `view.show_leftsidebar=false`；右栏按
+`show_graph || show_comments`（默认均 false），Panels 按钮同时翻转两键
+保证按钮语义正确。
+（5）测试：`layout.rs` 4 个纯函数测试；`frontend_smoke` 扩展到三栏
+bounds、左右初始宽度、引擎面板位于左栏、四个右栏面板顺序堆叠，并模拟
+拖拽左分栏 +60px 后断言宽度 310px 与设置持久化。
+
 **迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
@@ -344,10 +362,10 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 
 按优先级排序的后续候选迭代：
 
-1. **M0 三栏布局基座（迭代 28）**：`SplitPane`/`TripleSplit` 拖拽分栏、
-   左右栏显隐与 `view.*_width/height` 持久化，现有面板归位到三栏。
-2. **M1 中央棋盘与模式栏（迭代 29-30）**：棋盘显示设置补齐、play/
-   scoring/estimator/edit/find/guess/autoplay 模式栏。
+1. **M0 三栏布局基座（迭代 28，已完成）**：`SplitPane` 拖拽分栏、
+   左右栏显隐与 `view.*_width` 持久化已落地；下一步是 M1。
+2. **M1 中央棋盘与模式栏（迭代 29-30，下一迭代）**：棋盘显示设置补齐、
+   play/scoring/estimator/edit/find/guess/autoplay 模式栏。
 3. **M2 左栏引擎区（迭代 31）**：引擎角色列表 + GTP 控制台上下分栏。
 4. **M3 右栏（迭代 32-33）**：WinrateGraph + GameGraph + CommentBox。
 5. **M4/M5（迭代 34-37）**：Drawer、菜单、原生输入、主题 schema v2、

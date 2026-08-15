@@ -4,6 +4,7 @@ mod engine_console;
 mod external_file;
 mod file_workflow;
 mod goban_view;
+mod layout;
 mod markup;
 mod navigation;
 mod node_inspector;
@@ -29,8 +30,8 @@ use std::{
 
 use gpui::{
     App, Application, Bounds, Context, Div, Entity, FocusHandle, InteractiveElement, KeyBinding,
-    Menu, MenuItem, MouseButton, MouseDownEvent, SharedString, Task, Window, WindowBounds,
-    WindowOptions, actions, div, prelude::*, px, rgb, size,
+    Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, Task,
+    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 use sabaki_domain_core::gtp::AnalysisStream;
 use sabaki_domain_core::legacy::handicap_placement;
@@ -50,6 +51,9 @@ use crate::file_workflow::{
     clear_autosave, record_opened_file,
 };
 use crate::goban_view::format_sgf_vertex;
+use crate::layout::{
+    SplitPane, clamp_pane_size, pane_size_for_drag, pane_size_from_settings, right_pane_visible,
+};
 use crate::markup::{
     MarkupTool, create_markup_transaction, create_scoring_transaction, create_setup_transactions,
     next_scoring_override,
@@ -118,6 +122,9 @@ struct ShellApp {
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
     palette: UiPalette,
+    left_sidebar_width: f32,
+    right_sidebar_width: f32,
+    split_drag: Option<SplitDrag>,
     installed_themes: Vec<sabaki_host::InstalledTheme>,
     legacy_asar_themes: Vec<std::path::PathBuf>,
     board_size: usize,
@@ -161,6 +168,15 @@ fn replay_position_session(
         session.play(color, &vertex)?;
     }
     Ok(())
+}
+
+/// Active splitter drag state. Window-global mouse move/up listeners are
+/// registered while this is `Some` so the drag continues outside the handle.
+#[derive(Clone, Copy)]
+struct SplitDrag {
+    pane: SplitPane,
+    start_position: f32,
+    start_size: f32,
 }
 
 /// Resolves the new-game defaults stored in the settings store and returns
@@ -231,6 +247,18 @@ impl ShellApp {
         let file_access = NativeGameFileAccess::default();
         let mut events = RecordingSink::default();
         let (default_size, default_properties) = default_new_game_properties(&settings);
+        let left_sidebar_width = pane_size_from_settings(
+            &settings,
+            "view.leftsidebar_width",
+            "view.leftsidebar_minwidth",
+            250.0,
+        );
+        let right_sidebar_width = pane_size_from_settings(
+            &settings,
+            "view.sidebar_width",
+            "view.sidebar_minwidth",
+            200.0,
+        );
 
         let mut status = initial_status;
         if let Some(path) = startup_file {
@@ -314,6 +342,9 @@ impl ShellApp {
             theme_choice,
             theme,
             palette,
+            left_sidebar_width,
+            right_sidebar_width,
+            split_drag: None,
             installed_themes,
             legacy_asar_themes,
             board_size,
@@ -1647,6 +1678,155 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Starts a splitter drag from a divider's mouse-down position.
+    fn begin_split_drag(&mut self, pane: SplitPane, position: f32, cx: &mut Context<Self>) {
+        let start_size = match pane {
+            SplitPane::Left => self.left_sidebar_width,
+            SplitPane::Right => self.right_sidebar_width,
+        };
+        self.split_drag = Some(SplitDrag {
+            pane,
+            start_position: position,
+            start_size,
+        });
+        cx.notify();
+    }
+
+    /// Applies a window-global mouse move to the active splitter drag.
+    fn update_split_drag(&mut self, position: f32, window: &Window, cx: &mut Context<Self>) {
+        let Some(drag) = self.split_drag else {
+            return;
+        };
+        let (fallback_min, min_width_key) = match drag.pane {
+            SplitPane::Left => (100.0, "view.leftsidebar_minwidth"),
+            SplitPane::Right => (100.0, "view.sidebar_minwidth"),
+        };
+        let min_size = self
+            .settings
+            .get(min_width_key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
+            .unwrap_or(fallback_min);
+        let max_size = (f32::from(window.viewport_size().width) - 320.0).max(min_size);
+        let next_size = clamp_pane_size(
+            pane_size_for_drag(drag.start_size, drag.start_position, position, drag.pane),
+            min_size,
+            max_size,
+        );
+        match drag.pane {
+            SplitPane::Left => self.left_sidebar_width = next_size,
+            SplitPane::Right => self.right_sidebar_width = next_size,
+        }
+        cx.notify();
+    }
+
+    /// Finishes a splitter drag and persists the final pane width.
+    fn finish_split_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.split_drag.take() else {
+            return;
+        };
+        let (width_key, width) = match drag.pane {
+            SplitPane::Left => ("view.leftsidebar_width", self.left_sidebar_width),
+            SplitPane::Right => ("view.sidebar_width", self.right_sidebar_width),
+        };
+        if let Err(error) = self.settings.set(width_key, serde_json::json!(width)) {
+            self.status = format!("pane width not saved: {error}").into();
+        } else if let Err(error) =
+            sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+        {
+            self.status = format!("pane width not persisted: {error}").into();
+        }
+        cx.notify();
+    }
+
+    fn on_split_drag_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_split_drag(f32::from(event.position.x), window, cx);
+    }
+
+    fn on_split_drag_mouse_up(
+        &mut self,
+        event: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button == MouseButton::Left {
+            self.finish_split_drag(cx);
+        }
+    }
+
+    fn toggle_sidebar_setting(&mut self, key: &str, label: &str, cx: &mut Context<Self>) {
+        let current = self.settings.get_bool(key).unwrap_or(false);
+        if let Err(error) = self.settings.set(key, serde_json::json!(!current)) {
+            self.status = format!("{label} not accepted: {error}").into();
+        } else if let Err(error) =
+            sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+        {
+            self.status = format!("{label} not persisted: {error}").into();
+        } else {
+            self.status = format!("{label}: {}", if !current { "shown" } else { "hidden" }).into();
+        }
+        cx.notify();
+    }
+
+    fn on_toggle_left_sidebar(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_sidebar_setting("view.show_leftsidebar", "engines sidebar", cx);
+    }
+
+    fn on_toggle_right_sidebar(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The right pane follows Sabaki's inferred visibility
+        // (`show_graph || show_comments`). The toolbar toggle flips both
+        // switches so the button always means "show/hide this pane".
+        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(false);
+        let show_comments = self
+            .settings
+            .get_bool("view.show_comments")
+            .unwrap_or(false);
+        let visible = right_pane_visible(show_graph, show_comments);
+        let target = !visible;
+        let mut failed = false;
+        for (key, value) in [
+            ("view.show_graph", target),
+            (
+                "view.show_comments",
+                if target { show_comments } else { false },
+            ),
+        ] {
+            if let Err(error) = self.settings.set(key, serde_json::json!(value)) {
+                self.status = format!("panels sidebar not accepted: {error}").into();
+                failed = true;
+            }
+        }
+        if !failed {
+            if let Err(error) =
+                sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+            {
+                self.status = format!("panels sidebar not persisted: {error}").into();
+            } else {
+                self.status = format!(
+                    "panels sidebar: {}",
+                    if target { "shown" } else { "hidden" }
+                )
+                .into();
+            }
+        }
+        cx.notify();
+    }
+
     fn open(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.dialog_service.pick_open_path() else {
             self.status = "open cancelled".into();
@@ -2175,7 +2355,16 @@ impl Render for ShellApp {
                 | sabaki_host::ExternalFileStatus::Missing
                 | sabaki_host::ExternalFileStatus::Unreadable
         );
-        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
+        let show_left_sidebar = self
+            .settings
+            .get_bool("view.show_leftsidebar")
+            .unwrap_or(false);
+        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(false);
+        let show_comments = self
+            .settings
+            .get_bool("view.show_comments")
+            .unwrap_or(false);
+        let show_right_sidebar = right_pane_visible(show_graph, show_comments);
         let palette = self.palette;
         let weak_shell = cx.entity().downgrade();
         let on_node_clicked =
@@ -2185,7 +2374,8 @@ impl Render for ShellApp {
                     .ok();
             };
 
-        div()
+        let root = div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -2195,21 +2385,43 @@ impl Render for ShellApp {
             .child(
                 div()
                     .id("workspace")
+                    .debug_selector(|| "workspace".to_owned())
                     .flex_1()
                     .flex()
                     .min_h_0()
                     .p_4()
-                    .gap_4()
-                    .child(
+                    .child(if show_left_sidebar {
                         div()
-                            .id("board-column")
-                            .debug_selector(|| "board-column".to_owned())
+                            .id("left-sidebar")
+                            .debug_selector(|| "left-sidebar".to_owned())
                             .flex_none()
-                            .w(px(BOARD_PIXEL_SIZE + 48.0))
+                            .w(px(self.left_sidebar_width))
                             .h_full()
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
+                            .gap_3()
+                            .pr_1()
+                            .child(panels::render_engine_panel(self, cx))
+                    } else {
+                        div().id("left-sidebar-hidden")
+                    })
+                    .child(if show_left_sidebar {
+                        panels::render_split_handle(SplitPane::Left, palette, cx)
+                    } else {
+                        div()
+                    })
+                    .child(
+                        div()
+                            .id("center-pane")
+                            .debug_selector(|| "center-pane".to_owned())
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .items_center()
                             .gap_3()
                             .child(panels::render_goban_area(
                                 &snapshot,
@@ -2222,6 +2434,8 @@ impl Render for ShellApp {
                                 self.active_tool,
                                 availability,
                                 &position,
+                                show_left_sidebar,
+                                show_right_sidebar,
                                 palette,
                                 cx,
                             ))
@@ -2232,11 +2446,17 @@ impl Render for ShellApp {
                                 cx,
                             )),
                     )
-                    .child(
+                    .child(if show_right_sidebar {
+                        panels::render_split_handle(SplitPane::Right, palette, cx)
+                    } else {
                         div()
-                            .id("sidebar")
-                            .debug_selector(|| "sidebar".to_owned())
-                            .flex_1()
+                    })
+                    .child(if show_right_sidebar {
+                        div()
+                            .id("right-sidebar")
+                            .debug_selector(|| "right-sidebar".to_owned())
+                            .flex_none()
+                            .w(px(self.right_sidebar_width))
                             .h_full()
                             .overflow_y_scroll()
                             .flex()
@@ -2253,14 +2473,15 @@ impl Render for ShellApp {
                             } else {
                                 div().id("variation-tree-panel-hidden")
                             })
-                            .child(panels::render_engine_panel(self, cx))
                             .child(panels::render_node_inspector_panel(
                                 &inspector_metadata,
                                 self,
                                 cx,
                             ))
-                            .child(panels::render_settings_panel(&settings_rows, self, cx)),
-                    ),
+                            .child(panels::render_settings_panel(&settings_rows, self, cx))
+                    } else {
+                        div().id("right-sidebar-hidden")
+                    }),
             )
             .child(panels::render_status_bar(
                 self,
@@ -2269,6 +2490,23 @@ impl Render for ShellApp {
                 path_label,
                 &external_status,
             ))
+            .child(if self.split_drag.is_some() {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .cursor_col_resize()
+                    .on_mouse_move(cx.listener(ShellApp::on_split_drag_mouse_move))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(ShellApp::on_split_drag_mouse_up),
+                    )
+            } else {
+                div()
+            });
+
+        root
     }
 }
 
@@ -2895,9 +3133,22 @@ mod frontend_smoke {
         let config = temp_config("board-click");
         let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(7));
         let mut cx = TestAppContext::build(dispatcher, None);
+        let mut settings = SettingsStore::default();
+        settings
+            .set("view.show_leftsidebar", serde_json::json!(true))
+            .unwrap();
+        settings
+            .set("view.show_graph", serde_json::json!(true))
+            .unwrap();
+        settings
+            .set("view.leftsidebar_width", serde_json::json!(250.0))
+            .unwrap();
+        settings
+            .set("view.sidebar_width", serde_json::json!(200.0))
+            .unwrap();
         let window_handle = cx.add_window(|_, cx| {
             ShellApp::new(
-                SettingsStore::default(),
+                settings.clone(),
                 NativeSettingsPersistence::new(config.clone()),
                 NativeHostPersistence::new(config.clone()),
                 NativePluginPersistence::new(config.clone()),
@@ -2935,18 +3186,29 @@ mod frontend_smoke {
         );
         assert_eq!(wood_bounds.size.width, px(BOARD_PIXEL_SIZE - 28.0));
 
-        let board_column = vcx
-            .debug_bounds("board-column")
-            .expect("the board column must have a debug selector");
-        let sidebar = vcx
-            .debug_bounds("sidebar")
-            .expect("the sidebar must have a debug selector");
+        let left_sidebar = vcx
+            .debug_bounds("left-sidebar")
+            .expect("the left sidebar must have a debug selector");
+        let center_pane = vcx
+            .debug_bounds("center-pane")
+            .expect("the center pane must have a debug selector");
+        let right_sidebar = vcx
+            .debug_bounds("right-sidebar")
+            .expect("the right sidebar must have a debug selector");
         assert!(
-            board_column.right() <= sidebar.origin.x,
-            "board column {:?} must not overlap sidebar {:?}",
-            board_column,
-            sidebar
+            left_sidebar.right() <= center_pane.origin.x,
+            "left sidebar {:?} must not overlap center {:?}",
+            left_sidebar,
+            center_pane
         );
+        assert!(
+            center_pane.right() <= right_sidebar.origin.x,
+            "center {:?} must not overlap right sidebar {:?}",
+            center_pane,
+            right_sidebar
+        );
+        assert_eq!(left_sidebar.size.width, px(250.0));
+        assert_eq!(right_sidebar.size.width, px(200.0));
         let panels = [
             (
                 "plugins-panel",
@@ -2957,11 +3219,6 @@ mod frontend_smoke {
                 "variation-tree-panel",
                 vcx.debug_bounds("variation-tree-panel")
                     .expect("variation panel must have a debug selector"),
-            ),
-            (
-                "engine-panel",
-                vcx.debug_bounds("engine-panel")
-                    .expect("engine panel must have a debug selector"),
             ),
             (
                 "node-inspector-panel",
@@ -2976,13 +3233,23 @@ mod frontend_smoke {
         ];
         for (name, bounds) in &panels {
             assert!(
-                f32::from(bounds.origin.x) >= f32::from(sidebar.origin.x) - 0.5
-                    && f32::from(bounds.right()) <= f32::from(sidebar.right()) + 0.5,
-                "{name} {:?} must stay inside the sidebar {:?}",
+                f32::from(bounds.origin.x) >= f32::from(right_sidebar.origin.x) - 0.5
+                    && f32::from(bounds.right()) <= f32::from(right_sidebar.right()) + 0.5,
+                "{name} {:?} must stay inside the right sidebar {:?}",
                 bounds,
-                sidebar
+                right_sidebar
             );
         }
+        let engine_bounds = vcx
+            .debug_bounds("engine-panel")
+            .expect("engine panel must have a debug selector");
+        assert!(
+            f32::from(engine_bounds.origin.x) >= f32::from(left_sidebar.origin.x) - 0.5
+                && f32::from(engine_bounds.right()) <= f32::from(left_sidebar.right()) + 0.5,
+            "engine panel {:?} must live in the left sidebar {:?}",
+            engine_bounds,
+            left_sidebar
+        );
         for pair in panels.windows(2) {
             assert!(
                 f32::from(pair[0].1.bottom()) <= f32::from(pair[1].1.origin.y) + 0.5,
@@ -3036,6 +3303,53 @@ mod frontend_smoke {
         assert!(
             matches!(after_pass.1, Some(None)),
             "pass must append a pass move"
+        );
+
+        let splitter = vcx
+            .debug_bounds("left-splitter")
+            .expect("the left splitter must have a debug selector");
+        let drag_start = splitter.center();
+        let drag_end = gpui::point(
+            px(f32::from(drag_start.x) + 60.0),
+            px(f32::from(drag_start.y)),
+        );
+        vcx.simulate_mouse_down(drag_start, gpui::MouseButton::Left, gpui::Modifiers::none());
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        vcx.simulate_mouse_move(
+            drag_end,
+            Some(gpui::MouseButton::Left),
+            gpui::Modifiers::none(),
+        );
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.simulate_mouse_up(drag_end, gpui::MouseButton::Left, gpui::Modifiers::none());
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        let resized_left = vcx
+            .debug_bounds("left-sidebar")
+            .expect("the left sidebar must still have a debug selector");
+        assert!(
+            (f32::from(resized_left.size.width) - 310.0).abs() < 0.75,
+            "dragging the left divider 60px should resize the left pane to 310px, got {:?}",
+            resized_left.size
+        );
+        let persisted_width = window_handle
+            .read_with(&vcx.cx, |shell, _| {
+                shell
+                    .settings
+                    .get("view.leftsidebar_width")
+                    .and_then(serde_json::Value::as_f64)
+            })
+            .unwrap();
+        assert!(
+            persisted_width.is_some_and(|width| (width - 310.0).abs() < 0.75),
+            "finishing the drag must persist the pane width, got {persisted_width:?}"
         );
         let _ = std::fs::remove_dir_all(&config);
     }
