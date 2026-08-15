@@ -1,7 +1,7 @@
 # 打包与发布调研（Saba.rs）
 
-> 状态：调研 + 三阶段落地。release CI 产出 macOS .app/dmg、Linux tar.gz +
-> AppImage + Flatpak、Windows zip + NSIS installer（三平台构建并上传
+> 状态：调研 + 四阶段落地。release CI 产出 macOS .app/dmg、Linux tar.gz +
+> AppImage + Flatpak、Windows zip + NSIS installer（四平台构建并上传
 > artifacts，tag 推送自动发布 GitHub Release）；脚本见
 > `scripts/bundle-macos.sh`、`scripts/bundle-linux-appimage.sh`、
 > `scripts/installer.nsi`、`flatpak/dev.saba-rs.app.yml`。
@@ -27,7 +27,7 @@
 |---|---|---|
 | macOS | `cargo build --release` + 手工 .app bundle（Info.plist、icon、`Contents/MacOS`）→ `dmg`（`create-dmg` 或 `hdiutil`） | 无 tauri 的 bundler；GPUI 生态无官方打包器，用脚本化 bundle 最简单 |
 | Windows | `cargo build --release` → NSIS/Inno Setup installer 或便携 zip | 无签名时 SmartScreen 警告；签名需证书 |
-| Linux | AppImage（`appimage-builder` 或手工 AppDir） | 需打包 fontconfig/xkbcommon 依赖；Flatpak 需 manifest + 单独验证 |
+| Linux | AppImage（linuxdeploy + appimagetool） + Flatpak（Freedesktop 24.08） | 依赖已打包进 AppImage；Flatpak 已实测构建 |
 
 ## 签名 / 公证 / 更新
 

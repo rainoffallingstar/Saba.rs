@@ -232,6 +232,14 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
+（Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
+显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
+cargo 联网）;release.yml 新增 flatpak job（实测产出
+`saba-rs-linux-x86_64.flatpak`）,publish 等待其完成。期间修复:Flatpak
+应用 ID 段不能含连字符（`dev.sabars.app`）、Windows NSIS 安装改回
+chocolatey + `--attempts=5` 重试（社区源 503 瞬时故障,sourceforge 直链
+在本环境返回 HTML）。发布流水线四平台产物齐备。
 **迭代 23（分析命令参数透传）已完成：** `analysis_command_from_settings`
 返回 (命令名, 参数) 元组——`engines.analyze_commands` 条目可携带参数
 （`"kata-analyze -visits 100"`）:已连接会话经 `stream_analyze` 逐参数
