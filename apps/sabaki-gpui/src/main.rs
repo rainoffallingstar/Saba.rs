@@ -493,7 +493,7 @@ impl ShellApp {
         self.analysis_stop_flag.store(false, Ordering::Relaxed);
         let generation = self.analysis_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let generation_flag = self.analysis_generation.clone();
-        let command = analysis_command_from_settings(&self.settings);
+        let (command, command_arguments) = analysis_command_from_settings(&self.settings);
 
         // Bounded `analyze` responses go through the connected session.
         if command == "analyze" {
@@ -527,7 +527,7 @@ impl ShellApp {
                 cx.notify();
                 return;
             }
-            match session.stream_analyze(&command, Vec::new()) {
+            match session.stream_analyze(&command, command_arguments.clone()) {
                 Ok(()) => session_mode = true,
                 Err(sabaki_domain_core::gtp::GtpError::UnsupportedStreaming) => {
                     // Connected engine cannot stream; fall through.
@@ -634,7 +634,12 @@ impl ShellApp {
             cx.notify();
             return;
         }
-        if let Err(error) = stream.send_command(&command) {
+        let full_command = if command_arguments.is_empty() {
+            command.clone()
+        } else {
+            format!("{} {}", command, command_arguments.join(" "))
+        };
+        if let Err(error) = stream.send_command(&full_command) {
             self.status = format!("analysis command failed: {error}").into();
             cx.notify();
             return;

@@ -134,7 +134,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 292 个全绿）
+cargo test --workspace        # 全部测试（当前 293 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -232,6 +232,11 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 23（分析命令参数透传）已完成：** `analysis_command_from_settings`
+返回 (命令名, 参数) 元组——`engines.analyze_commands` 条目可携带参数
+（`"kata-analyze -visits 100"`）:已连接会话经 `stream_analyze` 逐参数
+透传,回退进程路径拼接完整命令行发送;`parse_stream_line` 仍按命令名
+判断 JSON/文本格式。测试覆盖无参/带参/空数组。
 **迭代 22（胜率手番换算）已完成：** `best_analysis_winrate` 接受
 `next_player` 参数——白方行棋时引擎胜率换算为黑方视角（1 - winrate），
 胜率条始终表示黑 vs 白;测试覆盖黑/白视角与空集。
@@ -301,7 +306,6 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   对字节重叠的多编码文本（如 GBK 与 Shift_JIS 共用字节对）按固定顺序确定性
   决策，可能选错编码（与上游 jschardet 统计检测同为不确定性）；中文 NGF
   建议另存为 UTF-8 后再导入。
-- 流式分析已复用已连接会话（session 优先、不支持时回退独立进程）;胜率条
-  已按行棋方换算为黑方视角（迭代 22）；`engines.analyze_commands` 仅命令名
-  无参数透传。
+- 流式分析已复用已连接会话;胜率条已按行棋方换算（迭代 22）;分析命令支持
+  参数透传（迭代 23）。
 - Tauri 冻结，其未完成项（theme/plugin 错误 DTO、原生 e2e）不再安排。

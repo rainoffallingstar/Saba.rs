@@ -303,18 +303,26 @@ pub fn merge_analysis_entries(
     by_vertex.into_values().collect()
 }
 
-/// The analysis command to use for the streaming analyze button, from the
+/// The analysis command for the streaming analyze button, from the
 /// `engines.analyze_commands` setting (first entry wins); defaults to
-/// `lz-analyze` when the setting is absent or empty.
-pub fn analysis_command_from_settings(settings: &sabaki_host::SettingsStore) -> String {
-    settings
+/// `lz-analyze` when the setting is absent or empty. An entry may carry
+/// arguments (`"kata-analyze -visits 100"`); the command name and its
+/// arguments are returned separately so transports receive them verbatim.
+pub fn analysis_command_from_settings(
+    settings: &sabaki_host::SettingsStore,
+) -> (String, Vec<String>) {
+    let entry = settings
         .get("engines.analyze_commands")
         .and_then(serde_json::Value::as_array)
         .and_then(|entries| entries.first())
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
-        .filter(|command| !command.is_empty())
-        .unwrap_or_else(|| "lz-analyze".to_owned())
+        .filter(|command| !command.trim().is_empty())
+        .unwrap_or_else(|| "lz-analyze".to_owned());
+    let mut tokens = entry.split_whitespace();
+    let name = tokens.next().unwrap_or("lz-analyze").to_owned();
+    let arguments: Vec<String> = tokens.map(ToOwned::to_owned).collect();
+    (name, arguments)
 }
 
 /// Parses one streamed analysis line for the given command: JSON for
@@ -377,7 +385,7 @@ mod tests {
         let mut settings = sabaki_host::SettingsStore::default();
         assert_eq!(
             super::analysis_command_from_settings(&settings),
-            "lz-analyze"
+            ("lz-analyze".to_owned(), Vec::new())
         );
 
         settings
@@ -388,7 +396,26 @@ mod tests {
             .expect("the setting accepts a string array");
         assert_eq!(
             super::analysis_command_from_settings(&settings),
-            "kata-analyze"
+            ("kata-analyze".to_owned(), Vec::new())
+        );
+
+        settings
+            .set(
+                "engines.analyze_commands",
+                serde_json::json!(["kata-analyze -visits 100 -analysisWideRootNoise 0.02"]),
+            )
+            .expect("the setting accepts a string array");
+        assert_eq!(
+            super::analysis_command_from_settings(&settings),
+            (
+                "kata-analyze".to_owned(),
+                vec![
+                    "-visits".to_owned(),
+                    "100".to_owned(),
+                    "-analysisWideRootNoise".to_owned(),
+                    "0.02".to_owned(),
+                ]
+            )
         );
 
         settings
@@ -396,7 +423,7 @@ mod tests {
             .expect("an empty array is valid");
         assert_eq!(
             super::analysis_command_from_settings(&settings),
-            "lz-analyze"
+            ("lz-analyze".to_owned(), Vec::new())
         );
     }
 
