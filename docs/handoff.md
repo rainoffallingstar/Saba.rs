@@ -129,12 +129,12 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | `domain-core` | 26 单元（含 9 计分器）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 |
 | `sabaki-host` | 101 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 104 测试（含 2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-gpui` | 108 测试（含 4 headless 冒烟、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 293 个全绿）
+cargo test --workspace        # 全部测试（当前 297 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -232,6 +232,12 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 反馈。至此设计 §8.2 主题包流程（发现/校验/安装/卸载/应用/资源路径控制/
 `.asar` 迁移提示）闭环。
 
+**迭代 25（headless 冒烟测试）已完成：** 用 gpui `test-support` 的
+`TestAppContext` 在无窗口/无 GPU 环境构造完整 `ShellApp` 实体,headless
+执行核心交互:开局/落子、计分模式覆盖、主题 token 应用、分析命令读取
+（4 测试,`apps/sabaki-gpui` dev-deps 增加 gpui test-support + rand）。
+这是 Beta #10 的务实部分:渲染截图仍受 gpui 0.2.2 能力限制（见
+`docs/beta-gate.md`）,但应用逻辑层已纳入 headless CI。
 **迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许

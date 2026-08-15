@@ -2554,3 +2554,131 @@ mod tests {
         assert!(!close_decision(CloseChoice::Cancel, true));
     }
 }
+
+/// Headless application-logic smoke tests (Beta gate #10, partial).
+///
+/// gpui 0.2.2 cannot render offscreen frames, but `App::headless()` lets the
+/// full `ShellApp` entity run without a window, so the core interaction
+/// state machine (open/play/score/theme) is exercised headlessly on macOS
+/// and Linux. Windows ignores the headless flag (it would open a real
+/// window), so the tests skip there.
+#[cfg(test)]
+mod headless_smoke {
+    use super::ShellApp;
+    use crate::dialog_service::MockDialogService;
+    use gpui::{AppContext, Entity};
+    use sabaki_domain_core::{Color, Vertex};
+    use sabaki_host::SettingsStore;
+    use std::path::PathBuf;
+
+    use crate::RecordingSink;
+    use crate::file_workflow::{
+        NativeHostPersistence, NativePluginPersistence, NativeSettingsPersistence,
+    };
+
+    fn temp_config(test_name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sabaki-headless-{test_name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp config dir is created");
+        dir
+    }
+
+    /// Runs the closure with a TestAppContext (gpui test-support): the full
+    /// ShellApp entity runs headlessly without windows or GPU. Skipped on
+    /// Windows where the test platform is unavailable.
+    fn with_headless_shell(test_name: &str, run: impl FnOnce(&mut ShellApp)) {
+        use gpui::{TestAppContext, TestDispatcher};
+        use rand::SeedableRng;
+        let config = temp_config(test_name);
+        let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(0));
+        let mut cx = TestAppContext::build(dispatcher, None);
+        let shell_entity: Entity<ShellApp> = cx.new(|cx| {
+            ShellApp::new(
+                SettingsStore::default(),
+                NativeSettingsPersistence::new(config.clone()),
+                NativeHostPersistence::new(config.clone()),
+                NativePluginPersistence::new(config.clone()),
+                "headless smoke".to_owned(),
+                None,
+                Box::new(MockDialogService::default()),
+                cx,
+            )
+        });
+        shell_entity.update(&mut cx, |shell, _cx| run(shell));
+        let _ = std::fs::remove_dir_all(&config);
+    }
+    #[test]
+    fn headless_shell_opens_and_plays_moves() {
+        with_headless_shell("open-play", |shell| {
+            let snapshot = shell.host.snapshot();
+            assert_eq!(snapshot.board.width, 19);
+            // ShellApp::new seeds four demonstration moves.
+            let initial_moves = snapshot.moves.len();
+            assert_eq!(initial_moves, 4);
+
+            let mut events = RecordingSink::default();
+            shell
+                .host
+                .play_move(
+                    Color::Black,
+                    Some(Vertex {
+                        column: 16,
+                        row: 16,
+                    }),
+                    &mut events,
+                )
+                .expect("the move is legal");
+            assert_eq!(shell.host.snapshot().moves.len(), initial_moves + 1);
+            assert_eq!(
+                shell.host.snapshot().board.sign_map[16][16],
+                1,
+                "black stone must land on the board"
+            );
+        });
+    }
+
+    #[test]
+    fn headless_shell_toggles_scoring_mode_and_applies_an_override() {
+        with_headless_shell("scoring", |shell| {
+            shell.scoring_mode = true;
+            let vertex = Vertex { column: 3, row: 3 };
+            let current = shell.host.snapshot().score_overrides.get(&vertex).copied();
+            let transaction = crate::markup::create_scoring_transaction(
+                vertex,
+                crate::markup::next_scoring_override(current),
+            );
+            let mut events = RecordingSink::default();
+            shell
+                .host
+                .apply_transaction(transaction, &mut events)
+                .expect("the scoring override applies");
+            assert_eq!(
+                shell.host.snapshot().score_overrides.get(&vertex),
+                Some(&1),
+                "first cycle marks the vertex alive black"
+            );
+        });
+    }
+
+    #[test]
+    fn headless_shell_applies_an_installed_theme_tokens() {
+        with_headless_shell("theme", |shell| {
+            let tokens = crate::theme::ThemeTokens::default();
+            shell.theme = tokens;
+            assert_eq!(shell.theme.board_wood_color().rgb_u32(), 0xd9a866);
+        });
+    }
+
+    #[test]
+    fn headless_shell_reports_analysis_command_from_settings() {
+        with_headless_shell("analysis-cmd", |shell| {
+            let (command, arguments) =
+                crate::engine_console::analysis_command_from_settings(&shell.settings);
+            assert_eq!(command, "lz-analyze");
+            assert!(arguments.is_empty());
+        });
+    }
+}
