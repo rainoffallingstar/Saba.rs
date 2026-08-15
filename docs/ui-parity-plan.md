@@ -53,10 +53,10 @@
 | `App.js` | `ShellApp` 根布局 + 窗口/menu/actions | 已有雏形，需重构为三栏 |
 | `TripleSplitContainer` / `SplitContainer` | `SplitPane` / 三栏布局，鼠标拖拽 + min + 持久化 | M0 已完成（迭代 28） |
 | `LeftSidebar` + `PeerList` + `GtpConsole` | 左栏：引擎会话列表 + GTP 控制台，可上下分栏 | 部分：engine panel 在右侧堆叠 |
-| `MainView` + `Goban` | 中央棋盘组件 | 部分：goban_view 可点击/标记/分析点 |
-| `bars/PlayBar` | 对局栏：黑白棋手、提子、引擎忙碌、Pass/Resign/Estimate/Score/Edit/Find 菜单 | 部分：仅 Pass 按钮 |
-| `bars/EditBar` | 编辑工具栏 | 部分：markup_toolbar |
-| `bars/ScoringBar` | 计分/估算栏与详情 | 部分：设置面板里有计分摘要 |
+| `MainView` + `Goban` | 中央棋盘组件 | 部分：模式栏、坐标类型、next/sibling ghost stones 已落地；线/箭头拖拽待迭代 30 |
+| `bars/PlayBar` | 对局栏：黑白棋手、提子、引擎忙碌、Pass/Resign/Estimate/Score/Edit/Find 菜单 | 部分：棋手名/段位、当前手方、Pass/Resign、模式切换已落地；提子数/引擎忙碌待补 |
+| `bars/EditBar` | 编辑工具栏 | 部分：markup toolbar 已迁入 Edit 模式 |
+| `bars/ScoringBar` | 计分/估算栏与详情 | 部分：Scoring/Estimator 模式栏显示操作提示与计分摘要；详情抽屉未开始 |
 | `bars/GuessBar` / `AutoplayBar` / `FindBar` | 猜局/自动播放/查找栏 | 未开始 |
 | `Sidebar` + `WinrateGraph` | 右栏胜率图，点击跳转手数 | 未开始 |
 | `Sidebar` + `GameGraph` | 右栏完整游戏树图 | 未开始（当前只有 variation_tree） |
@@ -95,17 +95,18 @@
 - 拖分栏后重启宽度恢复。
 - 默认设置下界面与原版显隐状态一致。
 
-### M1：中央棋盘与模式栏对齐（迭代 29-30）
+### M1：中央棋盘与模式栏对齐（迭代 29-30，第一半已完成）
 
-**目标：中央区域达到原版 MainView 的主要行为。**
+**状态：迭代 29 已落地 Play/Edit/Scoring/Estimator 模式栏、坐标类型与
+next/sibling ghost stones；迭代 30 继续以下未完成项。**
 
 - Goban 渲染补齐：
-  - `view.coordinates_type`（A1 / 1A）
-  - `view.move_numbers_type`（start / current）
-  - `view.show_move_colorization`、`view.show_next_moves`、`view.show_siblings`
-  - 悬停 ghost stone / 下一步提示
-  - 分析候选项、最佳着、胜率标签
-  - 线/箭头拖拽绘制（当前只有点击标记）
+  - `view.coordinates_type`（A1 / 1-1）✅
+  - `view.move_numbers_type`（start / variation / hotspot）⬜
+  - `view.show_move_colorization`、`view.show_next_moves`、`view.show_siblings` ✅
+  - 悬停 ghost stone / 下一步提示 ⬜
+  - 分析候选项、最佳着、胜率标签 ⬜
+  - 线/箭头拖拽绘制 ⬜
 - 模式系统：`play / scoring / estimator / edit / find / guess / autoplay`，
   由 ShellApp 状态或 host DTO 驱动。
 - 模式栏：

@@ -10,12 +10,11 @@ use gpui::{
     StatefulInteractiveElement, Window, div, prelude::*, px, rgb,
 };
 
-use sabaki_domain_core::GameSnapshot;
+use sabaki_domain_core::{GameMode, GameSnapshot};
 
 use crate::engine_console::best_analysis_winrate;
 use crate::goban_view::{render_goban, render_goban_click_layer};
 use crate::layout::SplitPane;
-use crate::markup::{MarkupTool, render_markup_toolbar};
 use crate::navigation::NavigationAvailability;
 use crate::node_inspector::NodeInspectorMetadata;
 use crate::plugin_contribution::PanelWidget;
@@ -45,9 +44,8 @@ pub fn render_header(snapshot: &GameSnapshot, status: &str, palette: UiPalette) 
         )))
 }
 
-/// The markup toolbar and navigation bar row.
+/// The navigation and pane-toggle row.
 pub fn render_toolbar_row(
-    active_tool: MarkupTool,
     availability: NavigationAvailability,
     position: &str,
     show_left_sidebar: bool,
@@ -55,32 +53,11 @@ pub fn render_toolbar_row(
     palette: UiPalette,
     cx: &Context<ShellApp>,
 ) -> Div {
-    let weak_shell = cx.entity().downgrade();
-    let on_tool_clicked = move |tool: &MarkupTool, _window: &mut Window, cx: &mut App| {
-        weak_shell
-            .update(cx, |shell, cx| shell.on_tool_selected(*tool, cx))
-            .ok();
-    };
     div()
         .flex()
         .flex_wrap()
         .items_center()
         .gap_3()
-        .child(render_markup_toolbar(active_tool, palette, on_tool_clicked))
-        .child(
-            div()
-                .id("pass-button")
-                .debug_selector(|| "pass-button".to_owned())
-                .px_2()
-                .py_1()
-                .border_1()
-                .border_color(rgb(palette.accent))
-                .rounded(px(4.0))
-                .bg(rgb(palette.button))
-                .text_sm()
-                .child("Pass")
-                .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_pass)),
-        )
         .child(
             div()
                 .id("left-sidebar-toggle")
@@ -1186,12 +1163,12 @@ pub fn render_settings_panel(
                             .border_1()
                             .border_color(rgb(shell.palette.accent))
                             .rounded(px(4.0))
-                            .bg(if shell.scoring_mode {
+                            .bg(if shell.mode == GameMode::Scoring {
                                 rgb(shell.palette.button)
                             } else {
                                 rgb(shell.palette.button_active)
                             })
-                            .child(if shell.scoring_mode {
+                            .child(if shell.mode == GameMode::Scoring {
                                 "scoring: on"
                             } else {
                                 "scoring: off"
@@ -1202,7 +1179,7 @@ pub fn render_settings_panel(
                             ),
                     ),
                 )
-                .child(if shell.scoring_mode {
+                .child(if shell.mode == GameMode::Scoring {
                     div()
                         .text_xs()
                         .text_color(rgb(shell.palette.accent))
@@ -1258,12 +1235,29 @@ pub fn render_goban_area(
             .settings
             .get_bool("view.show_coordinates")
             .unwrap_or(false),
+        coordinates_type: shell
+            .settings
+            .get_str("view.coordinates_type")
+            .unwrap_or("A1")
+            .to_owned(),
         show_move_numbers: shell
             .settings
             .get_bool("view.show_move_numbers")
             .unwrap_or(false),
         move_numbers: crate::goban_view::move_numbers_from_moves(&snapshot.moves),
         score_overrides: snapshot.score_overrides.clone(),
+        show_next_moves: shell
+            .settings
+            .get_bool("view.show_next_moves")
+            .unwrap_or(true),
+        show_siblings: shell
+            .settings
+            .get_bool("view.show_siblings")
+            .unwrap_or(true),
+        show_move_colorization: shell
+            .settings
+            .get_bool("view.show_move_colorization")
+            .unwrap_or(true),
     };
     let best_move = if shell
         .settings

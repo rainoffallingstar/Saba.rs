@@ -6,16 +6,15 @@
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
 （路线图）的最新执行快照。
 
-**最近迭代（2026-08-15）：** 迭代 28「M0 三栏布局基座」已完成。新增
-`layout.rs` 纯布局数学与设置回退；`ShellApp` 增加左右栏宽度缓存、分栏
-拖拽状态机与窗口级拖拽覆盖层；渲染树改为左引擎/GTP 栏 + 中央棋盘/
-工具栏 + 右插件/变化树/节点检查器/设置栏，分栏 handle 可拖拽，松手后
-写入 `view.leftsidebar_width` / `view.sidebar_width`；工具栏新增
-Engines/Panels 显隐按钮；`frontend_smoke` 断言三栏不重叠、左右栏初始
-宽度、引擎面板位于左栏、其他面板位于右栏，并模拟拖拽左分栏 +60px 后
-宽度与设置持久化。`cargo test --workspace` **301 测试全绿**。原生
-screenshot 仍待 gpui 上游能力或 blade offscreen 方案（见
-`docs/beta-gate.md`）。
+**最近迭代（2026-08-15）：** 迭代 29「M1 中央模式栏第一半」已完成。
+新增 `mode_bar.rs`：Play/Edit/Scoring/Estimator 模式按钮、PlayBar 棋手
+名称/段位/当前手方、Pass/Resign、EditBar 迁入 markup toolbar、Scoring/
+Estimator 显示计分摘要；`ShellApp.mode` 替代 `scoring_mode`；棋盘支持
+`view.coordinates_type`（A1 / 1-1，A1 行号从底部计数）、`view.show_next_moves`
+子着 ghost stone、`view.show_siblings` 兄弟变化 ghost stone、
+`view.show_move_colorization` 子着注释标签；设置面板新增 4 个棋盘显示键。
+`cargo test --workspace` **304 测试全绿**。原生 screenshot 仍待 gpui
+上游能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
 
 ---
 
@@ -134,12 +133,12 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | `domain-core` | 27 单元（含 9 计分器、标准/Tygem 让子摆位）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 26 测试：8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 + 2 声明式面板 manifest 校验 |
 | `sabaki-host` | 102 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析、干净新局根属性）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 112 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟（三栏 bounds、落子、Pass、分栏拖拽与持久化）、4 分栏纯函数、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `sabaki-gpui` | 115 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟（三栏 bounds、落子、Pass、分栏拖拽与持久化）、4 分栏纯函数、3 模式栏纯函数、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
-cargo test --workspace        # 全部测试（当前 301 个全绿）
+cargo test --workspace        # 全部测试（当前 304 个全绿）
 cargo test -p sabaki-host     # host 工作流
 cargo test -p sabaki-gpui     # GPUI 客户端
 cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
@@ -308,6 +307,23 @@ goban/工具栏/recovery/外部冲突，右栏承载 plugins、variation tree（
 bounds、左右初始宽度、引擎面板位于左栏、四个右栏面板顺序堆叠，并模拟
 拖拽左分栏 +60px 后断言宽度 310px 与设置持久化。
 
+
+**迭代 29（M1 中央模式栏第一半）已完成：**
+（1）新增 `mode_bar.rs`：`GameMode`（domain 已有）驱动 Play/Edit/
+Scoring/Estimator 四个模式按钮；PlayBar 显示 SGF `PB/PW/BR/WR` 棋手
+名称/段位与当前手方；Pass/Resign 入口；EditBar 复用 markup toolbar；
+Scoring/Estimator 显示操作提示与计分摘要。
+（2）`ShellApp.scoring_mode` 替换为 `mode: GameMode`；棋盘点击按模式
+分发（Scoring/Estimator 循环死活标记）；选择非 Play 工具自动进入 Edit；
+设置面板 scoring toggle 改为模式切换。
+（3）棋盘显示补齐第一半：`view.coordinates_type` 支持 A1（SGF 字母 +
+底部起算行号）与 1-1；`view.show_next_moves` 渲染子着 ghost stone；
+`view.show_siblings` 渲染兄弟变化 ghost stone；`view.show_move_colorization`
+在子着旁显示 BM/DO 等注释标签；设置面板新增对应键。
+（4）测试：`mode_bar.rs` 3 个纯函数测试；现有 115 GPUI 测试全绿。
+剩余 M1 第二半：线/箭头拖拽绘制、Find/Guess/Autoplay 模式与
+`view.move_numbers_type`（variation/hotspot）。
+
 **迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
@@ -363,9 +379,11 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 按优先级排序的后续候选迭代：
 
 1. **M0 三栏布局基座（迭代 28，已完成）**：`SplitPane` 拖拽分栏、
-   左右栏显隐与 `view.*_width` 持久化已落地；下一步是 M1。
-2. **M1 中央棋盘与模式栏（迭代 29-30，下一迭代）**：棋盘显示设置补齐、
-   play/scoring/estimator/edit/find/guess/autoplay 模式栏。
+   左右栏显隐与 `view.*_width` 持久化已落地。
+2. **M1 中央棋盘与模式栏（迭代 29-30，第一半已完成）**：迭代 29 已落地
+   Play/Edit/Scoring/Estimator 模式栏、坐标类型与 next/sibling ghost
+   stones；第二半继续线/箭头拖拽、Find/Guess/Autoplay、
+   `view.move_numbers_type`（variation/hotspot）。
 3. **M2 左栏引擎区（迭代 31）**：引擎角色列表 + GTP 控制台上下分栏。
 4. **M3 右栏（迭代 32-33）**：WinrateGraph + GameGraph + CommentBox。
 5. **M4/M5（迭代 34-37）**：Drawer、菜单、原生输入、主题 schema v2、

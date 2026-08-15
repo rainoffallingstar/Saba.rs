@@ -17,6 +17,8 @@ const STONE_SIZE_PX: f32 = 22.0;
 pub struct GobanRenderOptions {
     /// Draw A-T column and 1-19 row labels in the margins.
     pub show_coordinates: bool,
+    /// Coordinate label style: `A1` (SGF-style) or `1-1`.
+    pub coordinates_type: String,
     /// Draw the move number on each stone.
     pub show_move_numbers: bool,
     /// Move number per vertex (1-based), built from the document's moves.
@@ -24,6 +26,12 @@ pub struct GobanRenderOptions {
     /// Alive-stone overrides from `GameSnapshot.score_overrides`; overridden
     /// vertices get a cross marker.
     pub score_overrides: BTreeMap<Vertex, i8>,
+    /// Draw child-move ghost stones.
+    pub show_next_moves: bool,
+    /// Draw sibling-variation ghost stones.
+    pub show_siblings: bool,
+    /// Label child-move annotations next to ghost stones.
+    pub show_move_colorization: bool,
 }
 
 /// Builds the 1-based move number per vertex from a document's move list.
@@ -169,6 +177,35 @@ fn stone(color: Color, x: f32, y: f32, stone_black: u32, stone_white: u32) -> Di
         .border_1()
         .border_color(rgb(0x000000))
         .bg(stone_color)
+}
+
+/// Renders a child or sibling ghost stone. Child moves are filled; sibling
+/// variations are outlined so the current line stays visually dominant.
+fn ghost_stone(
+    color: Color,
+    x: f32,
+    y: f32,
+    stone_black: u32,
+    stone_white: u32,
+    filled: bool,
+) -> Div {
+    let size = 14.0;
+    let stone_color = match color {
+        Color::Black => rgb(stone_black),
+        Color::White => rgb(stone_white),
+    };
+    let mut ghost = div()
+        .absolute()
+        .left(px(x - size / 2.0))
+        .top(px(y - size / 2.0))
+        .size(px(size))
+        .rounded_full()
+        .border_1()
+        .border_color(stone_color);
+    if filled {
+        ghost = ghost.bg(stone_color);
+    }
+    ghost
 }
 
 /// Renders a move number centered on a stone, in the contrast color.
@@ -338,6 +375,57 @@ pub fn render_goban(
         }
     }
 
+    // Ghost stones for sibling variations and child moves.
+    if options.show_siblings {
+        for variation in &board.siblings_info {
+            let (x, y) = intersection_position(
+                board,
+                board_pixel_size,
+                variation.vertex.column,
+                variation.vertex.row,
+            );
+            children.push(ghost_stone(
+                variation.color,
+                x,
+                y,
+                stone_black,
+                stone_white,
+                false,
+            ));
+        }
+    }
+    if options.show_next_moves {
+        for variation in &board.children_info {
+            let (x, y) = intersection_position(
+                board,
+                board_pixel_size,
+                variation.vertex.column,
+                variation.vertex.row,
+            );
+            children.push(ghost_stone(
+                variation.color,
+                x,
+                y,
+                stone_black,
+                stone_white,
+                true,
+            ));
+            if options.show_move_colorization {
+                if let Some(annotation) = variation.annotation.as_deref() {
+                    children.push(
+                        div()
+                            .absolute()
+                            .left(px(x + 8.0))
+                            .top(px(y - 7.0))
+                            .text_xs()
+                            .text_color(rgb(0xc0392b))
+                            .child(annotation.to_owned()),
+                    );
+                }
+            }
+        }
+    }
+
     // Last-move indicator on the current vertex.
     if let Some(current) = board.current_vertex {
         let (x, y) = intersection_position(board, board_pixel_size, current.column, current.row);
@@ -398,6 +486,7 @@ pub fn render_goban(
 
     // Coordinates in the margins.
     if options.show_coordinates {
+        let numeric_coordinates = options.coordinates_type == "1-1";
         for column in 0..width {
             let (x, _) = intersection_position(board, board_pixel_size, column, 0);
             children.push(
@@ -412,7 +501,11 @@ pub fn render_goban(
                     .justify_center()
                     .text_xs()
                     .text_color(rgb(coordinate_color))
-                    .child(column_letter(column).to_string()),
+                    .child(if numeric_coordinates {
+                        (column + 1).to_string()
+                    } else {
+                        column_letter(column).to_string()
+                    }),
             );
         }
         for row in 0..height {
@@ -429,7 +522,11 @@ pub fn render_goban(
                     .justify_center()
                     .text_xs()
                     .text_color(rgb(coordinate_color))
-                    .child((row + 1).to_string()),
+                    .child(if numeric_coordinates {
+                        (row + 1).to_string()
+                    } else {
+                        (height - row).to_string()
+                    }),
             );
         }
     }

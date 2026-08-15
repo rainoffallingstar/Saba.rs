@@ -15,7 +15,11 @@ use serde_json::Value;
 pub const PANEL_SETTING_KEYS: &[&str] = &[
     "board.show_analysis",
     "view.show_coordinates",
+    "view.coordinates_type",
     "view.show_move_numbers",
+    "view.show_move_colorization",
+    "view.show_next_moves",
+    "view.show_siblings",
     "view.show_comments",
     "view.show_graph",
     "gtp.console_log_enabled",
@@ -134,7 +138,11 @@ pub fn setting_label(key: &str) -> &'static str {
     match key {
         "board.show_analysis" => "Show analysis",
         "view.show_coordinates" => "Show coordinates",
+        "view.coordinates_type" => "Coordinates style (A1 or 1-1)",
         "view.show_move_numbers" => "Show move numbers",
+        "view.show_move_colorization" => "Colorize next moves",
+        "view.show_next_moves" => "Show next moves",
+        "view.show_siblings" => "Show sibling variations",
         "view.show_comments" => "Show comments",
         "view.show_graph" => "Show game graph",
         "gtp.console_log_enabled" => "Log GTP console",

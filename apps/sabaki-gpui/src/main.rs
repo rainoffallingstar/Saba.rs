@@ -6,6 +6,7 @@ mod file_workflow;
 mod goban_view;
 mod layout;
 mod markup;
+mod mode_bar;
 mod navigation;
 mod node_inspector;
 mod panels;
@@ -35,7 +36,7 @@ use gpui::{
 };
 use sabaki_domain_core::gtp::AnalysisStream;
 use sabaki_domain_core::legacy::handicap_placement;
-use sabaki_domain_core::{Color, Vertex};
+use sabaki_domain_core::{Color, GameMode, Vertex};
 use sabaki_host::{HostPersistence, replay_position_stream};
 
 use crate::benchmark::{LargeGameBenchmark, SnapshotBenchmark};
@@ -137,7 +138,7 @@ struct ShellApp {
     installed_plugins: Vec<PluginPanelEntry>,
     last_vertex: Option<Vertex>,
     active_tool: MarkupTool,
-    scoring_mode: bool,
+    mode: GameMode,
     comment_focus_handle: FocusHandle,
     comment_draft: SharedString,
     benchmark: SharedString,
@@ -357,7 +358,7 @@ impl ShellApp {
             installed_plugins,
             last_vertex: None,
             active_tool: MarkupTool::Play,
-            scoring_mode: false,
+            mode: GameMode::Play,
             comment_focus_handle: cx.focus_handle(),
             comment_draft: "".into(),
             benchmark: benchmark_result.summary().into(),
@@ -1678,6 +1679,11 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn on_resign(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.status = "resign is not implemented yet".into();
+        cx.notify();
+    }
+
     /// Starts a splitter drag from a divider's mouse-down position.
     fn begin_split_drag(&mut self, pane: SplitPane, position: f32, cx: &mut Context<Self>) {
         let start_size = match pane {
@@ -2071,7 +2077,7 @@ impl ShellApp {
     /// the click to a vertex before calling this, so the handler no longer
     /// depends on the board's window-global origin or the surrounding layout.
     fn on_board_vertex_clicked(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
-        if self.scoring_mode {
+        if matches!(self.mode, GameMode::Scoring | GameMode::Estimator) {
             self.scoring_at(vertex, cx);
         } else if self.active_tool.is_setup_tool() {
             self.setup_at(vertex, cx);
@@ -2208,6 +2214,29 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn set_mode(&mut self, mode: GameMode, cx: &mut Context<Self>) {
+        self.mode = mode;
+        self.status = match mode {
+            GameMode::Play => "play mode".into(),
+            GameMode::Edit => "edit mode: choose a tool".into(),
+            GameMode::Scoring => "scoring mode: click stones to cycle dead/alive".into(),
+            GameMode::Estimator => {
+                "estimator mode: heuristic area estimate (Monte Carlo not wired)".into()
+            }
+        };
+        cx.notify();
+    }
+
+    fn on_mode_selected(
+        &mut self,
+        mode: GameMode,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_mode(mode, cx);
+    }
+
     /// Toggles the scoring mode: while active, board clicks cycle scoring
     /// overrides instead of placing moves.
     fn on_scoring_mode_toggle(
@@ -2216,17 +2245,21 @@ impl ShellApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.scoring_mode = !self.scoring_mode;
-        self.status = if self.scoring_mode {
-            "scoring mode: click stones to cycle dead/alive".into()
-        } else {
-            "scoring mode off".into()
-        };
-        cx.notify();
+        self.set_mode(
+            if self.mode == GameMode::Scoring {
+                GameMode::Play
+            } else {
+                GameMode::Scoring
+            },
+            cx,
+        );
     }
 
     fn on_tool_selected(&mut self, tool: MarkupTool, cx: &mut Context<Self>) {
         self.active_tool = tool;
+        if tool != MarkupTool::Play {
+            self.mode = GameMode::Edit;
+        }
         self.status = format!("tool: {}", tool.label()).into();
         cx.notify();
     }
@@ -2430,8 +2463,10 @@ impl Render for ShellApp {
                                 self,
                                 cx,
                             ))
+                            .child(crate::mode_bar::render_mode_bar(
+                                &snapshot, self, palette, cx,
+                            ))
                             .child(panels::render_toolbar_row(
-                                self.active_tool,
                                 availability,
                                 &position,
                                 show_left_sidebar,
@@ -2977,7 +3012,7 @@ mod headless_smoke {
     use super::ShellApp;
     use crate::dialog_service::MockDialogService;
     use gpui::{AppContext, Entity};
-    use sabaki_domain_core::{Color, Vertex};
+    use sabaki_domain_core::{Color, GameMode, Vertex};
     use sabaki_host::SettingsStore;
     use std::path::PathBuf;
 
@@ -3061,7 +3096,7 @@ mod headless_smoke {
     #[test]
     fn headless_shell_toggles_scoring_mode_and_applies_an_override() {
         with_headless_shell("scoring", |shell| {
-            shell.scoring_mode = true;
+            shell.mode = GameMode::Scoring;
             let vertex = Vertex { column: 3, row: 3 };
             let current = shell.host.snapshot().score_overrides.get(&vertex).copied();
             let transaction = crate::markup::create_scoring_transaction(
