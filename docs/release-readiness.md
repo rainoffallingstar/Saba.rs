@@ -71,7 +71,7 @@ candidate builds on every runner. There is no published GitHub Release yet.
 | Install, upgrade, rollback and uninstall | Not tested | Test candidate artifacts on clean macOS, Windows and Linux systems. |
 | Native screenshot / GPU CI | Partial | Keep full-window test-platform smoke plus manual visual QA; track upstream snapshot support. |
 | Electron parity comparison | Not run for candidate | Run identical fixtures against `refer-repo/` and classify every delta. |
-| Real GTP engine smoke | Not run for candidate | Test KataGo and one second engine through play, analysis, stop and save/reopen. |
+| Real GTP engine smoke | KataGo partial evidence; second engine absent | On macOS 26 / Apple M4, Homebrew KataGo 1.17.2 with bundled `kata1-b18c384nbt-s9996604416-d4316597426.bin.gz` completed GTP handshake, 9×9 setup, `play B D4`, and `genmove W` (`F6`) through Metal. `generate_optimized_gtp_config` was corrected for its required logging keys. Still test streaming analysis, stop/detach/reconnect, SGF analysis persistence, abnormal exit, and a second engine. |
 | Local GPUI patches | Governed locally; upstream tracking absent | `gpui-patch-register.md` + `scripts/verify-gpui-patch.sh` record baseline, license, seams and removal criteria. Guard runs in CI plus release/Flatpak jobs (structural-only if their toolchain is not installed); still obtain upstream issue/PR URLs and repeat native macOS scenarios each RC. |
 
 ## Explicit non-claims

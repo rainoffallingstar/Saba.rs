@@ -132,6 +132,14 @@ cargo build --release --locked -p sabaki-gpui
 
 记录引擎版本、模型、OS 和结果。
 
+**当前本机 KataGo 证据（2026-08-24）：** macOS 26 / Apple M4 上的 Homebrew
+KataGo `1.17.2`（Metal backend）使用 formula 自带
+`kata1-b18c384nbt-s9996604416-d4316597426.bin.gz`，完成 GTP handshake、9×9
+`boardsize`/`clear_board`、`play B D4` 和 `genmove W`（`F6`）。首次 smoke 暴露
+`generate_optimized_gtp_config` 缺少 KataGo 1.17.2 必需的 logging keys，已修正并
+重新验证无 unused-config warning。该项只覆盖 play/genmove；流式 analysis、stop、
+detach/reconnect、分析属性保存/重开、异常退出与第二引擎仍未完成。
+
 ### P1.5 Electron 并行回归
 
 从 `refer-repo/` 选择同一组 fixture，在 Electron 与 GPUI 中执行：
