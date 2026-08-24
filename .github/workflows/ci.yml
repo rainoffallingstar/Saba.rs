@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         # GPUI (default features) needs FreeType/fontconfig for font-kit,
@@ -32,7 +34,12 @@ jobs:
             ~/.cargo/registry/cache/
             target/
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Verify vendored GPUI patch contract
+        shell: bash
+        run: ./scripts/verify-gpui-patch.sh
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+      - name: Check Clippy lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test Rust workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --locked

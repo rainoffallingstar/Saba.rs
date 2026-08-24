@@ -1,83 +1,60 @@
 #!/usr/bin/env bash
-# Builds a macOS release of the GPUI client and bundles it into a .app
-# directory, then packages a .dmg.
-#
-# Requirements: a working Rust toolchain (release build), and `hdiutil` for
-# the dmg step. No Xcode needed — the GPUI client uses the macos-blade
-# backend, which builds with only the Command Line Tools.
-#
-# Usage: scripts/bundle-macos.sh [output-dir]
-#   output-dir defaults to "dist/macos".
-
+# Builds the native Saba.rs client into a macOS .app and .dmg.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-$ROOT_DIR/dist/macos}"
 APP_NAME="Saba.rs"
+BUNDLE_ID="dev.saba-rs.app"
+EXECUTABLE="saba-rs"
+VERSION="$("$ROOT_DIR/scripts/release-version.sh")"
 BUNDLE_DIR="$OUTPUT_DIR/$APP_NAME.app"
 
-echo "==> Building release binary"
-cargo build --release -p sabaki-gpui
+cd "$ROOT_DIR"
+echo "==> Building Saba.rs $VERSION"
+cargo build --release --locked -p sabaki-gpui --bin "$EXECUTABLE"
+BINARY="$ROOT_DIR/target/release/$EXECUTABLE"
+test -x "$BINARY" || { echo "error: release binary not found: $BINARY" >&2; exit 1; }
 
-BINARY="$(find "$ROOT_DIR/target/release" -maxdepth 1 -type f -perm -111 -name 'sabaki-gpui' | head -1)"
-if [[ -z "$BINARY" ]]; then
-  echo "error: release binary not found" >&2
-  exit 1
-fi
-
-echo "==> Assembling $BUNDLE_DIR"
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
+cp "$BINARY" "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE"
 
-cp "$BINARY" "$BUNDLE_DIR/Contents/MacOS/$APP_NAME"
-
-# A minimal Info.plist; the icon is intentionally omitted until real artwork
-# exists (the app still launches without one).
 cat > "$BUNDLE_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key>
-    <string>dev.saba-rs.app</string>
-    <key>CFBundleVersion</key>
-    <string>0.1.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>$APP_NAME</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-</dict>
-</plist>
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>CFBundleDocumentTypes</key><array>
+    <dict><key>CFBundleTypeName</key><string>Smart Game Format</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSItemContentTypes</key><array><string>dev.saba-rs.sgf</string></array><key>CFBundleTypeExtensions</key><array><string>sgf</string></array></dict>
+    <dict><key>CFBundleTypeName</key><string>CyberOro Go File</string><key>CFBundleTypeRole</key><string>Viewer</string><key>CFBundleTypeExtensions</key><array><string>ngf</string></array></dict>
+    <dict><key>CFBundleTypeName</key><string>Tygem Go File</string><key>CFBundleTypeRole</key><string>Viewer</string><key>CFBundleTypeExtensions</key><array><string>gib</string></array></dict>
+    <dict><key>CFBundleTypeName</key><string>PandaNet UGF File</string><key>CFBundleTypeRole</key><string>Viewer</string><key>CFBundleTypeExtensions</key><array><string>ugf</string></array></dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>dev.saba-rs.sgf</string>
+    <key>UTTypeDescription</key><string>Smart Game Format</string>
+    <key>UTTypeConformsTo</key><array><string>public.text</string><string>public.data</string></array>
+    <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>sgf</string></array><key>public.mime-type</key><array><string>application/x-go-sgf</string></array></dict>
+  </dict></array>
+</dict></plist>
 PLIST
 
-# Ad-hoc signature so the bundle runs locally without a Developer ID.
-echo "==> Ad-hoc signing"
+# A Developer ID/notarization flow replaces this ad-hoc signature in P3.
 codesign --force --deep -s - "$BUNDLE_DIR"
-
-echo "==> Packaging dmg"
-DMG_PATH="$OUTPUT_DIR/$APP_NAME-0.1.0.dmg"
+DMG_PATH="$OUTPUT_DIR/saba-rs-v$VERSION-macos.dmg"
 rm -f "$DMG_PATH"
-# Some environments (containers, restricted CI sandboxes) cannot create disk
-# images; the .app is still complete and valid there, so a dmg failure is
-# reported but not fatal.
 if ! hdiutil create -volname "$APP_NAME" -srcfolder "$BUNDLE_DIR" -ov -format UDZO "$DMG_PATH" >/dev/null 2>&1; then
-  echo "warning: hdiutil could not create the dmg in this environment; the .app bundle is unaffected"
+  echo "warning: could not create dmg; the complete .app remains at $BUNDLE_DIR" >&2
 fi
-
-echo "==> Done"
-echo "  app: $BUNDLE_DIR"
-if [[ -f "$DMG_PATH" ]]; then
-  echo "  dmg: $DMG_PATH"
-fi
+printf 'app: %s\n' "$BUNDLE_DIR"
+test ! -f "$DMG_PATH" || printf 'dmg: %s\n' "$DMG_PATH"

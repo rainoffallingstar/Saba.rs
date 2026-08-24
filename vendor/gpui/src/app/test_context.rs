@@ -158,6 +158,11 @@ impl TestAppContext {
         self.test_platform.did_prompt_for_new_path()
     }
 
+    /// Simulates a native keyboard input-source notification.
+    pub fn simulate_keyboard_layout_change(&self) {
+        self.test_platform.simulate_keyboard_layout_change();
+    }
+
     /// returns a new `TestAppContext` re-using the same executors to interleave tasks.
     pub fn new_app(&self) -> TestAppContext {
         Self::build(self.dispatcher.clone(), self.fn_name)

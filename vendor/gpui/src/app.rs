@@ -672,13 +672,14 @@ impl App {
         platform.on_keyboard_layout_change(Box::new({
             let app = Rc::downgrade(&app);
             move || {
-                if let Some(app) = app.upgrade() {
-                    let cx = &mut app.borrow_mut();
+                if let Some(app) = app.upgrade()
+                    && let Ok(mut cx) = app.try_borrow_mut()
+                {
                     cx.keyboard_layout = cx.platform.keyboard_layout();
                     cx.keyboard_mapper = cx.platform.keyboard_mapper();
                     cx.keyboard_layout_observers
                         .clone()
-                        .retain(&(), move |callback| (callback)(cx));
+                        .retain(&(), move |callback| (callback)(&mut cx));
                 }
             }
         }));
@@ -2426,6 +2427,30 @@ mod test {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::{AppContext, TestAppContext};
+
+    #[test]
+    fn keyboard_layout_change_skips_a_reentrant_app_borrow() {
+        let cx = TestAppContext::single();
+        // Native file dialogs run a nested AppKit event loop. macOS can send a
+        // keyboard-input-source notification while a menu action already has
+        // this App mutably borrowed; that notification must not abort Rust.
+        let _action_borrow = cx.app.borrow_mut();
+        cx.simulate_keyboard_layout_change();
+    }
+
+    #[test]
+    fn keyboard_layout_change_notifies_observers_when_not_reentrant() {
+        let mut cx = TestAppContext::single();
+        let notifications = Rc::new(RefCell::new(0));
+        let subscription = cx.update(|app| {
+            let notifications = notifications.clone();
+            app.on_keyboard_layout_change(move |_| *notifications.borrow_mut() += 1)
+        });
+
+        cx.simulate_keyboard_layout_change();
+        assert_eq!(*notifications.borrow(), 1);
+        drop(subscription);
+    }
 
     #[test]
     fn test_gpui_borrow() {

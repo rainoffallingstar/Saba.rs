@@ -1,6 +1,10 @@
 /target/
 /dist/
 
+# Archived upstream Electron/Tauri reference repository. It keeps its own Git
+# history locally and is intentionally excluded from the Rust/GPUI mainline.
+/refer-repo/
+
 # Editor / OS noise
 .DS_Store
 *.swp

@@ -308,6 +308,10 @@ unsafe fn build_window_class(name: &'static str, superclass: &Class) -> *const C
             window_will_exit_fullscreen as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
+            sel!(windowDidExitFullScreen:),
+            window_did_exit_fullscreen as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
             sel!(windowDidMove:),
             window_did_move as extern "C" fn(&Object, Sel, id),
         );
@@ -405,7 +409,6 @@ struct MacWindowState {
     last_key_equivalent: Option<KeyDownEvent>,
     synthetic_drag_counter: usize,
     traffic_light_position: Option<Point<Pixels>>,
-    transparent_titlebar: bool,
     previous_modifiers_changed_event: Option<PlatformInput>,
     keystroke_for_do_command: Option<Keystroke>,
     do_command_handled: Option<bool>,
@@ -413,6 +416,9 @@ struct MacWindowState {
     // Whether the next left-mouse click is also the focusing click.
     first_mouse: bool,
     fullscreen_restore_bounds: Bounds<Pixels>,
+    /// AppKit changes window style and view frames while exiting fullscreen.
+    /// Blade resource reconfiguration is unsafe in that transition.
+    fullscreen_exit_in_progress: bool,
     move_tab_to_new_window_callback: Option<Box<dyn FnMut()>>,
     merge_all_windows_callback: Option<Box<dyn FnMut()>>,
     select_next_tab_callback: Option<Box<dyn FnMut()>>,
@@ -710,15 +716,13 @@ impl MacWindow {
                 traffic_light_position: titlebar
                     .as_ref()
                     .and_then(|titlebar| titlebar.traffic_light_position),
-                transparent_titlebar: titlebar
-                    .as_ref()
-                    .is_none_or(|titlebar| titlebar.appears_transparent),
                 previous_modifiers_changed_event: None,
                 keystroke_for_do_command: None,
                 do_command_handled: None,
                 external_files_dragged: false,
                 first_mouse: false,
                 fullscreen_restore_bounds: Bounds::default(),
+                fullscreen_exit_in_progress: false,
                 move_tab_to_new_window_callback: None,
                 merge_all_windows_callback: None,
                 select_next_tab_callback: None,
@@ -1942,15 +1946,24 @@ extern "C" fn window_will_enter_fullscreen(this: &Object, _: Sel, _: id) {
 
 extern "C" fn window_will_exit_fullscreen(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
+    // AppKit changes NSWindow's style mask and resizes its content view until
+    // `windowDidExitFullScreen:`. Reconfiguring Blade's Metal surface inside
+    // those callbacks can release an invalid drawable on macOS 26.
+    window_state.as_ref().lock().fullscreen_exit_in_progress = true;
+}
+
+extern "C" fn window_did_exit_fullscreen(this: &Object, _: Sel, _: id) {
+    let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.as_ref().lock();
+    lock.fullscreen_exit_in_progress = false;
 
-    let min_version = NSOperatingSystemVersion::new(15, 3, 0);
-
-    if is_macos_version_at_least(min_version) && lock.transparent_titlebar {
-        unsafe {
-            lock.native_window.setTitlebarAppearsTransparent_(YES);
-        }
-    }
+    // Do NOT recreate the drawable here. AppKit's
+    // `_NSExitFullScreenTransitionController setupWindowForAfterFullScreenExit`
+    // fires immediately after this callback and triggers `set_frame_size`,
+    // which already calls `update_drawable_size` for the final content size.
+    // Recreating the Metal surface here as well causes a double
+    // `reconfigure_surface` that releases an already-freed CAMetalLayer
+    // (use-after-free / SIGSEGV on macOS 26).
 }
 
 pub(crate) fn is_macos_version_at_least(version: NSOperatingSystemVersion) -> bool {
@@ -2091,7 +2104,9 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel) {
         ];
     }
 
-    lock.renderer.update_drawable_size(drawable_size);
+    if !lock.fullscreen_exit_in_progress {
+        lock.renderer.update_drawable_size(drawable_size);
+    }
 
     if let Some(mut callback) = lock.resize_callback.take() {
         let content_size = lock.content_size();
@@ -2122,7 +2137,9 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
 
     let scale_factor = lock.scale_factor();
     let drawable_size = new_size.to_device_pixels(scale_factor);
-    lock.renderer.update_drawable_size(drawable_size);
+    if !lock.fullscreen_exit_in_progress {
+        lock.renderer.update_drawable_size(drawable_size);
+    }
 
     if let Some(mut callback) = lock.resize_callback.take() {
         let content_size = lock.content_size();

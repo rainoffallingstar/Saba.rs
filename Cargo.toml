@@ -6,3 +6,17 @@ members = [
   "apps/sabaki-gpui",
 ]
 resolver = "2"
+exclude = ["vendor/gpui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Saba.rs Contributors"]
+license = "MIT"
+repository = "https://github.com/rainoffallingstar/Saba.rs"
+
+# Local GPUI 0.2.2 patch: defer a transparent-titlebar mutation while macOS
+# exits fullscreen. On macOS 26 this mutation re-enters AppKit frame resizing
+# and crashes BladeRenderer::update_drawable_size (see vendor/gpui patch).
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }

@@ -1,0 +1,34 @@
+# Saba.rs Flatpak manifest. Build with:
+# flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.sabars.app.yml
+app-id: dev.sabars.app
+runtime: org.freedesktop.Platform//24.08
+sdk: org.freedesktop.Sdk//24.08
+command: saba-rs
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=xdg-config/saba-rs:create
+  - --filesystem=xdg-config/sabaki-gpui:create
+
+modules:
+  - name: saba-rs
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/saba-rs/cargo-home
+        CARGO_TARGET_DIR: /run/build/saba-rs/target
+    build-commands:
+      - cargo build --release --locked -p sabaki-gpui --bin saba-rs
+      - install -Dm755 target/release/saba-rs /app/bin/saba-rs
+      - install -Dm644 LICENSE.md /app/share/licenses/saba-rs/LICENSE.md
+      - install -Dm644 flatpak/dev.sabars.app.desktop /app/share/applications/dev.sabars.app.desktop
+      - install -Dm644 flatpak/dev.sabars.app.xml /app/share/mime/packages/dev.sabars.app.xml
+    sources:
+      - type: dir
+        path: ..

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Saba.rs
+Comment=Modern Go board and SGF editor
+Exec=saba-rs %F
+Icon=dev.sabars.app
+Terminal=false
+Type=Application
+Categories=Game;BoardGame;
+MimeType=application/x-go-sgf;application/x-cyberoro-ngf;application/x-tygem-gib;application/x-pandanet-ugf;
+StartupWMClass=saba-rs

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-go-sgf"><comment>Smart Game Format</comment><glob pattern="*.sgf"/><sub-class-of type="text/plain"/></mime-type>
+  <mime-type type="application/x-cyberoro-ngf"><comment>CyberOro Go File</comment><glob pattern="*.ngf"/></mime-type>
+  <mime-type type="application/x-tygem-gib"><comment>Tygem Go File</comment><glob pattern="*.gib"/></mime-type>
+  <mime-type type="application/x-pandanet-ugf"><comment>PandaNet UGF File</comment><glob pattern="*.ugf"/></mime-type>
+</mime-info>

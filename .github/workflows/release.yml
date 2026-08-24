@@ -17,6 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify vendored GPUI patch contract
+        shell: bash
+        run: ./scripts/verify-gpui-patch.sh
+      - name: Set release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "APP_VERSION=$(./scripts/release-version.sh)" >> "$GITHUB_ENV"
+          fi
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev
@@ -30,7 +41,7 @@ jobs:
             target/
           key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Build release binary
-        run: cargo build --release -p sabaki-gpui
+        run: cargo build --release --locked -p sabaki-gpui --bin saba-rs
 
       - name: Package macOS app and dmg
         if: runner.os == 'macOS'
@@ -48,9 +59,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/linux
-          cp target/release/sabaki-gpui dist/linux/saba-rs
+          cp target/release/saba-rs dist/linux/saba-rs
           cp README.md LICENSE.md dist/linux/
-          tar -czf dist/linux/saba-rs-linux-x86_64.tar.gz -C dist/linux saba-rs README.md LICENSE.md
+          tar -czf "dist/linux/saba-rs-v${APP_VERSION}-linux-x86_64.tar.gz" -C dist/linux saba-rs README.md LICENSE.md
       - name: Package Linux AppImage
         if: runner.os == 'Linux'
         run: ./scripts/bundle-linux-appimage.sh
@@ -66,9 +77,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/windows | Out-Null
-          Copy-Item target/release/sabaki-gpui.exe dist/windows/saba-rs.exe
+          Copy-Item target/release/saba-rs.exe dist/windows/saba-rs.exe
           Copy-Item README.md, LICENSE.md dist/windows/
-          Compress-Archive -Path dist/windows/saba-rs.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath dist/windows/saba-rs-windows-x86_64.zip -Force
+          Compress-Archive -Path dist/windows/saba-rs.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath "dist/windows/saba-rs-v$env:APP_VERSION-windows-x86_64.zip" -Force
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -83,8 +94,7 @@ jobs:
           } else {
             $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe'
           }
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.1.0' }
-          & $makensis /DAPP_VERSION=$version /DROOT_DIR=$env:GITHUB_WORKSPACE scripts\installer.nsi
+          & $makensis /DAPP_VERSION=$env:APP_VERSION /DROOT_DIR=$env:GITHUB_WORKSPACE scripts\installer.nsi
       - name: Upload Windows artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -96,6 +106,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify vendored GPUI patch contract
+        shell: bash
+        run: ./scripts/verify-gpui-patch.sh
+      - name: Set release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "APP_VERSION=$(./scripts/release-version.sh)" >> "$GITHUB_ENV"
+          fi
       - name: Install Flatpak tooling
         run: |
           sudo apt-get update
@@ -107,13 +128,13 @@ jobs:
             org.freedesktop.Sdk.Extension.rust-stable//24.08
       - name: Build Flatpak bundle
         run: |
-          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.saba-rs.app.yml
-          flatpak build-bundle flatpak-repo saba-rs-linux-x86_64.flatpak dev.sabars.app
+          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.sabars.app.yml
+          flatpak build-bundle flatpak-repo "saba-rs-v${APP_VERSION}-linux-x86_64.flatpak" dev.sabars.app
       - name: Upload Flatpak artifact
         uses: actions/upload-artifact@v4
         with:
           name: saba-rs-flatpak
-          path: saba-rs-linux-x86_64.flatpak
+          path: saba-rs-v*-linux-x86_64.flatpak
 
   publish:
     needs: [release, flatpak]
@@ -128,6 +149,11 @@ jobs:
           merge-multiple: true
       - name: Strip bundle directories from release assets
         run: find artifacts -maxdepth 2 -name '*.app' -type d -exec rm -rf {} +
+      - name: Generate SHA-256 checksums
+        run: |
+          cd artifacts
+          find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

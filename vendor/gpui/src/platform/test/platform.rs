@@ -33,6 +33,7 @@ pub(crate) struct TestPlatform {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     current_primary_item: Mutex<Option<ClipboardItem>>,
     pub(crate) prompts: RefCell<TestPrompts>,
+    keyboard_layout_change: RefCell<Option<Box<dyn FnMut()>>>,
     screen_capture_sources: RefCell<Vec<TestScreenCaptureSource>>,
     pub opened_url: RefCell<Option<String>>,
     pub text_system: Arc<dyn PlatformTextSystem>,
@@ -108,6 +109,7 @@ impl TestPlatform {
             background_executor: executor,
             foreground_executor,
             prompts: Default::default(),
+            keyboard_layout_change: Default::default(),
             screen_capture_sources: Default::default(),
             active_cursor: Default::default(),
             active_display: Rc::new(TestDisplay::new()),
@@ -219,6 +221,14 @@ impl TestPlatform {
     pub(crate) fn did_prompt_for_new_path(&self) -> bool {
         !self.prompts.borrow().new_path.is_empty()
     }
+
+    pub(crate) fn simulate_keyboard_layout_change(&self) {
+        let Some(mut callback) = self.keyboard_layout_change.borrow_mut().take() else {
+            panic!("no keyboard-layout callback was registered");
+        };
+        callback();
+        self.keyboard_layout_change.borrow_mut().get_or_insert(callback);
+    }
 }
 
 impl Platform for TestPlatform {
@@ -242,7 +252,9 @@ impl Platform for TestPlatform {
         Rc::new(DummyKeyboardMapper)
     }
 
-    fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
+        self.keyboard_layout_change.borrow_mut().replace(callback);
+    }
 
     fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!()

@@ -1,8 +1,11 @@
 [package]
 name = "sabaki-host"
-version = "0.1.0"
-description = "UI-independent Sabaki application workflows"
-edition = "2024"
+version.workspace = true
+description = "UI-independent Saba.rs application workflows"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [dependencies]

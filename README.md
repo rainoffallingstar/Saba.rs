@@ -17,12 +17,18 @@ crates/plugin-runtime   Plugin manifests, permission model, JSON-RPC framing, na
 crates/sabaki-host      UI-independent application workflows (open/save/recovery/settings/engines/plugins)
 apps/sabaki-gpui        The GPUI client (active development target)
 examples/               Fake GTP engine for subprocess smoke tests; example plugins
+refer-repo/             Local Electron/Tauri Sabaki reference checkout (Git-ignored)
 ```
+
+The repository root is the only active Saba.rs mainline. `refer-repo/` keeps the
+legacy Sabaki implementation and its independent Git history for behavior and
+UI comparison; it is intentionally excluded from Saba.rs commits, CI and
+releases.
 
 ## Building & testing
 
 ```bash
-cargo test --workspace   # all tests (201 across the workspace)
+cargo test --workspace   # full workspace test and doctest gate
 cargo run -p sabaki-gpui # launch the GPUI client (optional SGF path argument)
 SABAKI_CONFIG_DIR=/tmp/sg cargo run -p sabaki-gpui   # isolated config directory
 ```

@@ -1,9 +1,16 @@
 [package]
 name = "sabaki-gpui"
-version = "0.1.0"
-description = "The native Sabaki client built on GPUI"
-edition = "2024"
+version.workspace = true
+description = "The native Saba.rs client built on GPUI"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
+
+[[bin]]
+name = "saba-rs"
+path = "src/main.rs"
 
 [dependencies]
 gpui = { version = "0.2.2", features = ["font-kit", "macos-blade"] }
