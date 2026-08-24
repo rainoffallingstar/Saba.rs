@@ -613,6 +613,41 @@ pub fn render_player_bar(
                 )
                 .child(
                     div()
+                        .id("gtp-terminal-button")
+                        .debug_selector(|| "gtp-terminal-button".to_owned())
+                        .px_2()
+                        .py_0p5()
+                        .cursor_pointer()
+                        .rounded_md()
+                        .bg(if shell.gtp_terminal_open {
+                            rgb(0x2a2a3a)
+                        } else {
+                            rgb(0x1e1e1e)
+                        })
+                        .border_1()
+                        .border_color(if shell.gtp_terminal_open {
+                            rgb(shell.palette.accent)
+                        } else {
+                            rgb(0x3a3a3a)
+                        })
+                        .text_color(rgb(if shell.gtp_terminal_open {
+                            0x8ec5ff
+                        } else {
+                            0xe8e8e8
+                        }))
+                        .hover(|style| {
+                            style
+                                .bg(rgb(0x2e2e2e))
+                                .border_color(rgb(shell.palette.accent))
+                        })
+                        .child("💻 GTP 终端")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(ShellApp::toggle_gtp_terminal),
+                        ),
+                )
+                .child(
+                    div()
                         .id("plugin-menu-button")
                         .debug_selector(|| "plugin-menu-button".to_owned())
                         .px_2()
@@ -2695,16 +2730,263 @@ pub fn render_gtp_console_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Sta
                 .bg(rgb(shell.palette.input))
                 .text_color(rgb(shell.palette.text))
                 .text_xs()
-                .child(if shell.engine_draft.is_empty() {
+                .child(if shell.gtp_input.text().is_empty() {
                     format!("{selected}>")
                 } else {
-                    shell.engine_draft.to_string()
+                    shell.gtp_input.text().to_owned()
                 })
+                .child(NativeInputBinding::new(
+                    shell.engine_input_focus_handle.clone(),
+                    cx.entity().clone(),
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(ShellApp::on_engine_input_focus),
                 )
                 .on_key_down(cx.listener(ShellApp::on_engine_key_down)),
+        )
+}
+
+/// The pull-up bottom GTP terminal drawer, toggled from the bottom player bar.
+pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let selected_role = shell
+        .active_console_role
+        .unwrap_or(crate::engine_console::EngineRole::Analysis);
+    let selected_label = shell
+        .engine_roles
+        .get(selected_role)
+        .map(|name| format!("{} · {name}", selected_role.label()))
+        .unwrap_or_else(|| format!("{} (未配置引擎)", selected_role.label()));
+
+    div()
+        .id("gtp-terminal-drawer")
+        .debug_selector(|| "gtp-terminal-drawer".to_owned())
+        .absolute()
+        .bottom(px(42.0))
+        .left(px(16.0))
+        .right(px(16.0))
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .w_full()
+                .max_w(px(760.0))
+                .h(px(320.0))
+                .flex()
+                .flex_col()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(shell.palette.accent))
+                .bg(rgb(0x18181c))
+                .shadow_lg()
+                .child(
+                    // Header: Title + Role selection tabs + Clear + Close
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .pb_2()
+                        .border_b_1()
+                        .border_color(rgb(0x2a2a30))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(0xf2f2f5))
+                                        .child("💻 GTP 终端"),
+                                )
+                                // Role tabs
+                                .children([
+                                    crate::engine_console::EngineRole::Analysis,
+                                    crate::engine_console::EngineRole::Black,
+                                    crate::engine_console::EngineRole::White,
+                                ].into_iter().map(|role| {
+                                    let is_active = shell.active_console_role == Some(role);
+                                    let assigned_name = shell.engine_roles.get(role);
+                                    let is_attached = shell.engine_controller.is_attached(role);
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if is_active { rgb(shell.palette.accent) } else { rgb(0x3a3a42) })
+                                        .bg(if is_active { rgb(0x262630) } else { rgb(0x1e1e24) })
+                                        .text_xs()
+                                        .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0x9a9a9a) })
+                                        .child(format!(
+                                            "{} {}{}",
+                                            if is_attached { "●" } else { "○" },
+                                            role.label(),
+                                            assigned_name.map(|n| format!(" ({n})")).unwrap_or_default()
+                                        ))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                            shell.active_console_role = Some(role);
+                                            cx.notify();
+                                        }))
+                                }))
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(0x9a9a9a))
+                                        .hover(|style| style.text_color(rgb(0xf2f2f5)))
+                                        .child("清空日志")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            shell.engine_log.clear();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(0x9a9a9a))
+                                        .hover(|style| style.text_color(rgb(0xf2f2f5)))
+                                        .child("✕ 关闭")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::toggle_gtp_terminal)),
+                                )
+                        )
+                )
+                .child(
+                    // Transcript body
+                    div()
+                        .id("gtp-transcript")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .my_2()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0x121214))
+                        .border_1()
+                        .border_color(rgb(0x26262c))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_xs()
+                        .children(if shell.engine_log.is_empty() {
+                            vec![
+                                div()
+                                    .text_color(rgb(0x6e6e78))
+                                    .child(format!("GTP 终端就绪 [{selected_label}]。在下方输入框中输入指令或点击快捷操作。"))
+                            ]
+                        } else {
+                            shell.engine_log.iter().map(|entry| {
+                                let color = if entry.success {
+                                    rgb(0x34c759)
+                                } else {
+                                    rgb(0xff453a)
+                                };
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(div().text_color(rgb(0x8ec5ff)).child(format!("> {}", entry.command)))
+                                    .child(div().text_color(color).child(format!("= {}", entry.response)))
+                            }).collect()
+                        })
+                )
+                // Quick commands + Input row
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .children([
+                                    ("⚡ 开始分析", "kata-analyze B 10 rootInfo true"),
+                                    ("⏹ 停止", "stop"),
+                                    ("🎲 AI落子", "genmove B"),
+                                    ("🔄 清空", "clear_board"),
+                                    ("📋 列出指令", "list_commands"),
+                                ].into_iter().map(|(label, cmd)| {
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(rgb(0x24242c))
+                                        .border_1()
+                                        .border_color(rgb(0x383844))
+                                        .text_xs()
+                                        .text_color(rgb(0xd0d0d8))
+                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
+                                        .child(label)
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                            shell.send_engine_command(cmd, cx);
+                                        }))
+                                }))
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .track_focus(&shell.engine_input_focus_handle)
+                                        .px_3()
+                                        .py_1p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.accent))
+                                        .bg(rgb(0x121214))
+                                        .text_xs()
+                                        .text_color(rgb(0xf5f5f7))
+                                        .child(if shell.gtp_input.text().is_empty() {
+                                            "输入 GTP 指令 (如: name, genmove, kata-analyze, boardsize 19 等)，按 Enter 发送".to_owned()
+                                        } else {
+                                            shell.gtp_input.text().to_owned()
+                                        })
+                                        .child(NativeInputBinding::new(
+                                            shell.engine_input_focus_handle.clone(),
+                                            cx.entity().clone(),
+                                        ))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(ShellApp::on_engine_input_focus),
+                                        )
+                                        .on_key_down(cx.listener(ShellApp::on_engine_key_down)),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_3()
+                                        .py_1p5()
+                                        .rounded_md()
+                                        .bg(rgb(shell.palette.button))
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.border))
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(shell.palette.text))
+                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                        .child("发送 ↵")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            let draft = shell.gtp_input.text().to_owned();
+                                            shell.send_engine_command(&draft, cx);
+                                            shell.gtp_input.set_text("");
+                                            cx.notify();
+                                        })),
+                                )
+                        )
+                )
         )
 }
 

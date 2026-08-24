@@ -136,6 +136,7 @@ enum ActiveTextInput {
     Comment,
     NodeTitle,
     FoxQuery,
+    GtpInput,
 }
 
 struct ShellApp {
@@ -162,6 +163,8 @@ struct ShellApp {
     engine_draft: SharedString,
     engine_spec_draft: SharedString,
     engine_spec_focus_handle: FocusHandle,
+    gtp_terminal_open: bool,
+    gtp_input: NativeTextInput,
     fox_query_input: NativeTextInput,
     fox_query_focus_handle: FocusHandle,
     theme_choice: ThemeChoice,
@@ -414,6 +417,8 @@ impl ShellApp {
             engine_draft: "".into(),
             engine_spec_draft: "".into(),
             engine_spec_focus_handle: cx.focus_handle(),
+            gtp_terminal_open: false,
+            gtp_input: NativeTextInput::new(""),
             fox_query_input: NativeTextInput::new(""),
             fox_query_focus_handle: cx.focus_handle(),
             theme_choice,
@@ -626,9 +631,11 @@ impl ShellApp {
         &mut self,
         _: &MouseDownEvent,
         window: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        self.active_text_input = Some(ActiveTextInput::GtpInput);
         window.focus(&self.engine_input_focus_handle);
+        cx.notify();
     }
 
     fn on_engine_key_down(
@@ -637,27 +644,28 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut draft = self.engine_draft.to_string();
-        match event.keystroke.key.as_str() {
-            "backspace" => {
-                draft.pop();
-            }
-            "enter" => {
+        match Self::handle_text_input_key(&mut self.gtp_input, event) {
+            InputKeyResult::Submit => {
+                let draft = self.gtp_input.text().trim().to_owned();
                 self.send_engine_command(&draft, cx);
-                return;
-            }
-            "escape" => {
-                self.engine_draft = "".into();
+                self.gtp_input.set_text("");
                 cx.notify();
-                return;
             }
-            _ => {
-                if let Some(key_char) = event.keystroke.key_char.as_ref() {
-                    draft.push_str(key_char);
-                }
+            InputKeyResult::Cancel => {
+                self.gtp_input.set_text("");
+                cx.notify();
+            }
+            InputKeyResult::Changed | InputKeyResult::Ignored => {
+                cx.notify();
             }
         }
-        self.engine_draft = draft.into();
+    }
+
+    fn toggle_gtp_terminal(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.gtp_terminal_open = !self.gtp_terminal_open;
+        if self.gtp_terminal_open {
+            self.active_text_input = Some(ActiveTextInput::GtpInput);
+        }
         cx.notify();
     }
 
@@ -678,17 +686,24 @@ impl ShellApp {
         if draft.is_empty() {
             return;
         }
-        let Some(role) = self.active_console_role else {
-            self.status = "select an engine role for the GTP console".into();
-            cx.notify();
-            return;
-        };
+        let role = self
+            .active_console_role
+            .unwrap_or(crate::engine_console::EngineRole::Analysis);
         let (name, arguments) = Self::parse_engine_command_line(draft);
         let formatted = format_console_command(&name, &arguments);
         let result = match self.engine_controller.send(role, &name, arguments) {
             Ok(response) => Ok(response),
             Err(sabaki_host::EngineControllerError::Detached) => {
                 self.status = format!("{} engine is detached", role.label()).into();
+                self.record_engine_log(EngineLogEntry {
+                    command: formatted.clone(),
+                    success: false,
+                    response: format!(
+                        "{} engine is detached — please connect it first",
+                        role.label()
+                    ),
+                });
+                self.gtp_input.set_text("");
                 self.engine_draft = "".into();
                 cx.notify();
                 return;
@@ -718,6 +733,7 @@ impl ShellApp {
                 self.status = format!("{} engine failed: {error}", role.label()).into();
             }
         }
+        self.gtp_input.set_text("");
         self.engine_draft = "".into();
         cx.notify();
     }
@@ -3779,6 +3795,11 @@ impl Render for ShellApp {
             } else {
                 div().id("plugin-menu-hidden")
             })
+            .child(if self.gtp_terminal_open {
+                panels::render_gtp_terminal_drawer(self, cx)
+            } else {
+                div().id("gtp-terminal-hidden")
+            })
             .child(match self.active_drawer {
                 Some(ActiveDrawer::Preferences) => {
                     panels::render_preferences_drawer(&settings_rows, self, cx)
@@ -3854,6 +3875,7 @@ impl ShellApp {
             Some(ActiveTextInput::Comment) => Some(&mut self.comment_input),
             Some(ActiveTextInput::NodeTitle) => Some(&mut self.node_title_input),
             Some(ActiveTextInput::FoxQuery) => Some(&mut self.fox_query_input),
+            Some(ActiveTextInput::GtpInput) => Some(&mut self.gtp_input),
             None => None,
         }
     }
