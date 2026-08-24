@@ -64,7 +64,7 @@ pub fn parse_gtp_vertex(board_size: usize, text: &str) -> Option<(usize, usize)>
 /// Maps a GTP column letter (skipping `I`) to a zero-based column index.
 fn gtp_column_index(column_char: char) -> Option<usize> {
     let upper = column_char.to_ascii_uppercase();
-    if !('A'..='Z').contains(&upper) || upper == 'I' {
+    if !upper.is_ascii_uppercase() || upper == 'I' {
         return None;
     }
     let index = upper as usize - 'A' as usize;
@@ -234,6 +234,103 @@ pub struct EngineLogEntry {
     pub response: String,
 }
 
+/// The role an engine may take in the current game. Each attached role owns a
+/// separate process session, so one engine configuration can safely be used for
+/// analysis, Black, and White simultaneously.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EngineRole {
+    Analysis,
+    Black,
+    White,
+}
+
+impl EngineRole {
+    pub const ALL: [Self; 3] = [Self::Analysis, Self::Black, Self::White];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Analysis => "analysis",
+            Self::Black => "black",
+            Self::White => "white",
+        }
+    }
+
+    pub const fn setting_key(self) -> &'static str {
+        match self {
+            Self::Analysis => "engines.analysis",
+            Self::Black => "engines.black",
+            Self::White => "engines.white",
+        }
+    }
+}
+
+/// Per-game engine role selections displayed in the left engine roster.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EngineRoleAssignments {
+    analysis: Option<String>,
+    black: Option<String>,
+    white: Option<String>,
+}
+
+impl EngineRoleAssignments {
+    pub fn from_settings(settings: &sabaki_host::SettingsStore) -> Self {
+        Self {
+            analysis: settings
+                .get_str(EngineRole::Analysis.setting_key())
+                .map(ToOwned::to_owned),
+            black: settings
+                .get_str(EngineRole::Black.setting_key())
+                .map(ToOwned::to_owned),
+            white: settings
+                .get_str(EngineRole::White.setting_key())
+                .map(ToOwned::to_owned),
+        }
+    }
+
+    pub fn get(&self, role: EngineRole) -> Option<&str> {
+        match role {
+            EngineRole::Analysis => self.analysis.as_deref(),
+            EngineRole::Black => self.black.as_deref(),
+            EngineRole::White => self.white.as_deref(),
+        }
+    }
+
+    /// Directly assigns an engine name to a role.
+    pub fn assign(&mut self, role: EngineRole, engine_name: &str) {
+        let slot = match role {
+            EngineRole::Analysis => &mut self.analysis,
+            EngineRole::Black => &mut self.black,
+            EngineRole::White => &mut self.white,
+        };
+        *slot = Some(engine_name.to_owned());
+    }
+
+    /// Assigns a configured engine to one role. Selecting the same engine for
+    /// an occupied role clears it, matching the checkable roster controls.
+    pub fn toggle(&mut self, role: EngineRole, engine_name: &str) -> bool {
+        let slot = match role {
+            EngineRole::Analysis => &mut self.analysis,
+            EngineRole::Black => &mut self.black,
+            EngineRole::White => &mut self.white,
+        };
+        if slot.as_deref() == Some(engine_name) {
+            *slot = None;
+            false
+        } else {
+            *slot = Some(engine_name.to_owned());
+            true
+        }
+    }
+
+    pub fn clear_engine(&mut self, engine_name: &str) {
+        for slot in [&mut self.analysis, &mut self.black, &mut self.white] {
+            if slot.as_deref() == Some(engine_name) {
+                *slot = None;
+            }
+        }
+    }
+}
+
 /// Captures a formatted command and its parsed response as a log entry.
 pub fn entry_for_response(command: String, response: &GtpResponse) -> EngineLogEntry {
     EngineLogEntry {
@@ -338,6 +435,47 @@ pub fn parse_stream_line(command: &str, line: &str) -> Option<sabaki_host::Analy
 #[cfg(test)]
 mod tests {
     #[test]
+    fn engine_roles_toggle_independently_and_clear_removed_engines() {
+        use super::{EngineRole, EngineRoleAssignments};
+
+        let mut roles = EngineRoleAssignments::default();
+        assert!(roles.toggle(EngineRole::Analysis, "KataGo"));
+        assert!(roles.toggle(EngineRole::Black, "KataGo"));
+        assert!(roles.toggle(EngineRole::White, "GNU Go"));
+        assert_eq!(roles.get(EngineRole::Analysis), Some("KataGo"));
+        assert_eq!(roles.get(EngineRole::Black), Some("KataGo"));
+        assert_eq!(roles.get(EngineRole::White), Some("GNU Go"));
+
+        assert!(!roles.toggle(EngineRole::Black, "KataGo"));
+        assert_eq!(roles.get(EngineRole::Black), None);
+        roles.clear_engine("KataGo");
+        assert_eq!(roles.get(EngineRole::Analysis), None);
+        assert_eq!(roles.get(EngineRole::White), Some("GNU Go"));
+    }
+
+    #[test]
+    fn engine_role_assignments_restore_the_persisted_names() {
+        use super::{EngineRole, EngineRoleAssignments};
+
+        let mut settings = sabaki_host::SettingsStore::default();
+        settings
+            .set("engines.analysis", serde_json::json!("KataGo"))
+            .unwrap();
+        settings
+            .set("engines.black", serde_json::json!("GNU Go"))
+            .unwrap();
+        settings
+            .set("engines.white", serde_json::json!(null))
+            .unwrap();
+
+        let roles = EngineRoleAssignments::from_settings(&settings);
+        assert_eq!(roles.get(EngineRole::Analysis), Some("KataGo"));
+        assert_eq!(roles.get(EngineRole::Black), Some("GNU Go"));
+        assert_eq!(roles.get(EngineRole::White), None);
+        assert_eq!(EngineRole::Black.setting_key(), "engines.black");
+    }
+
+    #[test]
     fn streamed_batches_merge_by_vertex() {
         use sabaki_host::AnalysisEntry;
         let first = vec![AnalysisEntry {
@@ -348,6 +486,7 @@ mod tests {
             score_lead: None,
             pv: vec![],
             is_during_search: true,
+            ownership: None,
         }];
         let second = vec![
             AnalysisEntry {
@@ -358,6 +497,7 @@ mod tests {
                 score_lead: None,
                 pv: vec![],
                 is_during_search: false,
+                ownership: None,
             },
             AnalysisEntry {
                 id: None,
@@ -367,6 +507,7 @@ mod tests {
                 score_lead: None,
                 pv: vec![],
                 is_during_search: false,
+                ownership: None,
             },
         ];
 

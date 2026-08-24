@@ -24,10 +24,10 @@ fn property_display_name(property: &str) -> &'static str {
 
 /// The human-readable heading for the current node.
 fn node_title(properties: &sabaki_domain_core::Properties) -> String {
-    if let Some(name) = properties.get("N").and_then(|values| values.first()) {
-        if !name.trim().is_empty() {
-            return name.clone();
-        }
+    if let Some(name) = properties.get("N").and_then(|values| values.first())
+        && !name.trim().is_empty()
+    {
+        return name.clone();
     }
     if properties.contains_key("B") {
         return "Black move".to_owned();
@@ -53,7 +53,100 @@ pub struct NodeInspectorMetadata {
     pub title: String,
     pub comment: String,
     pub properties: Vec<NodePropertyRow>,
+    pub move_annotation: Option<NodeAnnotation>,
+    pub position_annotation: Option<NodeAnnotation>,
+    pub hotspot: bool,
     pub can_edit_variation: bool,
+}
+
+/// One of the upstream CommentBox annotation choices. Move and position
+/// choices are mutually exclusive within their respective groups; hotspot is
+/// independent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeAnnotation {
+    BadMove,
+    DoubtfulMove,
+    InterestingMove,
+    GoodMove,
+    UnclearPosition,
+    GoodForWhite,
+    EvenPosition,
+    GoodForBlack,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnnotationGroup {
+    Move,
+    Position,
+}
+
+impl NodeAnnotation {
+    pub const MOVE: [Self; 4] = [
+        Self::BadMove,
+        Self::DoubtfulMove,
+        Self::InterestingMove,
+        Self::GoodMove,
+    ];
+    pub const POSITION: [Self; 4] = [
+        Self::UnclearPosition,
+        Self::GoodForWhite,
+        Self::EvenPosition,
+        Self::GoodForBlack,
+    ];
+
+    pub const fn property(self) -> &'static str {
+        match self {
+            Self::BadMove => "BM",
+            Self::DoubtfulMove => "DO",
+            Self::InterestingMove => "IT",
+            Self::GoodMove => "TE",
+            Self::UnclearPosition => "UC",
+            Self::GoodForWhite => "GW",
+            Self::EvenPosition => "DM",
+            Self::GoodForBlack => "GB",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::BadMove => "bad",
+            Self::DoubtfulMove => "doubtful",
+            Self::InterestingMove => "interesting",
+            Self::GoodMove => "good",
+            Self::UnclearPosition => "unclear",
+            Self::GoodForWhite => "white better",
+            Self::EvenPosition => "even",
+            Self::GoodForBlack => "black better",
+        }
+    }
+
+    pub const fn group(self) -> AnnotationGroup {
+        match self {
+            Self::BadMove | Self::DoubtfulMove | Self::InterestingMove | Self::GoodMove => {
+                AnnotationGroup::Move
+            }
+            Self::UnclearPosition
+            | Self::GoodForWhite
+            | Self::EvenPosition
+            | Self::GoodForBlack => AnnotationGroup::Position,
+        }
+    }
+
+    const fn values(self) -> &'static [&'static str] {
+        match self {
+            Self::DoubtfulMove | Self::InterestingMove => &[""],
+            _ => &["1"],
+        }
+    }
+}
+
+impl AnnotationGroup {
+    const fn properties(self) -> &'static [&'static str] {
+        match self {
+            Self::Move => &["BM", "DO", "IT", "TE"],
+            Self::Position => &["UC", "GW", "DM", "GB"],
+        }
+    }
 }
 
 /// Extracts metadata for the current node from a snapshot. Pure function so it
@@ -69,6 +162,9 @@ pub fn current_node_metadata(snapshot: &GameSnapshot) -> NodeInspectorMetadata {
             title: "Unavailable node".to_owned(),
             comment: String::new(),
             properties: Vec::new(),
+            move_annotation: None,
+            position_annotation: None,
+            hotspot: false,
             can_edit_variation: false,
         };
     };
@@ -85,6 +181,13 @@ pub fn current_node_metadata(snapshot: &GameSnapshot) -> NodeInspectorMetadata {
         .collect();
     properties.sort_by(|left, right| left.name.cmp(&right.name));
 
+    let move_annotation = NodeAnnotation::MOVE
+        .into_iter()
+        .find(|annotation| node.properties.contains_key(annotation.property()));
+    let position_annotation = NodeAnnotation::POSITION
+        .into_iter()
+        .find(|annotation| node.properties.contains_key(annotation.property()));
+
     NodeInspectorMetadata {
         node_id: node.id.clone(),
         title: node_title(&node.properties),
@@ -95,6 +198,9 @@ pub fn current_node_metadata(snapshot: &GameSnapshot) -> NodeInspectorMetadata {
             .cloned()
             .unwrap_or_default(),
         properties,
+        move_annotation,
+        position_annotation,
+        hotspot: node.properties.contains_key("HO"),
         can_edit_variation: node.parent_id.is_some(),
     }
 }
@@ -134,6 +240,47 @@ pub fn create_property_transaction(
     }
 }
 
+/// Builds a sequence of transactions that makes one annotation active and
+/// clears only its peer group first. The caller applies these in order, so the
+/// document never retains conflicting upstream CommentBox markers.
+pub fn create_annotation_transactions(
+    node_id: &NodeId,
+    annotation: Option<NodeAnnotation>,
+    group: AnnotationGroup,
+) -> Vec<GameTransaction> {
+    let mut transactions = group
+        .properties()
+        .iter()
+        .map(|property| create_property_transaction(node_id, property, Vec::new()))
+        .collect::<Vec<_>>();
+    if let Some(annotation) = annotation {
+        assert_eq!(annotation.group(), group, "annotation must match its group");
+        transactions.push(create_property_transaction(
+            node_id,
+            annotation.property(),
+            annotation
+                .values()
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
+        ));
+    }
+    transactions
+}
+
+/// Builds the independent CommentBox hotspot transaction.
+pub fn create_hotspot_transaction(node_id: &NodeId, enabled: bool) -> GameTransaction {
+    create_property_transaction(
+        node_id,
+        "HO",
+        if enabled {
+            vec!["1".to_owned()]
+        } else {
+            Default::default()
+        },
+    )
+}
+
 /// Builds a `PromoteVariation` / `RemoveVariation` transaction for a node.
 pub fn create_variation_transaction(node_id: &NodeId, action: VariationAction) -> GameTransaction {
     GameTransaction {
@@ -162,7 +309,8 @@ pub enum VariationAction {
 #[cfg(test)]
 mod tests {
     use super::{
-        VariationAction, create_comment_transaction, create_variation_transaction,
+        AnnotationGroup, NodeAnnotation, VariationAction, create_annotation_transactions,
+        create_comment_transaction, create_hotspot_transaction, create_variation_transaction,
         current_node_metadata,
     };
     use sabaki_domain_core::{GameDocument, GameTransactionType};
@@ -222,6 +370,39 @@ mod tests {
             GameTransactionType::SetNodeProperty
         );
         assert_eq!(transaction.values, vec!["good game".to_owned()]);
+    }
+
+    #[test]
+    fn annotations_clear_only_their_peer_group_then_set_the_selected_value() {
+        let transactions = create_annotation_transactions(
+            &"node-1".to_owned(),
+            Some(NodeAnnotation::InterestingMove),
+            AnnotationGroup::Move,
+        );
+        assert_eq!(transactions.len(), 5);
+        assert!(transactions[..4].iter().all(|transaction| {
+            transaction.transaction_type == GameTransactionType::RemoveNodeProperty
+        }));
+        assert_eq!(transactions[4].property.as_deref(), Some("IT"));
+        assert_eq!(transactions[4].values, vec!["".to_owned()]);
+
+        let clear =
+            create_annotation_transactions(&"node-1".to_owned(), None, AnnotationGroup::Position);
+        assert_eq!(clear.len(), 4);
+        assert!(clear.iter().all(|transaction| {
+            transaction.transaction_type == GameTransactionType::RemoveNodeProperty
+        }));
+    }
+
+    #[test]
+    fn hotspot_is_independent_and_uses_the_standard_value() {
+        let set = create_hotspot_transaction(&"node-1".to_owned(), true);
+        assert_eq!(set.property.as_deref(), Some("HO"));
+        assert_eq!(set.values, vec!["1".to_owned()]);
+        assert_eq!(
+            create_hotspot_transaction(&"node-1".to_owned(), false).transaction_type,
+            GameTransactionType::RemoveNodeProperty
+        );
     }
 
     #[test]

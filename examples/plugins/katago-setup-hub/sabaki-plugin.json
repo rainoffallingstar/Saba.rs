@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "org.sabaki.katago-setup-hub",
+  "name": "KataGo Setup & Model Hub",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "runtime": "declarative",
+  "permissions": ["engineControl", "fileWrite", "fileRead", "network", "uiPanel"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "org.sabaki.katago-setup-hub.setup",
+        "title": "Auto-Configure KataGo Engine"
+      },
+      {
+        "id": "org.sabaki.katago-setup-hub.download_balanced",
+        "title": "Download 10B Balanced Model (94MB)"
+      },
+      {
+        "id": "org.sabaki.katago-setup-hub.download_lightweight",
+        "title": "Download Fast Analysis Model (38MB)"
+      },
+      {
+        "id": "org.sabaki.katago-setup-hub.download_strongest",
+        "title": "Download Strongest Model (240MB)"
+      }
+    ],
+    "panels": [
+      {
+        "schemaVersion": 1,
+        "pluginId": "org.sabaki.katago-setup-hub",
+        "panelTitle": "KataGo Setup & Weights",
+        "widgets": [
+          {
+            "type": "label",
+            "text": "一键自动探测本地硬件并下载官方 KataGo 与神经网络模型"
+          },
+          {
+            "type": "value",
+            "label": "硬件后端",
+            "value": "Apple Silicon (Metal / GPU 加速)"
+          },
+          {
+            "type": "button",
+            "id": "org.sabaki.katago-setup-hub.setup",
+            "title": "⚡ 一键配置 KataGo 引擎"
+          },
+          {
+            "type": "button",
+            "id": "org.sabaki.katago-setup-hub.download_balanced",
+            "title": "⭐ 10B 均衡推荐网络 (94MB)"
+          },
+          {
+            "type": "button",
+            "id": "org.sabaki.katago-setup-hub.download_lightweight",
+            "title": "⚡ 快速轻量分析网络 (38MB)"
+          },
+          {
+            "type": "button",
+            "id": "org.sabaki.katago-setup-hub.download_strongest",
+            "title": "🏆 最强算力大型网络 (240MB)"
+          }
+        ]
+      }
+    ]
+  }
+}

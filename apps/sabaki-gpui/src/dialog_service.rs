@@ -13,6 +13,9 @@ pub trait DialogService {
     /// Returning `None` models a cancelled dialog.
     fn pick_open_path(&self) -> Option<PathBuf>;
 
+    /// Ask the user to pick a plugin `.zip` archive to install.
+    fn pick_open_zip_path(&self) -> Option<PathBuf>;
+
     /// Ask the user where to save the game. `suggested_name` is the default
     /// file name; returning `None` models a cancelled dialog.
     fn pick_save_path(&self, suggested_name: &str) -> Option<PathBuf>;
@@ -44,6 +47,10 @@ impl DialogService for MockDialogService {
         self.open_path.clone()
     }
 
+    fn pick_open_zip_path(&self) -> Option<PathBuf> {
+        self.open_path.clone()
+    }
+
     fn pick_save_path(&self, suggested_name: &str) -> Option<PathBuf> {
         Some(
             self.save_path
@@ -64,7 +71,17 @@ impl DialogService for RfdDialogService {
     fn pick_open_path(&self) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Open SGF")
-            .add_filter("Smart Game Format", &["sgf", "ngf", "gib", "ugf"])
+            .add_filter(
+                "Smart Game Format (*.sgf, *.ngf, *.gib, *.ugf)",
+                &["sgf", "ngf", "gib", "ugf"],
+            )
+            .pick_file()
+    }
+
+    fn pick_open_zip_path(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Install Plugin from ZIP")
+            .add_filter("Plugin Archive (*.zip)", &["zip"])
             .pick_file()
     }
 
@@ -119,8 +136,7 @@ impl GameFileAccess for NativeGameFileAccess {
     ) -> Result<(), HostError> {
         let encoded = sabaki_host::encode_sgf(content, encoding)
             .map_err(|error| HostError::FileWrite(error.to_string()))?;
-        crate::file_workflow::write_bytes_atomically(path, &encoded)
-            .map_err(|error| HostError::FileWrite(error))
+        crate::file_workflow::write_bytes_atomically(path, &encoded).map_err(HostError::FileWrite)
     }
 }
 
@@ -167,7 +183,7 @@ mod tests {
     fn native_file_access_reads_and_writes_utf8_sgf() {
         let path =
             std::env::temp_dir().join(format!("sabaki-shell-roundtrip-{}.sgf", std::process::id()));
-        let mut file_access = NativeGameFileAccess::default();
+        let mut file_access = NativeGameFileAccess;
 
         file_access
             .write_game_file(&path, "(;FF[4]CA[UTF-8]SZ[19])", SourceEncoding::Utf8)
@@ -185,7 +201,7 @@ mod tests {
     fn native_file_access_round_trips_shift_jis_sgf() {
         let path =
             std::env::temp_dir().join(format!("sabaki-shell-shiftjis-{}.sgf", std::process::id()));
-        let mut file_access = NativeGameFileAccess::default();
+        let mut file_access = NativeGameFileAccess;
         let source_sgf = "(;FF[4]CA[Shift_JIS]C[日本語])";
 
         file_access
@@ -202,7 +218,7 @@ mod tests {
 
     #[test]
     fn native_file_access_rejects_lossy_non_utf8_writes() {
-        let mut file_access = NativeGameFileAccess::default();
+        let mut file_access = NativeGameFileAccess;
         let error = file_access
             .write_game_file(
                 &PathBuf::from("/tmp/never-written.sgf"),
@@ -219,7 +235,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("sabaki-shell-atomic-{}", std::process::id()));
         let path = directory.join("game.sgf");
-        let mut file_access = NativeGameFileAccess::default();
+        let mut file_access = NativeGameFileAccess;
 
         file_access
             .write_game_file(&path, "(;FF[4]SZ[19])", SourceEncoding::Utf8)

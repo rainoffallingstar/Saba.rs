@@ -1,11 +1,14 @@
 //! Mode-specific bar rendered between the goban and the navigation toolbar.
 //!
-//! M1 keeps the mode switch functional for `Play`, `Edit`, `Scoring`, and
-//! `Estimator`. Guess/Find/Autoplay slots remain in the parity plan until their
-//! backing workflows land.
+//! Every M1 mode has a concrete bar. Find jumps to a selected move, Guess
+//! verifies the next variation move, and Autoplay advances the active line.
+//! The bar is intentionally not rendered in the current screenshot-matched
+//! layout; it remains available for keyboard-triggered overlays and tests.
+#![allow(dead_code)]
 
 use gpui::{
-    App, Context, Div, InteractiveElement, MouseButton, ParentElement, Styled, Window, div, px, rgb,
+    App, Context, Div, FontWeight, InteractiveElement, MouseButton, ParentElement, Styled, Window,
+    div, rgb,
 };
 use sabaki_domain_core::{Color, GameMode, GameSnapshot};
 
@@ -55,22 +58,39 @@ pub fn mode_label(mode: GameMode) -> &'static str {
         GameMode::Edit => "Edit",
         GameMode::Scoring => "Scoring",
         GameMode::Estimator => "Estimate",
+        GameMode::Find => "Find",
+        GameMode::Guess => "Guess",
+        GameMode::Autoplay => "Autoplay",
     }
 }
 
 fn mode_button(mode: GameMode, active: bool, palette: UiPalette, cx: &Context<ShellApp>) -> Div {
     div()
-        .px_2()
+        .px_3()
         .py_1()
-        .border_1()
-        .border_color(rgb(palette.accent))
-        .rounded(px(4.0))
+        .rounded_md()
+        .cursor_pointer()
         .bg(if active {
-            rgb(palette.button)
-        } else {
             rgb(palette.button_active)
+        } else {
+            rgb(palette.panel)
         })
-        .text_sm()
+        .border_1()
+        .border_color(rgb(if active {
+            palette.accent
+        } else {
+            palette.panel
+        }))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(if active { palette.text } else { palette.muted }))
+        .hover(|style| {
+            if !active {
+                style.bg(rgb(palette.button)).text_color(rgb(palette.text))
+            } else {
+                style
+            }
+        })
         .child(mode_label(mode).to_owned())
         .on_mouse_down(
             MouseButton::Left,
@@ -78,6 +98,23 @@ fn mode_button(mode: GameMode, active: bool, palette: UiPalette, cx: &Context<Sh
                 shell.on_mode_selected(mode, event, window, cx);
             }),
         )
+}
+
+fn mode_action_button(label: &str, palette: UiPalette, cx: &Context<ShellApp>) -> Div {
+    div()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .cursor_pointer()
+        .border_1()
+        .border_color(rgb(palette.accent))
+        .bg(rgb(palette.button))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(palette.text))
+        .hover(|style| style.bg(rgb(palette.button_active)))
+        .child(label.to_owned())
+        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_mode_action))
 }
 
 pub fn render_mode_bar(
@@ -92,12 +129,11 @@ pub fn render_mode_bar(
         .flex()
         .flex_wrap()
         .items_center()
-        .gap_2()
-        .px_2()
-        .py_1()
+        .gap_1()
+        .p_1()
         .border_1()
         .border_color(rgb(palette.border))
-        .rounded(px(6.0))
+        .rounded_lg()
         .bg(rgb(palette.panel));
 
     for mode in [
@@ -105,9 +141,14 @@ pub fn render_mode_bar(
         GameMode::Edit,
         GameMode::Scoring,
         GameMode::Estimator,
+        GameMode::Find,
+        GameMode::Guess,
+        GameMode::Autoplay,
     ] {
         bar = bar.child(mode_button(mode, active_mode == mode, palette, cx));
     }
+
+    bar = bar.child(div().text_xs().text_color(rgb(palette.border)).child("|"));
 
     match active_mode {
         GameMode::Play => {
@@ -117,7 +158,21 @@ pub fn render_mode_bar(
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_sm()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(if active {
+                        rgb(palette.input)
+                    } else {
+                        rgb(palette.panel)
+                    })
+                    .border_1()
+                    .border_color(rgb(if active {
+                        palette.border
+                    } else {
+                        palette.panel
+                    }))
+                    .text_xs()
                     .text_color(rgb(if active { palette.accent } else { palette.text }))
                     .child(name)
                     .child(if rank.is_empty() {
@@ -138,25 +193,32 @@ pub fn render_mode_bar(
                     div()
                         .id("pass-button")
                         .debug_selector(|| "pass-button".to_owned())
-                        .px_2()
+                        .px_3()
                         .py_1()
+                        .cursor_pointer()
                         .border_1()
                         .border_color(rgb(palette.accent))
-                        .rounded(px(4.0))
+                        .rounded_md()
                         .bg(rgb(palette.button))
-                        .text_sm()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(palette.text))
+                        .hover(|style| style.bg(rgb(palette.button_active)))
                         .child("Pass")
                         .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_pass)),
                 )
                 .child(
                     div()
-                        .px_2()
+                        .px_3()
                         .py_1()
+                        .cursor_pointer()
                         .border_1()
                         .border_color(rgb(palette.danger_text))
-                        .rounded(px(4.0))
+                        .rounded_md()
                         .bg(rgb(palette.danger))
-                        .text_sm()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(palette.danger_text))
                         .child("Resign")
                         .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_resign)),
                 );
@@ -175,7 +237,7 @@ pub fn render_mode_bar(
             ));
         }
         GameMode::Scoring | GameMode::Estimator => {
-            bar = bar.child(div().text_sm().text_color(rgb(palette.muted)).child(
+            bar = bar.child(div().text_xs().text_color(rgb(palette.muted)).child(
                 if active_mode == GameMode::Scoring {
                     "Please select dead stones."
                 } else {
@@ -184,10 +246,47 @@ pub fn render_mode_bar(
             ));
             bar = bar.child(
                 div()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(rgb(palette.input))
+                    .border_1()
+                    .border_color(rgb(palette.border))
                     .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(palette.accent))
                     .child(crate::markup::scoring_summary(snapshot)),
             );
+        }
+        GameMode::Find => {
+            bar = bar
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.muted))
+                        .child("Click an intersection to jump to its first occurrence."),
+                )
+                .child(mode_action_button("Find move", palette, cx));
+        }
+        GameMode::Guess => {
+            bar = bar
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.muted))
+                        .child("Click the next move in the active variation."),
+                )
+                .child(mode_action_button("Show instructions", palette, cx));
+        }
+        GameMode::Autoplay => {
+            bar = bar
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.muted))
+                        .child("Advance through the active variation one move at a time."),
+                )
+                .child(mode_action_button("Next move", palette, cx));
         }
     }
 

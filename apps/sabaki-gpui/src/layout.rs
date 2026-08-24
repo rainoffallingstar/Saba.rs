@@ -10,6 +10,9 @@ use sabaki_host::SettingsStore;
 pub enum SplitPane {
     Left,
     Right,
+    PeerList,
+    WinrateGraph,
+    Properties,
 }
 
 impl SplitPane {
@@ -17,6 +20,9 @@ impl SplitPane {
         match self {
             Self::Left => "left-splitter",
             Self::Right => "right-splitter",
+            Self::PeerList => "peer-list-splitter",
+            Self::WinrateGraph => "winrate-graph-splitter",
+            Self::Properties => "properties-splitter",
         }
     }
 }
@@ -34,7 +40,9 @@ pub fn pane_size_for_drag(
 ) -> f32 {
     let delta = current_position - start_position;
     match pane {
-        SplitPane::Left => start_size + delta,
+        SplitPane::Left | SplitPane::PeerList | SplitPane::WinrateGraph | SplitPane::Properties => {
+            start_size + delta
+        }
         SplitPane::Right => start_size - delta,
     }
 }
@@ -92,6 +100,18 @@ mod tests {
         assert_eq!(
             pane_size_for_drag(200.0, 100.0, 80.0, SplitPane::Right),
             220.0
+        );
+        assert_eq!(
+            pane_size_for_drag(130.0, 100.0, 150.0, SplitPane::PeerList),
+            180.0
+        );
+        assert_eq!(
+            pane_size_for_drag(90.0, 100.0, 150.0, SplitPane::WinrateGraph),
+            140.0
+        );
+        assert_eq!(
+            pane_size_for_drag(180.0, 100.0, 130.0, SplitPane::Properties),
+            210.0
         );
     }
 

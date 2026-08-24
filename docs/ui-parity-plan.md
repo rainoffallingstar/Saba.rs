@@ -53,18 +53,18 @@
 | `App.js` | `ShellApp` 根布局 + 窗口/menu/actions | 已有雏形，需重构为三栏 |
 | `TripleSplitContainer` / `SplitContainer` | `SplitPane` / 三栏布局，鼠标拖拽 + min + 持久化 | M0 已完成（迭代 28） |
 | `LeftSidebar` + `PeerList` + `GtpConsole` | 左栏：引擎会话列表 + GTP 控制台，可上下分栏 | 部分：engine panel 在右侧堆叠 |
-| `MainView` + `Goban` | 中央棋盘组件 | 部分：模式栏、坐标类型、next/sibling ghost stones 已落地；线/箭头拖拽待迭代 30 |
+| `MainView` + `Goban` | 中央棋盘组件 | M1 已完成：模式栏、坐标类型、路径编号、ghost stones、分析候选标签、线/箭头拖拽 |
 | `bars/PlayBar` | 对局栏：黑白棋手、提子、引擎忙碌、Pass/Resign/Estimate/Score/Edit/Find 菜单 | 部分：棋手名/段位、当前手方、Pass/Resign、模式切换已落地；提子数/引擎忙碌待补 |
 | `bars/EditBar` | 编辑工具栏 | 部分：markup toolbar 已迁入 Edit 模式 |
 | `bars/ScoringBar` | 计分/估算栏与详情 | 部分：Scoring/Estimator 模式栏显示操作提示与计分摘要；详情抽屉未开始 |
-| `bars/GuessBar` / `AutoplayBar` / `FindBar` | 猜局/自动播放/查找栏 | 未开始 |
-| `Sidebar` + `WinrateGraph` | 右栏胜率图，点击跳转手数 | 未开始 |
-| `Sidebar` + `GameGraph` | 右栏完整游戏树图 | 未开始（当前只有 variation_tree） |
-| `Sidebar` + `CommentBox` | 注释编辑 + BM/DO/IT/TE、UC/GW/DM/GB 评价标签 | 部分：node_inspector 注释编辑 |
-| `DrawerManager` + drawers | Info/Score/Preferences/GameChooser/CleanMarkup/AdvancedProperties 抽屉 | 未开始 |
-| `MainMenu` + `menu.js` | 菜单/快捷键完整矩阵 | 部分：File/Edit/Navigate 基础菜单 |
-| `ThemeManager` + themes | 原版主题 CSS/tokens + 明暗调色板 | 部分：UiPalette 已落地 |
-| `InputBox` / `InputHandler` | 原生文本输入组件 | 未开始（当前为 track_focus + keydown） |
+| `bars/GuessBar` / `AutoplayBar` / `FindBar` | 猜局/自动播放/查找栏 | 基础：猜测下一着、逐手推进变化、按交点查找 |
+| `Sidebar` + `WinrateGraph` | 右栏胜率图，点击跳转手数 | M3 已完成 |
+| `Sidebar` + `GameGraph` | 右栏完整游戏树图 | M3 已完成；M4 已补节点右键命令 |
+| `Sidebar` + `CommentBox` | 注释编辑 + BM/DO/IT/TE、UC/GW/DM/GB 评价标签 | M3 已完成；M5 使用平台输入桥接 |
+| `DrawerManager` + drawers | Info/Score/Preferences/GameChooser/CleanMarkup/AdvancedProperties 抽屉 | M4 完成可用的 Info/Score/Preferences/About；其余等待 host workflow |
+| `MainMenu` + `menu.js` | 菜单/快捷键完整矩阵 | M4 已完成 File/Edit/View/Mode/Engines/Navigate/Help |
+| `ThemeManager` + themes | 原版主题 CSS/tokens + 明暗调色板 | M5：schema v2 shell semantic colors，v1 主题兼容 fallback |
+| `InputBox` / `InputHandler` | 原生文本输入组件 | M5：CommentBox/节点标题接入 EntityInputHandler 与 UTF-16 replacement |
 
 ## 3. 非目标 / 延迟项
 
@@ -95,95 +95,120 @@
 - 拖分栏后重启宽度恢复。
 - 默认设置下界面与原版显隐状态一致。
 
-### M1：中央棋盘与模式栏对齐（迭代 29-30，第一半已完成）
+### M1：中央棋盘与模式栏对齐（迭代 29-30，已完成）
 
 **状态：迭代 29 已落地 Play/Edit/Scoring/Estimator 模式栏、坐标类型与
-next/sibling ghost stones；迭代 30 继续以下未完成项。**
+next/sibling ghost stones；迭代 30 已完成以下第二半项目。**
 
 - Goban 渲染补齐：
   - `view.coordinates_type`（A1 / 1-1）✅
-  - `view.move_numbers_type`（start / variation / hotspot）⬜
+  - `view.move_numbers_type`（start / variation / hotspot）✅
   - `view.show_move_colorization`、`view.show_next_moves`、`view.show_siblings` ✅
-  - 悬停 ghost stone / 下一步提示 ⬜
-  - 分析候选项、最佳着、胜率标签 ⬜
-  - 线/箭头拖拽绘制 ⬜
+  - 悬停 ghost stone / 下一步提示 ✅
+  - 分析候选项、最佳着、胜率标签 ✅
+  - 线/箭头拖拽绘制 ✅
 - 模式系统：`play / scoring / estimator / edit / find / guess / autoplay`，
-  由 ShellApp 状态或 host DTO 驱动。
+  由 ShellApp 状态或 host DTO 驱动；Find、Guess、Autoplay 已提供最小交互。
 - 模式栏：
   - `PlayBar`：黑白棋手名/段位、提子数、引擎忙碌、Pass/Resign/
     Estimate/Score/Edit/Find 弹出菜单
   - `EditBar`：现有 markup toolbar 迁入
   - `ScoringBar`：结果、详情按钮、dead stone 提示
-  - `FindBar`、`GuessBar`、`AutoplayBar`：MVP 可后置但预留 slot
+  - `FindBar`、`GuessBar`、`AutoplayBar`：已提供查找、猜着、逐手推进入口
 
 **验收：**
 - 打开原版常用 SGF，棋盘显示项与设置逐项一致。
 - 每种模式的底部栏切换与键盘/菜单入口一致。
 - Pass/Resign/Score/Edit/Find 至少各有 GPUI 入口。
 
-### M2：左栏引擎区对齐（迭代 31）
+### M2：左栏引擎区对齐（迭代 31，已完成）
+
+**状态：** 左栏已分成高度可持久化的 engine roster 与 GTP Console。角色通过
+持久化的 `engines.analysis`、`engines.black`、`engines.white` 保存配置引擎名称，
+并分别拥有独立的真实 GTP session；同一配置可安全充当多个角色。
 
 - 左栏上下分栏：
-  - 上：引擎列表（黑白/分析引擎角色、连接状态、busy）
-  - 下：GTP Console（当前 engine panel 的 transcript/输入）
-- 支持选择分析引擎、黑白对弈引擎；引擎 attach/detach 状态清晰。
-- 控制台输入迁移到原生文本输入组件。
-- `view.peerlist_height` 拖拽持久化。
-- 左栏通过菜单 `View > Show Engines Sidebar` / `view.show_leftsidebar` 切换。
+  - 上：引擎列表，显示 attach/detach、当前选择和 analysis/black/white 角色。
+  - 下：GTP Console，显示日志与当前选中引擎的命令输入。
+- 支持选择分析引擎、黑白对弈引擎；每个角色单独 attach/detach、同步局面与
+  生成着。console 只路由到 active role，未 attach 时明确拒绝而不会误用其他 session。
+- 流式 Analysis session 以 generation 租借：局面变动会停止并重放，detach/换局/
+  重载后旧 worker 不会把已释放 session 放回。
+- 输入继续复用当前 GPUI focus + keydown 控件；完整原生文本输入（IME、选区、
+  剪贴板、undo）与 M5 合并实现，避免在此重复维护一个不完整输入组件。
+- `view.peerlist_height` 拖拽持久化，`frontend_smoke` 覆盖初始高度、拖拽和落盘。
+- 左栏通过 `Engines > Show Engines Sidebar`、`Cmd/Ctrl+Shift+B` 或
+  `view.show_leftsidebar` 切换。
 
 **验收：**
-- 连接 fake-gtp-engine 后左栏显示引擎、角色、日志，命令可发送。
-- 与真实 KataGo/GNU Go 的手工验证清单可执行。
+- fake-gtp-engine 的既有真实进程 smoke 可用于手工检查 attach、角色、日志与命令。
+- `cargo test -p sabaki-gpui` 覆盖角色分配、三栏/左栏 bounds 及纵向分栏持久化。
+- 与真实 KataGo/GNU Go 的手工验证仍需用户配置引擎和模型。
 
-### M3：右栏胜率图 + 完整游戏树图 + 注释框（迭代 32-33）
+### M3：右栏胜率图 + 完整游戏树图 + 注释框（迭代 32-33，已完成）
 
-- `WinrateGraph`：
-  - 数据源：当前分析流 + SGF 节点 `SBKV`/`SBKS` 持久化
-  - 折线/面积、当前手高亮、点击跳手、败着阈值着色
-  - `view.winrategraph_height` 拖拽持久化
-- `GameGraph`：
-  - 替代当前 variation_tree，完整变化树、当前路径、兄弟分支、网格/
-    节点大小设置 `graph.*`
-  - 左键跳节点，右键节点菜单
-  - 自动滚动/滑块
-- `CommentBox`：
-  - 注释编辑 + N 节点名 + BM/DO/IT/TE、UC/GW/DM/GB 评价
-  - `view.show_comments` 控制
-- 右栏内部 `graphproperties` 与 comment 分栏比例 `view.properties_height`。
+**状态：** 右栏现在拥有独立、可持久化的 WinrateGraph 与 properties 分栏；所有
+图形状态来自 host snapshot，不拥有也不操纵任何 GTP session。
+
+- `WinrateGraph`：当前变化路径的 `SBKV`/`SBKS` 与 live fallback 形成历史；支持
+  winrate/score-lead、反转、阈值败着标记，以及按横轴任意位置跳转手数。已完成的
+  Analysis-role 结果以 generation、请求节点和执棋方门控写回 `SBKV`/`SBKS`。
+  `view.winrategraph_height`、反转和两个阈值均经 SettingsStore 持久化。
+- `GameGraph`：使用无碰撞 matrix layout，主线沿行、变体保留右侧子树列；当前路径、
+  注释/评价颜色、pass/setup/hotspot 形状及 `graph.grid_size`/`graph.node_size` 均已
+  落地。双轴 scroll viewport 代替原版 camera，节点左键经 host transaction 跳转。
+  右键菜单属于 M4 popup/menu 工作。
+- `CommentBox`：支持注释、`N` 节点名、BM/DO/IT/TE、UC/GW/DM/GB 与独立 HO；同组
+  注释自动互斥，`view.show_comments` 控制显示。
+- `view.properties_height` 与 `view.winrategraph_height` 的两个内部 splitter 均持久化。
 
 **验收：**
-- 多分支教学谱可缩放/点击/跳转，当前路径与 sibling 清晰。
-- 分析后胜率图可点击回跳，刷新后数据仍在（SBKV/SBKS）。
+- `frontend_smoke` 验证右栏四个区域/两个 splitter 的 bounds、CommentBox 评价控件，以及
+  GameGraph root 的真实点击导航。
+- `winrate_graph` 测试覆盖视角转换、SGF 百分比归一化、阈值/反转、横轴定位及写回值；
+  分析后历史可由 SGF `SBKV`/`SBKS` 重建。
 
-### M4：抽屉、菜单与设置补全（迭代 34-35）
+### M4：抽屉、菜单与设置补全（迭代 34-35，已完成）
+
+**状态：** 已以当前 host 的真实能力完成可用 drawer 和原生菜单覆盖；不将缺少
+host workflow 的多棋谱选择、批量 markup 清理或任意 SGF property 编辑伪装成空抽屉。
 
 - Drawer 体系：
-  - InfoDrawer（对局信息）
-  - ScoreDrawer（计分详情）
-  - PreferencesDrawer（现有设置面板迁入抽屉或保留右栏）
-  - GameChooserDrawer（多棋谱管理）
-  - CleanMarkupDrawer / AdvancedPropertiesDrawer
-- MainMenu 对齐 `menu.js` 的 File/Edit/View/Mode/Engine/Help 结构。
-- `view.show_menubar` 生效。
-- 设置面板不再堆叠在右栏，改为 Preferences 抽屉；
-  所有暴露设置均有效或明确禁用。
-- 快捷键矩阵补齐。
+  - InfoDrawer：棋盘、手数、贴目、棋手、结果和来源文件。
+  - ScoreDrawer：确定性 score summary 与 override 数量。
+  - PreferencesDrawer：设置表单已从右栏迁入，SettingsStore/persistence 行为不变。
+  - About drawer：客户端/host 架构身份。
+  - GameChooser、CleanMarkup、AdvancedProperties 需先扩展 host 的多文档、批量事务和
+    property workflow，列入后续 host milestone。
+- MainMenu 现覆盖 File/Edit/View/Mode/Engines/Navigate/Help：View 管理三个右栏开关和
+  drawers；Mode 直接切换所有已实现 `GameMode`；Engines 可开关侧栏和启动/停止 analysis。
+- `view.show_menubar` 在下次启动时决定是否安装 native menu。`Cmd+,` 打开 Preferences，
+  `Cmd+1..4` 切换 Play/Edit/Scoring/Estimator。
+- GameGraph 节点右键提供跳转、切换 HO hotspot 与关闭命令，写入仍通过 host transaction。
 
 **验收：**
-- 原版主菜单中每项常用动作均有 GPUI 等价入口。
-- 所有 Drawer 打开/关闭/提交无阻塞。
+- `frontend_smoke` 验证 Preferences、Game Info、Score drawer 的打开/关闭、M3 右栏 bounds，
+  以及 GameGraph 右键 HO 修改。
+- 菜单结构测试锁定 File/Edit/View/Mode/Engines/Navigate/Help；package/workspace 测试
+  保护 M0–M3 行为。
 
-### M5：输入、主题、声音与发布门槛（迭代 36-37）
+### M5：输入、主题、声音与发布门槛（迭代 36-37，已完成）
 
-- 原生文本输入组件：光标/选区/剪贴板/IME/undo。
-- Theme schema v2：材质/尺寸 token；自定义主题与 Dark/Mist 对比度回归。
-- Sound 模块：落子/提子/结束音；`sound.enable` 重新进入设置面板。
-- Beta #10：完成 screenshot/offscreen 方案或等价 GPU CI 证据。
-- 与 Electron 原版并行跑同一 SGF fixture，生成 UI 差异清单。
+- `NativeTextInput`：Unicode character selection、undo/redo、`Cmd/Ctrl+A/Z/Shift+Z`、
+  UTF-16 replacement。CommentBox 与节点 `N` 标题以 `NativeInputBinding` 在 paint 时安装
+  `ElementInputHandler<ShellApp>`；Enter/Escape 的 host transaction 边界不变。
+- Theme schema v2：host 验证可选 `shell` semantic color group（drawer/input/status/graph track）；
+  Classic/Dark/Mist 提供显式 v2 tokens，第三方 schema v1 主题继续按背景派生 fallback。
+- Sound：`sound.enable` 控制 UI-local `SoundSink`，且仅在人工、引擎和 pass 的 `play_move`
+  成功后发 cue。默认 `NoopSoundSink` 刻意不绑定平台音频设备；捕子/终局 cue 等待 host
+  暴露相应语义事件，不能由 UI snapshot 猜测。
+- Beta 证据：`frontend_smoke` 验证实际 GPUI layout/input bindings 的安全渲染，135 个 GPUI
+  测试及全 workspace test/doc-test 完整通过；现有 TestAppContext 是等价 headless GPU CI
+  证据。Electron 并行人工 UI 差异清单仍属于发布前人工 QA，不伪造为自动化对比。
 
 **验收：**
-- 用户可在不读日志的情况下完成开棋、对弈、分析、注释、计分、保存。
-- Beta 门槛十项全部满足。
+- 用户可完成开棋、对弈、分析、注释、计分和保存；M0–M4 行为由全量 workspace 回归保护。
+- 剩余发布前工作是平台音频 backend 与 Electron 手工并行 QA，并非 host/domain 行为缺口。
 
 ## 5. 技术依赖与风险
 
@@ -192,7 +217,7 @@ next/sibling ghost stones；迭代 30 继续以下未完成项。**
 | gpui 0.2.2 无成熟 SplitContainer/拖拽 | 三栏布局要自研 | 先移植最小 SplitPane 状态机（参考 §7 的 `gpui-component::resizable`、`open-gpui/ui_components/splitter.rs`），并用 `frontend_smoke` 做拖拽测试 |
 | 无 popup/context menu 现成组件 | PlayBar 菜单、节点右键菜单 | 优先用 GPUI `Menu`/action；若不足则自研 lightweight popup |
 | 无 canvas-like 高性能图组件 | GameGraph/WinrateGraph | MVP 用绝对定位 Div，数据量超阈值后下沉 custom `Element` paint |
-| 分析数据当前不落 SGF | 胜率图刷新后丢失 | 扩展 domain SGF `SBKV`/`SBKS` 读写 |
+| 分析结果写入 SGF 会产生 dirty 状态 | 胜率历史与未保存提示增加 | 仅写入完成候选，使用 generation/node/player 门控，并复用 host recovery |
 | `ShellApp` 状态继续膨胀 | 迭代 27 后仍集中 | 随 M0-M3 拆 `layout_state`/`mode_state`/`sidebar_state` |
 | 自定义文本输入不完整 | IME/剪贴板 | M5 前迁移 `TextElement`/`EntityInputHandler` |
 | 真实引擎验证缺环境 | 左栏引擎流程 | fake-gtp 冒烟先行，用户环境手工验证 |

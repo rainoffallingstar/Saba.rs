@@ -1,20 +1,55 @@
-# 交接文档（2026-08-15）
+# 交接文档（2026-08-16）
 
 本交接文档面向接手 Sabaki 原生迁移的开发者，记录当前架构决策、已实现范围、
 关键约定与下一步计划。它是 [`tauri-migration-status.md`](tauri-migration-status.md)
 （历史迁移状态）、[`tauri-rearchitecture-design.md`](tauri-rearchitecture-design.md)
 （架构设计）与 [`tauri-migration-next-steps.md`](tauri-migration-next-steps.md)
-（路线图）的最新执行快照。
+（路线图）的最新执行快照。发布候选的真实状态、外部依赖与下一步证据见
+[`release-readiness.md`](release-readiness.md)。
 
-**最近迭代（2026-08-15）：** 迭代 29「M1 中央模式栏第一半」已完成。
-新增 `mode_bar.rs`：Play/Edit/Scoring/Estimator 模式按钮、PlayBar 棋手
-名称/段位/当前手方、Pass/Resign、EditBar 迁入 markup toolbar、Scoring/
-Estimator 显示计分摘要；`ShellApp.mode` 替代 `scoring_mode`；棋盘支持
-`view.coordinates_type`（A1 / 1-1，A1 行号从底部计数）、`view.show_next_moves`
-子着 ghost stone、`view.show_siblings` 兄弟变化 ghost stone、
-`view.show_move_colorization` 子着注释标签；设置面板新增 4 个棋盘显示键。
-`cargo test --workspace` **304 测试全绿**。原生 screenshot 仍待 gpui
-上游能力或 blade offscreen 方案（见 `docs/beta-gate.md`）。
+**最近迭代（2026-08-21）：** 插件不可用根因修复（命令 ID 命名空间校验）、插件扫描容错、点目模式防卡死、ZIP 选择器过滤修复。
+依据用户最新实测反馈完成落地：
+1. **插件不可用根因修复（命令 ID 命名空间校验）**（`examples/plugins/*/sabaki-plugin.json` + `main.rs`）：
+   - 定位到 `katago-setup-hub` 与 `fox-kifu-sync` 插件的命令 ID 未以插件 ID 为命名空间前缀（如 `org.sabaki.katago.setup` 而非 `org.sabaki.katago-setup-hub.setup`），触发 `PluginManifest::validate` 的 `command identifiers must be namespaced by the plugin id` 校验失败，导致插件被整体拒绝加载；
+   - 已修正全部命令 ID 与面板按钮 ID 为正确的命名空间前缀，并同步更新 `on_plugin_command` 分发逻辑。
+2. **插件扫描容错（单插件损坏不再拖垮全部）**（`crates/sabaki-host/src/plugin_workflow.rs`）：
+   - `scan_plugin_installations` 由「任一插件无效即整体失败」改为「跳过无效插件并继续扫描」，单个损坏插件不再导致整个插件库为空。
+3. **点目（Scoring）模式防卡死与一键退出**（`main.rs` + `panels.rs`）：
+   - 在点目/估目模式下，底部状态栏高亮展示 `[ 🏁 退出点目 (返回落子) ]` 显式胶囊，点击或按 `Cmd-1` 立即退出点目并重置工具为落子工具，恢复正常下棋落子。
+4. **ZIP 文件选择对话框类型过滤修复**（`dialog_service.rs` + `main.rs`）：
+   - `RfdDialogService` 新增专门的 `pick_open_zip_path`，配置 `Plugin Archive (*.zip)` 过滤器，允许在 macOS 访达中直接选中并导入 `.zip` 插件包。
+5. **棋盘落子即时响应修复**（`apps/sabaki-gpui/src/main.rs`）：
+   - 落子触发时机移至 `on_board_vertex_mouse_down`，鼠标按下瞬间立即完成逻辑落子、棋盘图元刷新与音效播发。
+6. **插件全量打包为离线 ZIP 归档**（`examples/plugins/*.zip`）：
+   - 已生成标准独立的 `.zip` 安装包（`katago-setup-hub.zip`、`fox-kifu-sync.zip`、`position-checker.zip`、`sgf-exporter.zip`）。
+7. **设置抽屉新增插件管理中心**（`panels.rs` + `main.rs`）：
+   - 在 Preferences 设置抽屉中新增 **`PLUGINS & EXTENSIONS (插件管理)`** 专区，提供一键开启/关闭与 ZIP 导入。
+已通过 fmt、140 个 GPUI 单元测试、完整 workspace 测试与 release build 验证。
+
+**最近迭代（2026-08-17）：** 已修复首启布局；macOS fullscreen-exit renderer 修复正在重新验收。
+此前缺失 `view.show_leftsidebar`、`view.show_graph`、`view.show_comments` 设置会被错误解释为
+false，因此新配置没有两侧栏；现在缺失代表首次启动，默认呈现 Engines 和 Panels，而持久化 false
+仍保留用户选择。多行开发 status/benchmark 区已收敛为单行状态栏，不再压缩棋盘高度；
+`fresh_settings_render_both_sidebars_and_a_compact_status_bar` 锁定两个症状。
+macOS 26.6.1 / Apple M4 的人工 crash report 定位到 GPUI 0.2.2 `macos-blade`：AppKit 退出
+fullscreen 设置 style mask → frame resize → `BladeRenderer::update_drawable_size` →
+`EXC_BAD_ACCESS`。先前只避免 GPUI 恢复 transparent titlebar 的 patch 不充分：后续报告确认
+AppKit 的 `_NSExitFullScreenTransitionController` 自己仍会更新 style mask 并触发 resize。
+当前 vendor GPUI patch 在 `windowWillExitFullScreen:` 到 `windowDidExitFullScreen:` 之间延迟
+所有 Blade drawable resize（frame 与 backing-scale 两入口），并在 exit 完成后只按最终尺寸刷新一次。
+它不改变 Sabaki transaction、GTP、音效或普通 resize；详见
+`docs/gpui-macos-fullscreen-workaround.md`。已通过 fmt、140 个 GPUI 测试、完整
+workspace/doc-tests 和 release build；新 release binary 的重复原生 fullscreen enter/exit 人工
+复测未再崩溃。该检查仍保留在 `docs/release-qa.md` 供每一个发布候选执行。
+
+**macOS 文件对话框修复（2026-08-17）：** 另一份 crash report 显示 File → Open 的 `rfd`
+同步 NSOpenPanel 在嵌套 AppKit loop 内收到键盘输入源通知；GPUI 0.2.2 随即在已有 menu-action
+借用之上 `App::borrow_mut()`，造成 `RefCell already borrowed` / SIGABRT。vendor GPUI patch
+改用 `try_borrow_mut()`，重入通知只跳过当次 layout refresh 而非 abort。新增可注入的 test-platform
+notification seam，以及两个回归：reentrant action 不 abort、idle observer 仍收到更新。旧实现可使前者
+稳定 red。修复后已执行完整 workspace/release 验证，并在 macOS release binary 中人工确认 Open 和
+Save As 在输入源切换下不再崩溃、实际打开/保存均正常；细节见
+`docs/gpui-macos-file-dialog-workaround.md`。签名与公证继续不执行。
 
 ---
 
@@ -23,8 +58,8 @@ Estimator 显示计分摘要；`ShellApp.mode` 替代 `scoring_mode`；棋盘支
 **全力优先发展 GPUI；永久暂停 Tauri 回退。**
 
 - `apps/sabaki-gpui` 已从 spike 升级为**正式 GPUI 主客户端**（原 `sabaki-gpui-spike`）。
-- `src-tauri`（Tauri/Preact）**冻结为行为参考**：保留在 SabakiHQ/Sabaki 上游仓库，
-  **本仓库不包含** Tauri adapter 与 Electron/Node.js 源码。
+- `src-tauri`（Tauri/Preact）与 Electron/Node.js 实现**冻结为行为参考**：本地源码和
+  原 Git 历史保存在被主线忽略的 `refer-repo/`，不参与 Saba.rs 构建、CI 与发布。
 - Electron 版本在 GPUI 达到公开 Beta 质量前仍是行为参考与稳定发行版。
 - 所有 UI 无关逻辑收敛到 `crates/sabaki-host`，视图只通过 typed ports 与 DTO 通信；
   GPUI 客户端与上游冻结的 Tauri adapter 共享同一套 host 边界。
@@ -58,9 +93,10 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 | `engine_session.rs` | GTP 会话生命周期：握手/启动命令/boardsize/play/genmove/stop | `GtpTransport` |
 | `plugin_workflow.rs` | 插件安装扫描、`PluginStore`（扫描/显式两种恢复）、权限/授权、持久化 | `PluginPersistence` |
 
-**关键原则**：host 不碰文件系统/进程——所有 IO 经 trait 注入，测试用内存实现，
-生产用各端文件系统实现。键表（`setting_kind`）、校验（`validate_setting_value`）、
-引擎列表校验均以 host 为唯一权威，Tauri/GPUI 不再维护平行副本。
+**关键原则**：领域和主要 Host 工作流的 IO 经 trait 注入，测试使用内存 Adapter，
+生产使用原生 Adapter。当前 `katago_setup`/`fox_kifu` 中仍存在直接文件系统、系统命令和
+`curl` 副作用，是审查确认的 seam 回退，按 `release-remediation-plan.md` P2.3 修复。
+键表（`setting_kind`）、校验（`validate_setting_value`）和引擎列表校验仍以 host 为唯一权威。
 
 ### 3.2 `apps/sabaki-gpui`：GPUI 主客户端
 
@@ -110,11 +146,11 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 
 文件布局与冻结的 Tauri 参考实现一致，同一配置目录可在两端互换。
 
-### 3.3 `src-tauri`（冻结，本仓库不包含）
+### 3.3 `refer-repo/`（冻结、主线忽略）
 
-保留在 SabakiHQ/Sabaki 上游仓库作为行为参考：完整的文件服务（多编码）、
-设置迁移、recent/autosave/外部文件、插件命令等 31 个测试全部通过。
-不再新增开发；本仓库不包含其源码与测试。
+旧 Electron/Tauri Sabaki 的源码、测试及独立 Git 历史保存在 `refer-repo/`，用于多编码
+文件服务、设置迁移、recent/autosave、外部文件、插件与 UI 行为对照。该目录不再新增
+主线功能，也不参与当前 Cargo workspace、CI、Tag 或 Release。
 
 ## 4. 关键约定
 
@@ -324,7 +360,7 @@ Scoring/Estimator 显示操作提示与计分摘要。
 剩余 M1 第二半：线/箭头拖拽绘制、Find/Guess/Autoplay 模式与
 `view.move_numbers_type`（variation/hotspot）。
 
-**迭代 24（Flatpak 打包）已完成：** `flatpak/dev.saba-rs.app.yml`
+**迭代 24（Flatpak 打包）已完成：** `flatpak/dev.sabars.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
 cargo 联网）;release.yml 新增 flatpak job（实测产出
@@ -376,21 +412,17 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 （`gpui-component`/`open-gpui`/`gpui-mullion`/Zed 上游）见
 [`docs/ui-parity-plan.md`](ui-parity-plan.md)。
 
-按优先级排序的后续候选迭代：
+当前 M0–M5 UI 对齐迭代均已落地。后续停止扩展非阻断功能，按
+[`release-remediation-plan.md`](release-remediation-plan.md) 推进：
 
-1. **M0 三栏布局基座（迭代 28，已完成）**：`SplitPane` 拖拽分栏、
-   左右栏显隐与 `view.*_width` 持久化已落地。
-2. **M1 中央棋盘与模式栏（迭代 29-30，第一半已完成）**：迭代 29 已落地
-   Play/Edit/Scoring/Estimator 模式栏、坐标类型与 next/sibling ghost
-   stones；第二半继续线/箭头拖拽、Find/Guess/Autoplay、
-   `view.move_numbers_type`（variation/hotspot）。
-3. **M2 左栏引擎区（迭代 31）**：引擎角色列表 + GTP 控制台上下分栏。
-4. **M3 右栏（迭代 32-33）**：WinrateGraph + GameGraph + CommentBox。
-5. **M4/M5（迭代 34-37）**：Drawer、菜单、原生输入、主题 schema v2、
-   声音、Screenshot/Beta #10 收尾。
-6. **发布收尾（需外部条件，本次按用户要求暂不做）**：签名/公证（macOS
-   Developer ID + notarytool、Windows Authenticode，需开发者证书）；
-   Flatpak 发布验证。
+1. **P0 主线收敛**：拆分当前大型工作树，修复 fmt、workspace doctest、clippy
+   与 locked release build；
+2. **P1 候选证据**：当前 commit 的三平台 CI、全格式打包、真实引擎 smoke、
+   Electron 参考并行 QA、干净机器安装/升级/回滚；
+3. **P2 架构修复**：拆分 ShellApp，建立 Engine/Analysis/Plugin Controller，
+   恢复 KataGo/Fox 网络与文件副作用的 Adapter seam；
+4. **P3 正式发布**：macOS Developer ID + notarization、Windows Authenticode、
+   Beta 反馈收敛和稳定版门槛验证。
 
 ## 7. 技术债 / 已知限制
 
@@ -403,14 +435,14 @@ tar.gz/AppImage、Windows zip/setup.exe）。
   link 失败）；事务写入（gameWrite）等其余能力未接。
 - 插件 `contributes.panels` 已真实渲染；`contributes.settings` 尚未接入
   设置面板，`contributes.menus` 尚未接入应用菜单。
-- 文本输入仍为 `track_focus` + `on_key_down` 的简化实现，无光标/选区/
-  剪贴板/IME/字段级 undo；后续应迁移 gpui `TextElement`/`EntityInputHandler`。
-- `view.show_graph` 当前控制变化树面板显隐；真正的胜率历史图
-  （`view.show_winrategraph`）仍未实现。
-- `sound.enable` 仍保留在 host 键表中，但 GPUI 尚未实现音频子系统，故本
-  迭代从设置面板移除该行。
-- 主题包安装/校验/入口 UI 已闭环（迭代 13+17）;`tokens.json` 暂只支持
-  颜色 token（材质/尺寸 token 留待 schema v2）。
+- 原生文本输入已接入 Unicode 字符选区、UTF-16 replacement、undo/redo 与
+  CommentBox/节点标题输入；仍需在候选版本中验证各平台 IME 和剪贴板体验。
+- WinrateGraph、GameGraph 与 CommentBox 已形成右栏闭环，原生 screenshot/golden
+  测试仍受 GPUI 0.2.2 能力限制。
+- `sound.enable` 已接入 UI-local `SoundSink`；macOS 使用系统声音，Windows/Linux
+  目前为静音 Adapter，捕子/终局 cue 仍等待 Host 语义事件。
+- 主题 schema v2 已提供 shell semantic colors，schema v1 主题保留 fallback；材质和
+  尺寸 token 可在 Beta 后扩展。
 - `MemorySettingsPersistence`/`MemoryHostPersistence`/`MemoryPluginPersistence` 保留供测试，
   生产路径已全部走 Native 实现。
 - `main.rs` 已拆分（`panels.rs`），但 `ShellApp` 状态字段与事件处理器仍集中在

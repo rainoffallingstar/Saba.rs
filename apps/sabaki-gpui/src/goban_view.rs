@@ -1,16 +1,19 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use gpui::{
-    App, Div, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
-    Stateful, Styled, Window, div, px, rgb,
+    App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Stateful, Styled, Window, div, hsla, px, rgb,
 };
-use sabaki_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
+#[cfg(test)]
+use gpui::{Pixels, Point};
+#[cfg(test)]
+use sabaki_domain_core::MoveDto;
+use sabaki_domain_core::{BoardSnapshot, Color, GameSnapshot, NodeSnapshot, Vertex};
 
 use crate::markup::markup_symbol;
 use crate::theme::{ThemeColor, ThemeTokens};
 
 const BOARD_MARGIN_PX: f32 = 28.0;
-const STONE_SIZE_PX: f32 = 22.0;
 
 /// Rendering options derived from the shell settings and document state.
 #[derive(Clone, Debug, Default)]
@@ -21,8 +24,18 @@ pub struct GobanRenderOptions {
     pub coordinates_type: String,
     /// Draw the move number on each stone.
     pub show_move_numbers: bool,
-    /// Move number per vertex (1-based), built from the document's moves.
+    /// Move number per vertex according to `move_numbers_type`.
     pub move_numbers: BTreeMap<Vertex, usize>,
+    /// Temporary line or arrow shown while the user is dragging a markup tool.
+    pub line_preview: Option<sabaki_domain_core::BoardLineSnapshot>,
+    /// Empty intersection currently under the pointer, rendered as a ghost stone.
+    pub hovered_vertex: Option<Vertex>,
+    /// Side to move for the hover ghost stone.
+    pub hover_stone_color: Option<Color>,
+    /// Engine candidates annotated directly on the board.
+    pub analysis_candidates: Vec<AnalysisCandidate>,
+    /// Optional territory ownership probabilities from KataGo.
+    pub ownership: Option<Vec<f64>>,
     /// Alive-stone overrides from `GameSnapshot.score_overrides`; overridden
     /// vertices get a cross marker.
     pub score_overrides: BTreeMap<Vertex, i8>,
@@ -36,11 +49,101 @@ pub struct GobanRenderOptions {
 
 /// Builds the 1-based move number per vertex from a document's move list.
 /// `pass` moves (no vertex) are skipped.
+#[cfg(test)]
 pub fn move_numbers_from_moves(moves: &[MoveDto]) -> BTreeMap<Vertex, usize> {
     moves
         .iter()
         .enumerate()
         .filter_map(|(index, move_dto)| move_dto.vertex.map(|vertex| (vertex, index + 1)))
+        .collect()
+}
+
+/// A compact engine candidate label shown beside an intersection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnalysisCandidate {
+    pub vertex: Vertex,
+    pub label: String,
+    pub is_best: bool,
+}
+
+fn node_move_vertex(node: &NodeSnapshot) -> Option<Vertex> {
+    ["B", "W"]
+        .into_iter()
+        .find_map(|property| node.properties.get(property)?.first())
+        .and_then(|value| parse_sgf_vertex(value))
+}
+
+fn current_node_lineage(snapshot: &GameSnapshot) -> Vec<NodeSnapshot> {
+    let nodes_by_id: BTreeMap<_, _> = snapshot
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut lineage = Vec::new();
+    let mut current_id = snapshot.current_node_id.as_str();
+    while let Some(node) = nodes_by_id.get(current_id) {
+        lineage.push((*node).clone());
+        let Some(parent_id) = node.parent_id.as_deref() else {
+            break;
+        };
+        current_id = parent_id;
+    }
+    lineage.reverse();
+    lineage
+}
+
+/// Builds on-board move numbers from the active SGF path. `start` labels the
+/// whole game, while `variation` and `hotspot` start immediately after the
+/// nearest branch point or `HO` marker, respectively. They deliberately show
+/// no labels when the requested anchor is absent, matching Sabaki's behavior.
+/// Builds on-board move numbers from the active SGF path. `start` / `all` labels
+/// the whole game, `last_N` displays only the most recent N moves, while
+/// `variation` and `hotspot` start immediately after the nearest branch point
+/// or `HO` marker, respectively.
+pub fn move_numbers_for_snapshot(
+    snapshot: &GameSnapshot,
+    move_numbers_type: &str,
+) -> BTreeMap<Vertex, usize> {
+    let lineage = current_node_lineage(snapshot);
+    let total_lineage = lineage.len();
+    let start_index = match move_numbers_type {
+        "last_1" => Some(total_lineage.saturating_sub(1)),
+        "last_3" => Some(total_lineage.saturating_sub(3)),
+        "last_5" => Some(total_lineage.saturating_sub(5)),
+        "last_10" => Some(total_lineage.saturating_sub(10)),
+        "last_20" => Some(total_lineage.saturating_sub(20)),
+        "variation" => {
+            let is_main_line = lineage
+                .windows(2)
+                .all(|nodes| nodes[0].child_ids.first() == Some(&nodes[1].id));
+            if is_main_line {
+                None
+            } else {
+                lineage
+                    .iter()
+                    .rposition(|node| node.child_ids.len() > 1)
+                    .map(|index| index + 1)
+            }
+        }
+        "hotspot" => lineage
+            .iter()
+            .rposition(|node| node.properties.contains_key("HO"))
+            .map(|index| index + 1),
+        _ => Some(0),
+    };
+    let Some(start_index) = start_index else {
+        return BTreeMap::new();
+    };
+
+    let mut move_number = 0usize;
+    lineage
+        .into_iter()
+        .skip(start_index)
+        .filter_map(|node| {
+            let vertex = node_move_vertex(&node)?;
+            move_number += 1;
+            Some((vertex, move_number))
+        })
         .collect()
 }
 
@@ -50,6 +153,7 @@ pub fn board_spacing(board: &BoardSnapshot, board_pixel_size: f32) -> f32 {
 
 /// Converts a point relative to the goban element into a board vertex, or
 /// `None` when the point falls outside the board.
+#[cfg(test)]
 pub fn vertex_at(
     board: &BoardSnapshot,
     board_pixel_size: f32,
@@ -112,6 +216,30 @@ fn board_line(from: (f32, f32), to: (f32, f32), thickness_px: f32, color: u32) -
     }
 }
 
+/// Renders an arbitrary angled annotation stroke as closely-spaced round
+/// segments. GPUI's primitive `Div` has no rotation transform, so this keeps
+/// diagonal SGF lines and arrowheads geometrically correct without CSS.
+fn markup_stroke(from: (f32, f32), to: (f32, f32), thickness_px: f32, color: u32) -> Vec<Div> {
+    let delta_x = to.0 - from.0;
+    let delta_y = to.1 - from.1;
+    let distance = (delta_x * delta_x + delta_y * delta_y).sqrt();
+    let steps = (distance / (thickness_px * 0.65)).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|step| {
+            let progress = step as f32 / steps as f32;
+            let x = from.0 + delta_x * progress;
+            let y = from.1 + delta_y * progress;
+            div()
+                .absolute()
+                .left(px(x - thickness_px / 2.0))
+                .top(px(y - thickness_px / 2.0))
+                .size(px(thickness_px))
+                .rounded_full()
+                .bg(rgb(color))
+        })
+        .collect()
+}
+
 /// Computes the two wing endpoints of an arrowhead at `end`, pointing back
 /// along the line from `start` to `end`. Pure so the geometry is testable.
 pub fn arrowhead_vertices(start: (f32, f32), end: (f32, f32), wing_length: f32) -> [(f32, f32); 2] {
@@ -163,19 +291,23 @@ pub fn parse_sgf_vertex(value: &str) -> Option<Vertex> {
     })
 }
 
-fn stone(color: Color, x: f32, y: f32, stone_black: u32, stone_white: u32) -> Div {
+fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white: u32) -> Div {
     let stone_color = match color {
         Color::Black => rgb(stone_black),
         Color::White => rgb(stone_white),
     };
+    let border_color = match color {
+        Color::Black => rgb(0x000000),
+        Color::White => rgb(0x888888),
+    };
     div()
         .absolute()
-        .left(px(x - STONE_SIZE_PX / 2.0))
-        .top(px(y - STONE_SIZE_PX / 2.0))
-        .size(px(STONE_SIZE_PX))
+        .left(px(x - size / 2.0))
+        .top(px(y - size / 2.0))
+        .size(px(size))
         .rounded_full()
         .border_1()
-        .border_color(rgb(0x000000))
+        .border_color(border_color)
         .bg(stone_color)
 }
 
@@ -185,20 +317,21 @@ fn ghost_stone(
     color: Color,
     x: f32,
     y: f32,
+    size: f32,
     stone_black: u32,
     stone_white: u32,
     filled: bool,
 ) -> Div {
-    let size = 14.0;
+    let ghost_size = if filled { size * 0.85 } else { size * 0.7 };
     let stone_color = match color {
         Color::Black => rgb(stone_black),
         Color::White => rgb(stone_white),
     };
     let mut ghost = div()
         .absolute()
-        .left(px(x - size / 2.0))
-        .top(px(y - size / 2.0))
-        .size(px(size))
+        .left(px(x - ghost_size / 2.0))
+        .top(px(y - ghost_size / 2.0))
+        .size(px(ghost_size))
         .rounded_full()
         .border_1()
         .border_color(stone_color);
@@ -209,13 +342,15 @@ fn ghost_stone(
 }
 
 /// Renders a move number centered on a stone, in the contrast color.
-fn move_number_div(x: f32, y: f32, number: usize, on_black: bool) -> Div {
+fn move_number_div(x: f32, y: f32, stone_size: f32, number: usize, on_black: bool) -> Div {
+    let text_w = stone_size * 0.8;
+    let text_h = stone_size * 0.8;
     div()
         .absolute()
-        .left(px(x - 6.0))
-        .top(px(y - 7.0))
-        .w(px(12.0))
-        .h(px(14.0))
+        .left(px(x - text_w / 2.0))
+        .top(px(y - text_h / 2.0))
+        .w(px(text_w))
+        .h(px(text_h))
         .flex()
         .items_center()
         .justify_center()
@@ -250,20 +385,26 @@ fn star_point_vertices(width: usize, height: usize) -> Vec<(usize, usize)> {
 /// Renders the transparent hit-testing layer for the goban. Each vertex gets
 /// its own explicit hitbox, so clicks work without converting window-global
 /// coordinates back through whatever layout surrounds the board.
-pub fn render_goban_click_layer<F>(
+pub fn render_goban_click_layer<F, G, H>(
     board: &BoardSnapshot,
     board_pixel_size: f32,
-    on_vertex_clicked: Rc<F>,
+    on_vertex_mouse_down: Rc<F>,
+    on_vertex_mouse_move: Rc<G>,
+    on_vertex_mouse_up: Rc<H>,
 ) -> Div
 where
     F: Fn(Vertex, &MouseDownEvent, &mut Window, &mut App) + 'static,
+    G: Fn(Vertex, &MouseMoveEvent, &mut Window, &mut App) + 'static,
+    H: Fn(Vertex, &MouseUpEvent, &mut Window, &mut App) + 'static,
 {
     let spacing = board_spacing(board, board_pixel_size);
     let mut layer = div().absolute().top_0().left_0().size(px(board_pixel_size));
     for row in 0..board.height {
         for column in 0..board.width {
             let vertex = Vertex { column, row };
-            let handler = on_vertex_clicked.clone();
+            let mouse_down_handler = on_vertex_mouse_down.clone();
+            let mouse_move_handler = on_vertex_mouse_move.clone();
+            let mouse_up_handler = on_vertex_mouse_up.clone();
             let (x, y) = intersection_position(board, board_pixel_size, column, row);
             layer = layer.child(
                 div()
@@ -272,7 +413,13 @@ where
                     .top(px(y - spacing / 2.0))
                     .size(px(spacing))
                     .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                        handler(vertex, event, window, cx);
+                        mouse_down_handler(vertex, event, window, cx);
+                    })
+                    .on_mouse_move(move |event, window, cx| {
+                        mouse_move_handler(vertex, event, window, cx);
+                    })
+                    .on_mouse_up(MouseButton::Left, move |event, window, cx| {
+                        mouse_up_handler(vertex, event, window, cx);
                     }),
             );
         }
@@ -296,6 +443,8 @@ pub fn render_goban(
     let width = board.width;
     let height = board.height;
     let board_size = board_pixel_size;
+    let spacing = board_spacing(board, board_pixel_size);
+    let stone_size = (spacing * 0.95).max(10.0);
     let wood_color = theme.board_wood_color().rgb_u32();
     let wood_theme_color = theme.board_wood_color();
     let coordinate_color = if wood_is_dark(wood_theme_color) {
@@ -329,35 +478,81 @@ pub fn render_goban(
         ));
     }
 
+    let star_size = (spacing * 0.16).clamp(3.0, 7.0);
     for (column, row) in star_point_vertices(width, height) {
         let (x, y) = intersection_position(board, board_pixel_size, column, row);
         children.push(
             div()
                 .absolute()
-                .left(px(x - 3.0))
-                .top(px(y - 3.0))
-                .size(px(6.0))
+                .left(px(x - star_size / 2.0))
+                .top(px(y - star_size / 2.0))
+                .size(px(star_size))
                 .rounded_full()
                 .bg(rgb(star_point_color)),
         );
     }
 
-    // Board lines and arrows from the snapshot markup.
-    for line in &board.lines {
+    // Board lines, arrows, and the in-progress drag preview.
+    let mut annotation_lines = board.lines.clone();
+    if let Some(preview) = &options.line_preview {
+        annotation_lines.push(preview.clone());
+    }
+    for line in annotation_lines {
         let start =
             intersection_position(board, board_pixel_size, line.start.column, line.start.row);
         let end = intersection_position(board, board_pixel_size, line.end.column, line.end.row);
-        children.push(board_line(start, end, 2.0, 0xc0392b));
+        let color = if options.line_preview.as_ref() == Some(&line) {
+            0x8e44ad
+        } else {
+            0xc0392b
+        };
+        children.extend(markup_stroke(start, end, 2.0, color));
         if line.line_type == "arrow" {
             for wing in arrowhead_vertices(start, end, 9.0) {
-                children.push(board_line(end, wing, 2.0, 0xc0392b));
+                children.extend(markup_stroke(end, wing, 2.0, color));
+            }
+        }
+    }
+
+    // KataGo territory ownership heatmap (LizzieYZY feature port)
+    if let Some(ownership) = &options.ownership {
+        for row in 0..height {
+            for column in 0..width {
+                let idx = row * width + column;
+                if let Some(&val) = ownership.get(idx)
+                    && val.abs() >= 0.15
+                {
+                    let (x, y) = intersection_position(board, board_pixel_size, column, row);
+                    let tile_size = (spacing * 0.72).clamp(10.0, 26.0);
+                    let is_black = val > 0.0;
+                    let alpha = (val.abs() as f32 * 0.45).clamp(0.12, 0.45);
+                    let tile_bg = if is_black {
+                        hsla(215.0, 0.85, 0.45, alpha)
+                    } else {
+                        hsla(0.0, 0.0, 1.0, alpha)
+                    };
+                    children.push(
+                        div()
+                            .absolute()
+                            .left(px(x - tile_size / 2.0))
+                            .top(px(y - tile_size / 2.0))
+                            .size(px(tile_size))
+                            .rounded(px(2.5))
+                            .bg(tile_bg),
+                    );
+                }
             }
         }
     }
 
     for row in 0..height {
         for column in 0..width {
-            let sign = board.sign_map[row][column];
+            let sign = board
+                .sign_map
+                .get(row)
+                .and_then(|r| r.get(column))
+                .copied()
+                .unwrap_or(0);
             let color = match sign {
                 1 => Some(Color::Black),
                 -1 => Some(Color::White),
@@ -365,11 +560,17 @@ pub fn render_goban(
             };
             let (x, y) = intersection_position(board, board_pixel_size, column, row);
             if let Some(color) = color {
-                children.push(stone(color, x, y, stone_black, stone_white));
-                if options.show_move_numbers {
-                    if let Some(number) = options.move_numbers.get(&Vertex { column, row }) {
-                        children.push(move_number_div(x, y, *number, color == Color::Black));
-                    }
+                children.push(stone(color, x, y, stone_size, stone_black, stone_white));
+                if options.show_move_numbers
+                    && let Some(number) = options.move_numbers.get(&Vertex { column, row })
+                {
+                    children.push(move_number_div(
+                        x,
+                        y,
+                        stone_size,
+                        *number,
+                        color == Color::Black,
+                    ));
                 }
             }
         }
@@ -378,40 +579,46 @@ pub fn render_goban(
     // Ghost stones for sibling variations and child moves.
     if options.show_siblings {
         for variation in &board.siblings_info {
-            let (x, y) = intersection_position(
-                board,
-                board_pixel_size,
-                variation.vertex.column,
-                variation.vertex.row,
-            );
-            children.push(ghost_stone(
-                variation.color,
-                x,
-                y,
-                stone_black,
-                stone_white,
-                false,
-            ));
+            if variation.vertex.column < width && variation.vertex.row < height {
+                let (x, y) = intersection_position(
+                    board,
+                    board_pixel_size,
+                    variation.vertex.column,
+                    variation.vertex.row,
+                );
+                children.push(ghost_stone(
+                    variation.color,
+                    x,
+                    y,
+                    stone_size,
+                    stone_black,
+                    stone_white,
+                    false,
+                ));
+            }
         }
     }
     if options.show_next_moves {
         for variation in &board.children_info {
-            let (x, y) = intersection_position(
-                board,
-                board_pixel_size,
-                variation.vertex.column,
-                variation.vertex.row,
-            );
-            children.push(ghost_stone(
-                variation.color,
-                x,
-                y,
-                stone_black,
-                stone_white,
-                true,
-            ));
-            if options.show_move_colorization {
-                if let Some(annotation) = variation.annotation.as_deref() {
+            if variation.vertex.column < width && variation.vertex.row < height {
+                let (x, y) = intersection_position(
+                    board,
+                    board_pixel_size,
+                    variation.vertex.column,
+                    variation.vertex.row,
+                );
+                children.push(ghost_stone(
+                    variation.color,
+                    x,
+                    y,
+                    stone_size,
+                    stone_black,
+                    stone_white,
+                    true,
+                ));
+                if options.show_move_colorization
+                    && let Some(annotation) = variation.annotation.as_deref()
+                {
                     children.push(
                         div()
                             .absolute()
@@ -426,31 +633,100 @@ pub fn render_goban(
         }
     }
 
+    if let (Some(vertex), Some(color)) = (options.hovered_vertex, options.hover_stone_color)
+        && vertex.row < height
+        && vertex.column < width
+        && board
+            .sign_map
+            .get(vertex.row)
+            .and_then(|r| r.get(vertex.column))
+            == Some(&0)
+    {
+        let (x, y) = intersection_position(board, board_pixel_size, vertex.column, vertex.row);
+        children.push(ghost_stone(
+            color,
+            x,
+            y,
+            stone_size,
+            stone_black,
+            stone_white,
+            false,
+        ));
+    }
+
+    for candidate in &options.analysis_candidates {
+        if candidate.vertex.row < height && candidate.vertex.column < width {
+            if board
+                .sign_map
+                .get(candidate.vertex.row)
+                .and_then(|r| r.get(candidate.vertex.column))
+                != Some(&0)
+            {
+                continue;
+            }
+            let (x, y) = intersection_position(
+                board,
+                board_pixel_size,
+                candidate.vertex.column,
+                candidate.vertex.row,
+            );
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(x + 8.0))
+                    .top(px(y - 9.0))
+                    .px_1()
+                    .rounded(px(3.0))
+                    .bg(rgb(if candidate.is_best {
+                        0x1f6f43
+                    } else {
+                        0x305a8c
+                    }))
+                    .text_xs()
+                    .text_color(rgb(0xffffff))
+                    .child(candidate.label.clone()),
+            );
+        }
+    }
+
     // Last-move indicator on the current vertex.
-    if let Some(current) = board.current_vertex {
+    if let Some(current) = board.current_vertex
+        && current.column < width
+        && current.row < height
+    {
         let (x, y) = intersection_position(board, board_pixel_size, current.column, current.row);
+        let dot_size = (spacing * 0.35).clamp(8.0, 14.0);
         children.push(
             div()
                 .absolute()
-                .left(px(x - 4.0))
-                .top(px(y - 4.0))
-                .size(px(8.0))
+                .left(px(x - dot_size / 2.0))
+                .top(px(y - dot_size / 2.0))
+                .size(px(dot_size))
                 .rounded_full()
+                .border_2()
+                .border_color(rgb(0xffffff))
                 .bg(rgb(0xc0392b)),
         );
     }
 
+    let marker_w = (spacing * 0.7).clamp(14.0, 28.0);
+    let marker_h = (spacing * 0.8).clamp(16.0, 32.0);
     for row in 0..height {
         for column in 0..width {
-            if let Some(marker) = &board.markers[row][column] {
+            if let Some(marker) = board
+                .markers
+                .get(row)
+                .and_then(|r| r.get(column))
+                .and_then(|m| m.as_ref())
+            {
                 let (x, y) = intersection_position(board, board_pixel_size, column, row);
                 children.push(
                     div()
                         .absolute()
-                        .left(px(x - 9.0))
-                        .top(px(y - 11.0))
-                        .w(px(18.0))
-                        .h(px(22.0))
+                        .left(px(x - marker_w / 2.0))
+                        .top(px(y - marker_h / 2.0))
+                        .w(px(marker_w))
+                        .h(px(marker_h))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -464,17 +740,17 @@ pub fn render_goban(
 
     // Scoring overrides: mark overridden vertices with a cross.
     for (vertex, override_value) in &options.score_overrides {
-        if *override_value == 0 {
+        if *override_value == 0 || vertex.column >= width || vertex.row >= height {
             continue;
         }
         let (x, y) = intersection_position(board, board_pixel_size, vertex.column, vertex.row);
         children.push(
             div()
                 .absolute()
-                .left(px(x - 8.0))
-                .top(px(y - 10.0))
-                .w(px(16.0))
-                .h(px(20.0))
+                .left(px(x - marker_w / 2.0))
+                .top(px(y - marker_h / 2.0))
+                .w(px(marker_w))
+                .h(px(marker_h))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -484,49 +760,87 @@ pub fn render_goban(
         );
     }
 
-    // Coordinates in the margins.
+    // Coordinates in all 4 margins (top, bottom, left, right).
     if options.show_coordinates {
         let numeric_coordinates = options.coordinates_type == "1-1";
         for column in 0..width {
             let (x, _) = intersection_position(board, board_pixel_size, column, 0);
+            let letter = if numeric_coordinates {
+                (column + 1).to_string()
+            } else {
+                column_letter(column).to_string()
+            };
+            // Top coordinate
             children.push(
                 div()
                     .absolute()
-                    .left(px(x - 6.0))
-                    .top(px(board_size - BOARD_MARGIN_PX + 6.0))
-                    .w(px(12.0))
+                    .left(px(x - 8.0))
+                    .top(px(BOARD_MARGIN_PX / 2.0 - 8.0))
+                    .w(px(16.0))
                     .h(px(14.0))
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(coordinate_color))
-                    .child(if numeric_coordinates {
-                        (column + 1).to_string()
-                    } else {
-                        column_letter(column).to_string()
-                    }),
+                    .child(letter.clone()),
+            );
+            // Bottom coordinate
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(x - 8.0))
+                    .top(px(board_size - BOARD_MARGIN_PX + 6.0))
+                    .w(px(16.0))
+                    .h(px(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(coordinate_color))
+                    .child(letter),
             );
         }
         for row in 0..height {
             let (_, y) = intersection_position(board, board_pixel_size, 0, row);
+            let number = if numeric_coordinates {
+                (row + 1).to_string()
+            } else {
+                (height - row).to_string()
+            };
+            // Left coordinate
             children.push(
                 div()
                     .absolute()
-                    .left(px(BOARD_MARGIN_PX / 2.0 - 6.0))
+                    .left(px(BOARD_MARGIN_PX / 2.0 - 8.0))
                     .top(px(y - 7.0))
-                    .w(px(12.0))
+                    .w(px(16.0))
                     .h(px(14.0))
                     .flex()
                     .items_center()
                     .justify_center()
                     .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(coordinate_color))
-                    .child(if numeric_coordinates {
-                        (row + 1).to_string()
-                    } else {
-                        (height - row).to_string()
-                    }),
+                    .child(number.clone()),
+            );
+            // Right coordinate
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(board_size - BOARD_MARGIN_PX + 4.0))
+                    .top(px(y - 7.0))
+                    .w(px(16.0))
+                    .h(px(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(coordinate_color))
+                    .child(number),
             );
         }
     }
@@ -662,6 +976,23 @@ mod tests {
         assert_eq!(numbers.get(&Vertex { column: 3, row: 3 }), Some(&1));
         assert_eq!(numbers.get(&Vertex { column: 15, row: 3 }), Some(&3));
         assert_eq!(numbers.len(), 2);
+    }
+
+    #[test]
+    fn move_numbers_follow_the_selected_start_or_hotspot_anchor() {
+        let snapshot =
+            sabaki_domain_core::GameDocument::from_sgf("(;GM[1]FF[4]SZ[9];B[dd];W[ee]HO[];B[ff])")
+                .unwrap()
+                .snapshot();
+
+        let from_start = super::move_numbers_for_snapshot(&snapshot, "start");
+        assert_eq!(from_start.get(&Vertex { column: 3, row: 3 }), Some(&1));
+        assert_eq!(from_start.get(&Vertex { column: 4, row: 4 }), Some(&2));
+        assert_eq!(from_start.get(&Vertex { column: 5, row: 5 }), Some(&3));
+
+        let from_hotspot = super::move_numbers_for_snapshot(&snapshot, "hotspot");
+        assert_eq!(from_hotspot.len(), 1);
+        assert_eq!(from_hotspot.get(&Vertex { column: 5, row: 5 }), Some(&1));
     }
 
     #[test]

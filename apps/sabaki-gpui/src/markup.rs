@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, Div, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Styled, Window, div,
-    px, rgb,
+    App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Styled,
+    Window, div, px, rgb,
 };
 use sabaki_domain_core::{
     CURRENT_TRANSACTION_SCHEMA_VERSION, GameTransaction, GameTransactionType, MarkerSnapshot,
@@ -23,6 +23,8 @@ pub enum MarkupTool {
     Triangle,
     Cross,
     Label,
+    Line,
+    Arrow,
     SetupBlack,
     SetupWhite,
     SetupClear,
@@ -35,6 +37,8 @@ pub const MARKUP_TOOLS: &[MarkupTool] = &[
     MarkupTool::Triangle,
     MarkupTool::Cross,
     MarkupTool::Label,
+    MarkupTool::Line,
+    MarkupTool::Arrow,
     MarkupTool::SetupBlack,
     MarkupTool::SetupWhite,
     MarkupTool::SetupClear,
@@ -49,6 +53,8 @@ impl MarkupTool {
             MarkupTool::Triangle => "Triangle",
             MarkupTool::Cross => "Cross",
             MarkupTool::Label => "Label",
+            MarkupTool::Line => "Line",
+            MarkupTool::Arrow => "Arrow",
             MarkupTool::SetupBlack => "Setup black",
             MarkupTool::SetupWhite => "Setup white",
             MarkupTool::SetupClear => "Setup clear",
@@ -64,6 +70,8 @@ impl MarkupTool {
             MarkupTool::Cross => Some("MA"),
             MarkupTool::Label => Some("LB"),
             MarkupTool::Play
+            | MarkupTool::Line
+            | MarkupTool::Arrow
             | MarkupTool::SetupBlack
             | MarkupTool::SetupWhite
             | MarkupTool::SetupClear => None,
@@ -78,6 +86,20 @@ impl MarkupTool {
             MarkupTool::SetupClear => Some("AE"),
             _ => None,
         }
+    }
+
+    /// The SGF line property for drag-drawn board annotations.
+    pub fn line_property(self) -> Option<&'static str> {
+        match self {
+            MarkupTool::Line => Some("LN"),
+            MarkupTool::Arrow => Some("AR"),
+            _ => None,
+        }
+    }
+
+    /// Whether this tool drives line/arrow drawing.
+    pub fn is_line_tool(self) -> bool {
+        self.line_property().is_some()
     }
 
     /// Whether this tool drives setup-stone editing instead of markup.
@@ -129,6 +151,28 @@ fn set_property_transaction(
         nodes: Vec::new(),
         score_override: None,
     }
+}
+
+/// Builds a `SetNodeProperty` transaction that appends one `start:end` point
+/// pair to the current node's `LN` (line) or `AR` (arrow) property.
+pub fn create_line_transaction(
+    node_id: &NodeId,
+    start: Vertex,
+    end: Vertex,
+    tool: MarkupTool,
+    node_properties: &sabaki_domain_core::Properties,
+) -> Option<GameTransaction> {
+    let property = tool.line_property()?;
+    let point = format!(
+        "{}:{}",
+        crate::goban_view::format_sgf_vertex(start),
+        crate::goban_view::format_sgf_vertex(end)
+    );
+    let mut values = node_properties.get(property).cloned().unwrap_or_default();
+    if !values.contains(&point) {
+        values.push(point);
+    }
+    Some(set_property_transaction(node_id, property, values))
 }
 
 /// Builds the setup-stone transactions for the current node. Placing a black
@@ -239,18 +283,34 @@ where
             let tool = *tool;
             let is_active = tool == active_tool;
             div()
-                .px_2()
-                .py_1()
-                .border_1()
-                .border_color(rgb(palette.accent))
-                .rounded(px(4.0))
+                .w(px(26.0))
+                .h(px(26.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .rounded_md()
                 .bg(if is_active {
-                    rgb(palette.button)
-                } else {
                     rgb(palette.button_active)
+                } else {
+                    rgb(palette.input)
                 })
+                .border_1()
+                .border_color(rgb(if is_active {
+                    palette.accent
+                } else {
+                    palette.border
+                }))
                 .text_color(rgb(palette.text))
-                .text_sm()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .hover(|style| {
+                    if !is_active {
+                        style.bg(rgb(palette.button))
+                    } else {
+                        style
+                    }
+                })
                 .child(match tool {
                     MarkupTool::Play => "●".to_owned(),
                     MarkupTool::Circle => "◯".to_owned(),
@@ -258,6 +318,8 @@ where
                     MarkupTool::Triangle => "△".to_owned(),
                     MarkupTool::Cross => "✕".to_owned(),
                     MarkupTool::Label => "A".to_owned(),
+                    MarkupTool::Line => "╱".to_owned(),
+                    MarkupTool::Arrow => "→".to_owned(),
                     MarkupTool::SetupBlack => "B".to_owned(),
                     MarkupTool::SetupWhite => "W".to_owned(),
                     MarkupTool::SetupClear => "✖".to_owned(),
@@ -357,7 +419,7 @@ mod tests {
         );
     }
 
-    use super::{MarkupTool, create_markup_transaction, markup_symbol};
+    use super::{MarkupTool, create_line_transaction, create_markup_transaction, markup_symbol};
     use sabaki_domain_core::{GameDocument, GameTransactionType, Vertex};
 
     fn current_node_id() -> String {
@@ -445,6 +507,35 @@ mod tests {
         assert_eq!(markup_symbol("label", Some("A")), "A");
         assert_eq!(markup_symbol("label", None), "?");
     }
+    #[test]
+    fn line_transactions_use_sgf_pairs_and_do_not_duplicate_them() {
+        let node_id = current_node_id();
+        let mut properties = sabaki_domain_core::Properties::new();
+        properties.insert("LN".to_owned(), vec!["dd:ee".to_owned()]);
+
+        let duplicate = create_line_transaction(
+            &node_id,
+            Vertex { column: 3, row: 3 },
+            Vertex { column: 4, row: 4 },
+            MarkupTool::Line,
+            &properties,
+        )
+        .expect("line tool creates a transaction");
+        assert_eq!(duplicate.property.as_deref(), Some("LN"));
+        assert_eq!(duplicate.values, vec!["dd:ee"]);
+
+        let arrow = create_line_transaction(
+            &node_id,
+            Vertex { column: 3, row: 3 },
+            Vertex { column: 5, row: 5 },
+            MarkupTool::Arrow,
+            &properties,
+        )
+        .expect("arrow tool creates a transaction");
+        assert_eq!(arrow.property.as_deref(), Some("AR"));
+        assert_eq!(arrow.values, vec!["dd:ff"]);
+    }
+
     #[test]
     fn setup_placement_appends_and_deduplicates_vertices() {
         use sabaki_domain_core::Properties;

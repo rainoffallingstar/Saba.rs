@@ -142,20 +142,63 @@ impl PluginPersistence for MemoryPluginPersistence {
     }
 }
 
-/// Resolves the config directory from `SABAKI_CONFIG_DIR` when set, else
-/// `$HOME/.config/sabaki-gpui`. The directory is created on demand.
+fn select_config_directory(config_root: PathBuf) -> PathBuf {
+    let primary = config_root.join("saba-rs");
+    let legacy = config_root.join("sabaki-gpui");
+    if !primary.exists() && legacy.exists() {
+        legacy
+    } else {
+        primary
+    }
+}
+
+/// Resolves the config directory from `SABAKI_CONFIG_DIR` when set. New
+/// installations use `$HOME/.config/saba-rs`; an existing `sabaki-gpui`
+/// directory remains authoritative so users do not silently lose settings.
 pub fn current_user_config_directory() -> Result<PathBuf, String> {
     let config_directory = match std::env::var("SABAKI_CONFIG_DIR") {
         Ok(path) => PathBuf::from(path),
         Err(_) => {
             let home = std::env::var("HOME")
-                .map_err(|_| "neither SABAKI_CONFIG_DIR nor HOME is set".to_owned())?;
-            PathBuf::from(home).join(".config").join("sabaki-gpui")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map_err(|_| "neither SABAKI_CONFIG_DIR, HOME nor USERPROFILE is set".to_owned())?;
+            select_config_directory(PathBuf::from(home).join(".config"))
         }
     };
     std::fs::create_dir_all(&config_directory)
         .map_err(|error| format!("could not create config directory: {error}"))?;
     Ok(config_directory)
+}
+
+/// Seeds built-in official plugins into the plugins directory on first launch.
+pub fn seed_builtin_plugins(install_root: &std::path::Path) {
+    let katago_hub_dir = install_root.join("katago-setup-hub");
+    let _ = std::fs::create_dir_all(&katago_hub_dir);
+    let _ = std::fs::write(
+        katago_hub_dir.join("sabaki-plugin.json"),
+        include_str!("../../../examples/plugins/katago-setup-hub/sabaki-plugin.json"),
+    );
+
+    let fox_kifu_dir = install_root.join("fox-kifu-sync");
+    let _ = std::fs::create_dir_all(&fox_kifu_dir);
+    let _ = std::fs::write(
+        fox_kifu_dir.join("sabaki-plugin.json"),
+        include_str!("../../../examples/plugins/fox-kifu-sync/sabaki-plugin.json"),
+    );
+
+    let pos_checker_dir = install_root.join("position-checker");
+    let _ = std::fs::create_dir_all(&pos_checker_dir);
+    let _ = std::fs::write(
+        pos_checker_dir.join("sabaki-plugin.json"),
+        include_str!("../../../examples/plugins/position-checker/sabaki-plugin.json"),
+    );
+
+    let sgf_exp_dir = install_root.join("sgf-exporter");
+    let _ = std::fs::create_dir_all(&sgf_exp_dir);
+    let _ = std::fs::write(
+        sgf_exp_dir.join("sabaki-plugin.json"),
+        include_str!("../../../examples/plugins/sgf-exporter/sabaki-plugin.json"),
+    );
 }
 
 /// Resolves the plugin install root (`<config directory>/plugins`), creating
@@ -164,6 +207,7 @@ pub fn plugin_install_root() -> Result<PathBuf, String> {
     let install_root = current_user_config_directory()?.join("plugins");
     std::fs::create_dir_all(&install_root)
         .map_err(|error| format!("could not create plugin directory: {error}"))?;
+    seed_builtin_plugins(&install_root);
     Ok(install_root)
 }
 
@@ -398,7 +442,7 @@ mod tests {
     use super::{
         MemoryHostPersistence, MemoryPluginPersistence, MemorySettingsPersistence,
         NativeHostPersistence, NativePluginPersistence, NativeSettingsPersistence,
-        capture_autosave, clear_autosave, record_opened_file,
+        capture_autosave, clear_autosave, record_opened_file, select_config_directory,
     };
     use sabaki_host::{
         AutosaveStore, HostApplication, HostEventSink, HostPersistence, PluginPersistence,
@@ -435,7 +479,7 @@ mod tests {
         let persistence = MemoryHostPersistence::default();
         let mut autosave = AutosaveStore::default();
         let mut host = HostApplication::default();
-        let mut events = TestEventSink::default();
+        let mut events = TestEventSink;
         host.play_move(
             sabaki_domain_core::Color::Black,
             Some(sabaki_domain_core::Vertex { column: 3, row: 3 }),
@@ -508,6 +552,23 @@ mod tests {
     }
 
     #[test]
+    fn config_directory_selection_preserves_legacy_data_until_migrated() {
+        let root = fresh_config_directory("config-migration");
+        assert_eq!(select_config_directory(root.clone()), root.join("saba-rs"));
+
+        std::fs::create_dir_all(root.join("sabaki-gpui")).expect("legacy config exists");
+        assert_eq!(
+            select_config_directory(root.clone()),
+            root.join("sabaki-gpui"),
+            "an existing legacy directory is used until a new primary directory exists"
+        );
+
+        std::fs::create_dir_all(root.join("saba-rs")).expect("new config exists");
+        assert_eq!(select_config_directory(root.clone()), root.join("saba-rs"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn native_settings_persist_and_reload_through_the_filesystem() {
         let directory = fresh_config_directory("native-settings");
         let mut persistence = NativeSettingsPersistence::new(directory.clone());
@@ -553,7 +614,7 @@ mod tests {
         let directory = fresh_config_directory("native-host-persistence");
         let persistence = NativeHostPersistence::new(directory.clone());
         let mut host = HostApplication::default();
-        let mut events = TestEventSink::default();
+        let mut events = TestEventSink;
         host.play_move(
             sabaki_domain_core::Color::Black,
             Some(sabaki_domain_core::Vertex { column: 3, row: 3 }),

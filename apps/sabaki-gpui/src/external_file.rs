@@ -63,7 +63,7 @@ pub fn check_external_file(
                 return ExternalCheckOutcome::Status(ExternalFileStatus::Untracked);
             };
             let encoding = detect_encoding_or_default(&content);
-            let mut events = RecordingEventSink::default();
+            let mut events = RecordingEventSink;
             match host.open_decoded(path.clone(), content.clone(), encoding, &mut events) {
                 Ok(_) => {
                     external_file.track_file(path, &content);
@@ -144,7 +144,7 @@ mod tests {
 
     fn open_game(path: &Path, content: &str, encoding: SourceEncoding) -> HostApplication {
         let mut host = HostApplication::default();
-        let mut events = RecordingEventSink::default();
+        let mut events = RecordingEventSink;
         host.open_decoded(path.to_owned(), content.to_owned(), encoding, &mut events)
             .expect("opening the fixture game succeeds");
         host
@@ -222,7 +222,7 @@ mod tests {
         std::fs::write(&path, original).expect("original is written");
 
         let mut host = open_game(&path, original, SourceEncoding::Utf8);
-        let mut events = RecordingEventSink::default();
+        let mut events = RecordingEventSink;
         host.play_move(
             sabaki_domain_core::Color::White,
             Some(sabaki_domain_core::Vertex { column: 3, row: 15 }),
@@ -258,7 +258,7 @@ mod tests {
             "tracking establishes an unchanged baseline"
         );
 
-        let mut file_access = crate::dialog_service::NativeGameFileAccess::default();
+        let mut file_access = crate::dialog_service::NativeGameFileAccess;
         file_access
             .write_game_file(&path, "(;FF[4]SZ[19])", SourceEncoding::Utf8)
             .expect("rewriting identical decoded content succeeds");

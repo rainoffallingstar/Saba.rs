@@ -5,6 +5,7 @@
 //! render layer applies them. This module re-exports those types and derives
 //! readable light/dark shell colors from the validated background color.
 
+use sabaki_host::parse_hex_color;
 pub use sabaki_host::{ThemeColor, ThemeTokens};
 
 /// Shell colors derived from the active theme background. Theme packages only
@@ -28,39 +29,65 @@ pub struct UiPalette {
 }
 
 pub fn ui_palette(theme: &ThemeTokens) -> UiPalette {
+    if let Some(shell) = &theme.shell {
+        // Host validation makes these infallible before any render work starts.
+        let color = |value: &str| {
+            parse_hex_color(value)
+                .expect("validated shell color")
+                .rgb_u32()
+        };
+        return UiPalette {
+            text: color(&shell.text),
+            muted: color(&shell.muted),
+            subtle: color(&shell.subtle),
+            panel: color(&shell.panel),
+            input: color(&shell.input),
+            border: color(&shell.border),
+            button: color(&shell.button),
+            button_active: color(&shell.button_active),
+            accent: color(&shell.accent),
+            danger: color(&shell.danger),
+            danger_text: color(&shell.danger_text),
+            success: color(&shell.success),
+            track: color(&shell.track),
+        };
+    }
+
+    // Schema v1 packages only define board tokens. Preserve their compatibility
+    // by deriving the same readable shell palette from the background.
     let background = theme.background_color();
     let is_dark = relative_luminance(background) < 0.45;
     if is_dark {
         UiPalette {
-            text: 0xf0ebe2,
-            muted: 0xbfb8ac,
-            subtle: 0x8f887e,
-            panel: 0x26231f,
-            input: 0x1e1c19,
-            border: 0x4a443b,
-            button: 0x3d362c,
-            button_active: 0x4f463a,
-            accent: 0xb39a6b,
-            danger: 0x4a2626,
-            danger_text: 0xff9b8f,
-            success: 0x7ecb89,
-            track: 0x4a4a4a,
+            text: 0xf5f5f7,
+            muted: 0x98989d,
+            subtle: 0x636366,
+            panel: 0x252528,
+            input: 0x1e1e20,
+            border: 0x38383a,
+            button: 0x2c2c2e,
+            button_active: 0x3a3a3c,
+            accent: 0x0a84ff,
+            danger: 0x3d1c1c,
+            danger_text: 0xff453a,
+            success: 0x30d158,
+            track: 0x38383a,
         }
     } else {
         UiPalette {
-            text: 0x222222,
-            muted: 0x444444,
-            subtle: 0x999999,
+            text: 0x1d1d1f,
+            muted: 0x6e6e73,
+            subtle: 0x86868b,
             panel: 0xffffff,
-            input: 0xffffff,
-            border: 0xd8cfc0,
-            button: 0xf7ecd8,
-            button_active: 0xe8e0d4,
-            accent: 0x8a6d3b,
-            danger: 0xf5d6d6,
-            danger_text: 0xc0392b,
-            success: 0x2e6b34,
-            track: 0xdddddd,
+            input: 0xf0f0f3,
+            border: 0xe5e5ea,
+            button: 0xebebef,
+            button_active: 0xdedee4,
+            accent: 0x007aff,
+            danger: 0xfee2e2,
+            danger_text: 0xff3b30,
+            success: 0x34c759,
+            track: 0xe5e5ea,
         }
     }
 }
@@ -84,8 +111,20 @@ mod tests {
     #[test]
     fn classic_theme_uses_a_light_shell_palette() {
         let palette = ui_palette(&ThemeTokens::default());
-        assert_eq!(palette.text, 0x222222);
+        assert_eq!(palette.text, 0x1d1d1f);
         assert_eq!(palette.panel, 0xffffff);
+    }
+
+    #[test]
+    fn schema_v2_shell_tokens_override_derived_palette() {
+        let theme = ThemeTokens::parse(
+            r##"{"schemaVersion":2,"boardWood":"#d9a866","boardLine":"#4a2f12","starPoint":"#3a2410","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f0e8","shell":{"text":"#112233","muted":"#223344","subtle":"#334455","panel":"#445566","input":"#556677","border":"#667788","button":"#778899","buttonActive":"#8899aa","accent":"#99aabb","danger":"#aabbcc","dangerText":"#bbccdd","success":"#ccddee","track":"#ddeeff"}}"##,
+        )
+        .unwrap();
+        let palette = ui_palette(&theme);
+        assert_eq!(palette.text, 0x112233);
+        assert_eq!(palette.panel, 0x445566);
+        assert_eq!(palette.track, 0xddeeff);
     }
 
     #[test]
@@ -95,7 +134,7 @@ mod tests {
         )
         .unwrap();
         let palette = ui_palette(&theme);
-        assert_eq!(palette.text, 0xf0ebe2);
-        assert_eq!(palette.panel, 0x26231f);
+        assert_eq!(palette.text, 0xf5f5f7);
+        assert_eq!(palette.panel, 0x252528);
     }
 }

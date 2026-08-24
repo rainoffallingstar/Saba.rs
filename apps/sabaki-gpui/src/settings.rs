@@ -1,7 +1,7 @@
 use crate::theme::ThemeTokens;
 use sabaki_host::setting_kind;
 
-/// The board sizes offered by the settings panel.
+/// The board sizes offered by the settings panel presets.
 pub const BOARD_SIZE_OPTIONS: &[usize] = &[9, 13, 19];
 
 /// A named theme the settings panel can switch between. Each theme maps to a
@@ -39,15 +39,15 @@ impl ThemeChoice {
     pub fn tokens(self) -> ThemeTokens {
         match self {
             ThemeChoice::Classic => ThemeTokens::parse(
-                r##"{"schemaVersion":1,"boardWood":"#d9a866","boardLine":"#4a2f12","starPoint":"#3a2410","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f0e8"}"##,
+                r##"{"schemaVersion":2,"boardWood":"#e2b177","boardLine":"#3d2814","starPoint":"#2a1a0b","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f5f7","shell":{"text":"#1d1d1f","muted":"#6e6e73","subtle":"#86868b","panel":"#ffffff","input":"#f0f0f3","border":"#e5e5ea","button":"#ebebef","buttonActive":"#dedee4","accent":"#007aff","danger":"#fee2e2","dangerText":"#ff3b30","success":"#34c759","track":"#e5e5ea"}}"##,
             )
             .expect("the classic theme tokens are valid"),
             ThemeChoice::Dark => ThemeTokens::parse(
-                r##"{"schemaVersion":1,"boardWood":"#2e2a24","boardLine":"#8a7a5a","starPoint":"#a89264","stoneBlack":"#0f0f0f","stoneWhite":"#ececec","background":"#1b1b1b"}"##,
+                r##"{"schemaVersion":2,"boardWood":"#2e2a24","boardLine":"#8a7a5a","starPoint":"#a89264","stoneBlack":"#0f0f0f","stoneWhite":"#ececec","background":"#1c1c1e","shell":{"text":"#f5f5f7","muted":"#98989d","subtle":"#636366","panel":"#252528","input":"#1e1e20","border":"#38383a","button":"#2c2c2e","buttonActive":"#3a3a3c","accent":"#0a84ff","danger":"#3d1c1c","dangerText":"#ff453a","success":"#30d158","track":"#38383a"}}"##,
             )
             .expect("the dark theme tokens are valid"),
             ThemeChoice::Mist => ThemeTokens::parse(
-                r##"{"schemaVersion":1,"boardWood":"#c8d4c4","boardLine":"#3f5a3f","starPoint":"#2e4a2e","stoneBlack":"#162016","stoneWhite":"#f4faf4","background":"#eef4ee"}"##,
+                r##"{"schemaVersion":2,"boardWood":"#cad5c7","boardLine":"#334a33","starPoint":"#243824","stoneBlack":"#141c14","stoneWhite":"#f4faf4","background":"#f2f5f2","shell":{"text":"#18221a","muted":"#4d5e50","subtle":"#788a7b","panel":"#ffffff","input":"#ebf0eb","border":"#d2ded2","button":"#e4ede4","buttonActive":"#d4e3d4","accent":"#248a3d","danger":"#fee2e2","dangerText":"#dc2626","success":"#28753a","track":"#d2ded2"}}"##,
             )
             .expect("the mist theme tokens are valid"),
         }
@@ -109,8 +109,9 @@ mod tests {
     #[test]
     fn every_theme_choice_exposes_valid_tokens() {
         for choice in THEME_CHOICES {
-            assert_eq!(choice.label().len() > 0, true);
-            assert!(ThemeChoice::tokens(*choice).schema_version == 1);
+            assert!(!choice.label().is_empty());
+            assert_eq!(ThemeChoice::tokens(*choice).schema_version, 2);
+            assert!(ThemeChoice::tokens(*choice).shell.is_some());
         }
     }
 
