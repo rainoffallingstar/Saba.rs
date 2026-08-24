@@ -161,6 +161,8 @@ struct ShellApp {
     engine_draft: SharedString,
     engine_spec_draft: SharedString,
     engine_spec_focus_handle: FocusHandle,
+    fox_query: SharedString,
+    fox_query_focus_handle: FocusHandle,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
     palette: UiPalette,
@@ -263,7 +265,7 @@ impl ShellApp {
         reason = "P2 will replace direct shell construction dependencies with dedicated controllers"
     )]
     fn new(
-        settings: sabaki_host::SettingsStore,
+        mut settings: sabaki_host::SettingsStore,
         settings_persistence: NativeSettingsPersistence,
         persistence: NativeHostPersistence,
         plugin_persistence: NativePluginPersistence,
@@ -373,6 +375,15 @@ impl ShellApp {
             .collect();
         let engine_store = sabaki_host::EngineStore::from_settings(&settings).unwrap_or_default();
         let engine_roles = EngineRoleAssignments::from_settings(&settings);
+        // Analysis is the principal board feedback loop. The legacy setting is
+        // optional, so a fresh Saba.rs profile must expose analysis markers
+        // instead of silently hiding a connected KataGo session.
+        if settings.get_bool("board.show_analysis").is_none() {
+            let _ = settings.set("board.show_analysis", serde_json::json!(true));
+        }
+        if settings.get_bool("view.show_leftsidebar").is_none() {
+            let _ = settings.set("view.show_leftsidebar", serde_json::json!(true));
+        }
         let active_console_role = EngineRole::ALL
             .into_iter()
             .find(|role| engine_roles.get(*role).is_some());
@@ -401,6 +412,8 @@ impl ShellApp {
             engine_draft: "".into(),
             engine_spec_draft: "".into(),
             engine_spec_focus_handle: cx.focus_handle(),
+            fox_query: "".into(),
+            fox_query_focus_handle: cx.focus_handle(),
             theme_choice,
             theme,
             palette,
@@ -506,6 +519,108 @@ impl ShellApp {
                 self.engine_roles = EngineRoleAssignments::from_settings(&self.settings);
                 self.status = format!("engine roles not persisted: {error}").into();
             }
+        }
+        cx.notify();
+    }
+
+    fn on_fox_query_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        window.focus(&self.fox_query_focus_handle);
+    }
+
+    fn on_fox_query_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut query = self.fox_query.to_string();
+        match event.keystroke.key.as_str() {
+            "backspace" => {
+                query.pop();
+            }
+            "enter" => {
+                self.fetch_fox_query(cx);
+                return;
+            }
+            "escape" => {
+                self.fox_query = "".into();
+            }
+            _ => {
+                if let Some(key_char) = event.keystroke.key_char.as_ref() {
+                    query.push_str(key_char);
+                }
+            }
+        }
+        self.fox_query = query.into();
+        cx.notify();
+    }
+
+    fn fetch_fox_query(&mut self, cx: &mut Context<Self>) {
+        let query = self.fox_query.to_string();
+        let query = query.trim().to_owned();
+        if query.is_empty() {
+            self.status = "输入野狐用户名或 ID 后按 Enter 查询".into();
+            cx.notify();
+            return;
+        }
+        self.show_toast(format!("🦊 正在查询野狐用户 {query} 的最新棋谱..."), cx);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result: Result<(sabaki_host::FoxGameSummary, String), String> = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let games = sabaki_host::fetch_user_recent_games(&query)?;
+                            let game = games
+                                .first()
+                                .ok_or_else(|| "未查询到近期对局记录".to_owned())?;
+                            let sgf = sabaki_host::fetch_game_sgf(&game.chess_id)?;
+                            Ok((game.clone(), sgf))
+                        })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| shell.apply_fox_game_result(result, cx))
+                        .ok();
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn apply_fox_game_result(
+        &mut self,
+        result: Result<(sabaki_host::FoxGameSummary, String), String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok((game, sgf)) => {
+                let mut events = RecordingSink;
+                match self.host.restore_from_sgf(&sgf, &mut events) {
+                    Ok(_) => {
+                        self.last_vertex = None;
+                        self.external_file.detach_file();
+                        self.disconnect_all_engine_sessions();
+                        let toast = format!(
+                            "🦊 成功导入野狐棋谱: {} ({}) vs {} ({}) [{}]",
+                            game.black_name,
+                            game.black_rank,
+                            game.white_name,
+                            game.white_rank,
+                            game.result
+                        );
+                        self.status = toast.clone().into();
+                        self.show_toast(toast, cx);
+                    }
+                    Err(err) => self.show_toast(format!("棋谱解析失败: {err}"), cx),
+                }
+            }
+            Err(err) => self.show_toast(format!("野狐对局同步失败: {err}"), cx),
         }
         cx.notify();
     }
@@ -666,7 +781,11 @@ impl ShellApp {
         }
         self.active_console_role = Some(role);
         self.status = format!("{} engine {name} attached", role.label()).into();
-        cx.notify();
+        if role == EngineRole::Analysis {
+            self.start_analysis(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     fn disconnect_engine_role(&mut self, role: EngineRole) {
@@ -1707,59 +1826,10 @@ impl ShellApp {
         }
 
         if builtin == Some(sabaki_host::BuiltinPluginCommand::FoxFetchLatest) {
-            self.show_toast("🦊 正在连接野狐围棋服务器抓取对局...", cx);
-            let weak = cx.entity().downgrade();
-            cx.spawn(
-                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
-                    let mut cx = cx.clone();
-                    async move {
-                        let result: Result<(sabaki_host::FoxGameSummary, String), String> = cx
-                            .background_executor()
-                            .spawn(async move {
-                                let games = sabaki_host::fetch_user_recent_games("潜伏")
-                                    .or_else(|_| sabaki_host::fetch_user_recent_games("987654"))?;
-                                if let Some(game) = games.first() {
-                                    let sgf = sabaki_host::fetch_game_sgf(&game.chess_id)?;
-                                    Ok((game.clone(), sgf))
-                                } else {
-                                    Err("未查询到近期对局记录".to_owned())
-                                }
-                            })
-                            .await;
-
-                        weak.update(&mut cx, |shell, cx| match result {
-                            Ok((game, sgf)) => {
-                                let mut events = RecordingSink;
-                                match shell.host.restore_from_sgf(&sgf, &mut events) {
-                                    Ok(_) => {
-                                        shell.last_vertex = None;
-                                        shell.external_file.detach_file();
-                                        shell.disconnect_all_engine_sessions();
-                                        let toast = format!(
-                                            "🦊 成功导入野狐棋谱: {} ({}) vs {} ({}) [{}]",
-                                            game.black_name,
-                                            game.black_rank,
-                                            game.white_name,
-                                            game.white_rank,
-                                            game.result
-                                        );
-                                        shell.status = toast.clone().into();
-                                        shell.show_toast(toast, cx);
-                                    }
-                                    Err(err) => {
-                                        shell.show_toast(format!("棋谱解析失败: {err}"), cx);
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                shell.show_toast(format!("野狐对局同步失败: {err}"), cx);
-                            }
-                        })
-                        .ok();
-                    }
-                },
-            )
-            .detach();
+            // A command click is a convenience path only. It uses the visible
+            // user query if present; otherwise it tells the user exactly how to
+            // select a game instead of downloading an unrelated hard-coded SGF.
+            self.fetch_fox_query(cx);
             return;
         }
 
@@ -4628,8 +4698,16 @@ mod headless_smoke {
         with_headless_shell("analysis-cmd", |shell| {
             let (command, arguments) =
                 crate::engine_console::analysis_command_from_settings(&shell.settings);
-            assert_eq!(command, "lz-analyze");
-            assert!(arguments.is_empty());
+            assert_eq!(command, "kata-analyze");
+            assert_eq!(arguments, vec!["B", "10", "rootInfo", "true"]);
+        });
+    }
+
+    #[test]
+    fn fresh_profile_enables_analysis_markers_and_engine_sidebar() {
+        with_headless_shell("analysis-visible-defaults", |shell| {
+            assert_eq!(shell.settings.get_bool("board.show_analysis"), Some(true));
+            assert_eq!(shell.settings.get_bool("view.show_leftsidebar"), Some(true));
         });
     }
 }
@@ -4687,7 +4765,7 @@ mod frontend_smoke {
     /// Beta frontend regression: the goban hitbox was zero-sized and the
     /// board visuals were offset by half the board margin.
     #[test]
-    fn fresh_settings_render_right_sidebar_collapsed_left_and_a_compact_status_bar() {
+    fn fresh_settings_render_visible_engine_sidebar_and_compact_status_bar() {
         let config = temp_config("fresh-defaults");
         let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(11));
         let mut cx = TestAppContext::build(dispatcher, None);
@@ -4709,8 +4787,9 @@ mod frontend_smoke {
         });
         vcx.run_until_parked();
 
-        // Default launch matches screenshot: left engines sidebar collapsed, right sidebar expanded.
-        assert!(vcx.debug_bounds("left-sidebar-hidden").is_some());
+        // A fresh profile exposes the engines and analysis controls rather
+        // than making a connected KataGo process look inert.
+        assert!(vcx.debug_bounds("left-sidebar").is_some());
         assert!(vcx.debug_bounds("right-sidebar").is_some());
         window_handle
             .update(&mut vcx.cx, |shell, _window, cx| {
@@ -4723,8 +4802,8 @@ mod frontend_smoke {
                     shell.settings.get_bool("view.show_leftsidebar")
                 })
                 .expect("shell remains alive"),
-            Some(true),
-            "first-launch left-pane toggle must persist shown"
+            Some(false),
+            "the visible first-launch left pane must persist hidden after toggling"
         );
         window_handle
             .update(&mut vcx.cx, |shell, _window, cx| {

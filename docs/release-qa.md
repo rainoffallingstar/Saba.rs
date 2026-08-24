@@ -48,22 +48,32 @@ Run a release bundle on a machine with normal system audio. Confirm:
    variations, markup and result are retained.
 4. Exercise CommentBox and node title with a system IME, selection, undo/redo,
    Enter submit and Escape cancel.
-5. Attach a real GTP engine, request a move and streaming analysis, then stop
-   analysis and save/reopen the generated SGF properties. KataGo's official GTP
-   syntax is `kata-analyze [player] [interval-centiseconds] [key value ...]`,
-   for example `kata-analyze B 10 rootInfo true`; it streams `info move ...`
-   records until an explicit `stop`. Do not configure unrecognized flags such as
-   `-visits 100` as `kata-analyze` arguments.
-6. Resize sidebars, use GameGraph right-click hotspot mutation, and switch
+5. Configure KataGo through Setup Hub, select it as **Analysis**, then connect
+   it. A fresh profile now automatically keeps the engine sidebar and board
+   analysis markers visible, and connecting the Analysis role automatically
+   starts the live stream. Confirm candidates appear in all three places:
+   board recommendation markers, the **LIVE KATAGO ANALYSIS** list, and the
+   win-rate graph. Stop analysis, make a move, and verify that a fresh analysis
+   run supersedes the old candidates; then save/reopen the generated SGF
+   properties. KataGo's official GTP syntax is `kata-analyze [player]
+   [interval-centiseconds] [key value ...]`, for example `kata-analyze B 10
+   rootInfo true`; it streams `info move ...` records until an explicit `stop`.
+   Do not configure unrecognized flags such as `-visits 100` as `kata-analyze`
+   arguments.
+6. In the Fox plugin card, enter a real Fox username or numeric ID, then press
+   Enter or click **查询并导入最新对局**. Verify the returned latest game imports
+   into the board. An empty query must show a prompt and must never download an
+   unrelated hard-coded game.
+7. Resize sidebars, use GameGraph right-click hotspot mutation, and switch
    Classic/Dark/Mist before and after an application restart.
-7. On macOS 26, enter and exit native fullscreen at least five times, including
+8. On macOS 26, enter and exit native fullscreen at least five times, including
    after resizing the window and switching displays when possible. The
    application must remain alive on each exit; this directly covers the GPUI
    Blade drawable-resize crash recorded in the release candidate. A later
    crash proved the titlebar-only workaround insufficient; the current
    drawable-resize deferral passed a fresh manual release-binary retest.
    Retain the step for every new GPUI/versioned release candidate.
-8. On macOS 26, choose **File → Open** and **File → Save As**. While each
+9. On macOS 26, choose **File → Open** and **File → Save As**. While each
    native panel is open, change keyboard input source when practical; cancel
    once and complete the open/save workflow once. The application must not
    abort, which covers the GPUI keyboard-layout notification reentrancy patch.

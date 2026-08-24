@@ -401,10 +401,11 @@ pub fn merge_analysis_entries(
 }
 
 /// The analysis command for the streaming analyze button, from the
-/// `engines.analyze_commands` setting (first entry wins); defaults to
-/// `lz-analyze` when the setting is absent or empty. An entry may carry
-/// arguments (`"kata-analyze -visits 100"`); the command name and its
-/// arguments are returned separately so transports receive them verbatim.
+/// `engines.analyze_commands` setting (first entry wins); defaults to the
+/// official KataGo streaming command when the setting is absent or empty. An
+/// entry may carry valid GTP arguments (`"kata-analyze B 10 rootInfo true"`);
+/// the command name and its arguments are returned separately so transports
+/// receive them verbatim.
 pub fn analysis_command_from_settings(
     settings: &sabaki_host::SettingsStore,
 ) -> (String, Vec<String>) {
@@ -415,9 +416,9 @@ pub fn analysis_command_from_settings(
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
         .filter(|command| !command.trim().is_empty())
-        .unwrap_or_else(|| "lz-analyze".to_owned());
+        .unwrap_or_else(|| "kata-analyze B 10 rootInfo true".to_owned());
     let mut tokens = entry.split_whitespace();
-    let name = tokens.next().unwrap_or("lz-analyze").to_owned();
+    let name = tokens.next().unwrap_or("kata-analyze").to_owned();
     let arguments: Vec<String> = tokens.map(ToOwned::to_owned).collect();
     (name, arguments)
 }
@@ -539,7 +540,15 @@ mod tests {
         let mut settings = sabaki_host::SettingsStore::default();
         assert_eq!(
             super::analysis_command_from_settings(&settings),
-            ("lz-analyze".to_owned(), Vec::new())
+            (
+                "kata-analyze".to_owned(),
+                vec![
+                    "B".to_owned(),
+                    "10".to_owned(),
+                    "rootInfo".to_owned(),
+                    "true".to_owned(),
+                ]
+            )
         );
 
         settings
@@ -577,7 +586,15 @@ mod tests {
             .expect("an empty array is valid");
         assert_eq!(
             super::analysis_command_from_settings(&settings),
-            ("lz-analyze".to_owned(), Vec::new())
+            (
+                "kata-analyze".to_owned(),
+                vec![
+                    "B".to_owned(),
+                    "10".to_owned(),
+                    "rootInfo".to_owned(),
+                    "true".to_owned(),
+                ]
+            )
         );
     }
 

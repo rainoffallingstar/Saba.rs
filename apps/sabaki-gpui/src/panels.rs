@@ -896,6 +896,55 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
                                 .text_color(rgb(shell.palette.subtle))
                                 .child(desc),
                         )
+                        .children(plugin_id.contains("fox").then(|| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .track_focus(&shell.fox_query_focus_handle)
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.accent))
+                                        .bg(rgb(shell.palette.panel))
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.text))
+                                        .child(if shell.fox_query.is_empty() {
+                                            "输入野狐用户名或 ID，按 Enter 查询最新棋谱".to_owned()
+                                        } else {
+                                            shell.fox_query.to_string()
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(ShellApp::on_fox_query_focus),
+                                        )
+                                        .on_key_down(cx.listener(ShellApp::on_fox_query_key_down)),
+                                )
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .bg(rgb(shell.palette.button))
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.border))
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(shell.palette.text))
+                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                        .child("查询并导入最新对局 →")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|shell, _, _, cx| {
+                                                shell.fetch_fox_query(cx)
+                                            }),
+                                        ),
+                                )
+                        }))
                         .children(plugin.process_status.as_ref().map(|status| {
                             let color = if status.starts_with("running") {
                                 rgb(shell.palette.success)
@@ -2496,15 +2545,35 @@ pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
                         }),
                 ),
         )
-        .child(if shell.analysis.is_empty() {
+        .child(
             div()
-        } else {
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_2()
+                .rounded(px(4.0))
+                .bg(rgb(shell.palette.input))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .text_sm()
+                .child(if shell.analysis_task.is_some() {
+                    "LIVE KATAGO ANALYSIS · searching"
+                } else if shell.analysis.is_empty() {
+                    "ANALYSIS · connect an Analysis engine to start"
+                } else {
+                    "ANALYSIS · latest candidates"
+                })
+                .child(if shell.analysis.is_empty() {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("分析结果会显示在棋盘推荐点、此候选列表和胜率图中。")
+                } else {
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .text_sm()
-                .child("analysis")
                 .child(
                     div()
                         .flex()
@@ -2550,7 +2619,8 @@ pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
                         )
                         .child("white"),
                 )
-        })
+                })
+        )
         .child(
             if shell
                 .settings
