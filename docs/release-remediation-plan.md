@@ -74,10 +74,10 @@ cargo build --release --locked -p sabaki-gpui
 
 ### P1.1 CI 与打包
 
-- [ ] 推送候选 commit；
-- [ ] Ubuntu、macOS、Windows 的 CI 全绿；
-- [ ] 当前 commit 触发 release workflow；
-- [ ] 记录 `.app/.dmg`、tarball/AppImage、zip/NSIS、Flatpak 的 checksum；
+- [x] 推送候选 commit（最终候选：`8880412e54bef87ddf3091e0f9cc830696c067b0`）；
+- [x] Ubuntu、macOS、Windows 的 CI 全绿（run [`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577)）；
+- [x] 当前 commit 触发 release workflow（run [`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374)）；
+- [x] 记录 `.app/.dmg`、tarball/AppImage、zip/NSIS、Flatpak 的 checksum（见 `docs/release-readiness.md`）；
 - [ ] 失败时不得引用旧 commit 的成功 workflow 作为证据。
 
 ### P1.2 应用身份与版本

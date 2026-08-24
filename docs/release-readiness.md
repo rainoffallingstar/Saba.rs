@@ -31,6 +31,15 @@ tests, and the KataGo model resource seam. The workspace volume ran out of
 space during an initial link (`errno=28`); the same serialized gate passed
 using the isolated, regenerable `CARGO_TARGET_DIR=/tmp/sabaki-cargo-target`.
 
+The final candidate commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed the
+three-platform CI matrix in run
+[`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577).
+The final release workflow in run
+[`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374)
+passed macOS, Windows, Ubuntu and Flatpak packaging for that same commit. The
+workflow artifacts were downloaded and their archive formats were locally
+validated; SHA-256 values are recorded below.
+
 The earlier missing-crate doctest failure was not reproduced serially: it was
 caused by overlapping Cargo processes competing for the same `target/` build
 artifacts. CI and local release validation must therefore keep Cargo gates
@@ -40,7 +49,25 @@ Cargo still reports two **transitive** future-incompatible packages:
 `block 0.1.6` (uninhabited static) and `proc-macro-error2 2.0.1` (private
 `proc_macro` re-export). Neither is project source; track upstream upgrades or
 a scoped dependency patch before a Rust toolchain makes either warning fatal.
-The current worktree is not pushed, so historical CI still does not validate it.
+
+### Final candidate artifact evidence
+
+The final release workflow produced and locally validated these artifacts for
+commit `8880412e`:
+
+| Artifact | SHA-256 |
+|---|---|
+| `saba-rs-v0.1.0-macos.dmg` | `98ee3e8f94a592553693b725aca3938f10bf2b245a635dca68d4d1717408af25` |
+| `saba-rs-v0.1.0-linux-x86_64.tar.gz` | `e9639f9014c8bf7c23f2804d4e2a3fa76370913ef2d90ec964f4f282064bd245` |
+| `saba-rs-v0.1.0-linux-x86_64.AppImage` | `a3261f451777744c912f3f28ec46ec5574b738783dc4a545b30756b78580f693` |
+| `saba-rs-v0.1.0-linux-x86_64.flatpak` | `9c3a109705b2b48a06a0ddce1516760e512851a914a0821c97110228fd9a7f08` |
+| `saba-rs-v0.1.0-windows-x86_64.zip` | `e9d87a962625f1e6b5e4c9831c0ba5326eb7ca37593f4485e91d6b1232b613bd` |
+| `saba-rs-v0.1.0-windows-x86_64-setup.exe` | `c45b8280d2e703013507c8acd4a1b495a89aba59315924e9c6acf7677340cb48` |
+
+The ZIP passed `unzip -t`; the Linux tarball passed `tar -tzf`; `file`
+identified the expected ELF, PE, Flatpak data and DMG payload types. This is
+packaging evidence, not clean-machine install, upgrade, uninstall, signing,
+notarization or end-user QA evidence.
 
 ## CI and packaging evidence
 
@@ -60,8 +87,8 @@ candidate builds on every runner. There is no published GitHub Release yet.
 |---|---|---|
 | Repository authority | Ready | Root is Saba.rs mainline; `refer-repo/` is ignored. Keep CI/Tag/Release here. |
 | Formatting, tests, clippy, locked release build | Locally ready | All four commands passed serially; keep CI gates serial. CI now also runs the vendored GPUI patch-contract guard on all three runners. |
-| Current commit three-platform CI | Not run | Split/commit/push current work and record the green run URL. |
-| Current commit packaging | Not run | Trigger root release workflow; it now generates `SHA256SUMS.txt`. | |
+| Current commit three-platform CI | Passed | Commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed Ubuntu/macOS/Windows in run [`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577). |
+| Current commit packaging | Passed | Same commit passed macOS/Windows/Ubuntu/Flatpak release packaging in run [`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374); artifact hashes are recorded above. |
 | macOS fullscreen and file-dialog regressions | Passed once, candidate retest required | Re-run `release-qa.md` for every candidate and GPUI upgrade. |
 | Application packages | macOS `.app` locally verified; unsigned | Current `.app` passed plist and ad-hoc signature verification; the restricted local environment could not create a dmg. Validate CI `.dmg`, AppImage/tarball, NSIS/zip and Flatpak. |
 | macOS signing, hardened runtime, notarization | Not started | Provide Developer ID credentials; notarize, staple and test on a clean Mac. |
