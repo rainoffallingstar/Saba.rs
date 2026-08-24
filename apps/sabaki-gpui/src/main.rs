@@ -158,6 +158,10 @@ struct ShellApp {
     analysis_best_move: Option<Vertex>,
     analysis_run: sabaki_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
+    /// Node the attached engine was last replayed to. When a new analysis run
+    /// targets the same node, the engine position (and thus KataGo's search
+    /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
+    last_analysis_node: Option<sabaki_domain_core::NodeId>,
     engine_log: Vec<EngineLogEntry>,
     engine_input_focus_handle: FocusHandle,
     engine_draft: SharedString,
@@ -412,6 +416,7 @@ impl ShellApp {
             analysis_best_move: None,
             analysis_run: sabaki_host::AnalysisRunController::default(),
             analysis_task: None,
+            last_analysis_node: None,
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
             engine_draft: "".into(),
@@ -464,6 +469,7 @@ impl ShellApp {
         (name, arguments)
     }
 
+    #[allow(dead_code)]
     fn on_engine_selected(
         &mut self,
         name: &str,
@@ -497,6 +503,7 @@ impl ShellApp {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn on_engine_role_toggled(&mut self, role: EngineRole, name: &str, cx: &mut Context<Self>) {
         // A selected role button focuses that role for attach/detach and the
         // GTP console; clicking the already focused button clears its role.
@@ -829,6 +836,7 @@ impl ShellApp {
         if role == EngineRole::Analysis {
             self.analysis.clear();
             self.analysis_best_move = None;
+            self.last_analysis_node = None;
         }
         self.status = if attached {
             format!("{} engine detached", role.label())
@@ -910,13 +918,17 @@ impl ShellApp {
         let board_size = self.host.snapshot().board.width;
         let moves = self.host.snapshot().moves.clone();
 
-        // Session mode: replay the position into the connected session and
-        // stream from it. On any failure we fall back to a fresh process.
+        // Session mode: reuse the connected session's current position and
+        // search tree when the node is unchanged; only replay when the board
+        // moved. This lets a deeper `maxVisits` pass build on a shallow one.
+        let position_changed =
+            self.last_analysis_node.as_ref() != Some(&analysis_snapshot.current_node_id);
         let mut session_mode = false;
         if self.engine_controller.is_attached(EngineRole::Analysis) {
-            if let Err(error) =
-                self.engine_controller
-                    .replay(EngineRole::Analysis, board_size, &moves)
+            if position_changed
+                && let Err(error) =
+                    self.engine_controller
+                        .replay(EngineRole::Analysis, board_size, &moves)
             {
                 self.status = format!("analysis session setup failed: {error}").into();
                 cx.notify();
@@ -946,6 +958,7 @@ impl ShellApp {
                 }
             }
         }
+        self.last_analysis_node = Some(analysis_snapshot.current_node_id.clone());
 
         let task_run = run.clone();
         let task_command = command.clone();
@@ -1236,6 +1249,9 @@ impl ShellApp {
                 self.status = format!("analysis engine replay failed: {error}").into();
                 return;
             }
+            // The leased session was replayed to the newest position; keep the
+            // reuse tracking in sync so the next run skips a redundant replay.
+            self.last_analysis_node = Some(self.host.snapshot().current_node_id.clone());
         }
         self.analysis_run.clear_replay(run);
         self.engine_controller
@@ -3355,6 +3371,26 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn on_export_gif_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.host.snapshot();
+        let options = sabaki_host::GifExportOptions::default();
+        match sabaki_host::export_sgf_to_gif(&snapshot, &options) {
+            Ok(gif_bytes) => {
+                let default_name = format!("saba_game_{}.gif", std::process::id());
+                let dest = std::env::temp_dir().join(&default_name);
+                if std::fs::write(&dest, &gif_bytes).is_ok() {
+                    self.show_toast(format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()), cx);
+                } else {
+                    self.show_toast("GIF 保存失败".to_owned(), cx);
+                }
+            }
+            Err(e) => {
+                self.show_toast(format!("GIF 导出失败: {e}"), cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn open_drawer(&mut self, drawer: ActiveDrawer, status: &str, cx: &mut Context<Self>) {
         self.active_drawer = Some(drawer);
         self.status = status.to_owned().into();
@@ -5208,39 +5244,15 @@ mod frontend_smoke {
             None,
             "closing read-only drawers must clear drawer state"
         );
-        let engine_roster = vcx
-            .debug_bounds("engine-roster")
-            .expect("engine roster must have a debug selector");
-        let gtp_console = vcx
-            .debug_bounds("gtp-console")
-            .expect("GTP console must have a debug selector");
-        let peer_list_splitter = vcx
-            .debug_bounds("peer-list-splitter")
-            .expect("engine sidebar splitter must have a debug selector");
-        for (name, bounds) in [
-            ("engine roster", engine_roster),
-            ("GTP console", gtp_console),
-        ] {
-            assert!(
-                f32::from(bounds.origin.x) >= f32::from(left_sidebar.origin.x) - 0.5
-                    && f32::from(bounds.right()) <= f32::from(left_sidebar.right()) + 0.5,
-                "{name} {:?} must live in the left sidebar {:?}",
-                bounds,
-                left_sidebar
-            );
-        }
+        let engine_sidebar = vcx
+            .debug_bounds("engine-sidebar")
+            .expect("engine analysis sidebar must have a debug selector");
         assert!(
-            engine_roster.bottom() <= peer_list_splitter.origin.y
-                && peer_list_splitter.bottom() <= gtp_console.origin.y,
-            "engine roster {:?}, splitter {:?}, and console {:?} must be vertically ordered",
-            engine_roster,
-            peer_list_splitter,
-            gtp_console
-        );
-        assert!(
-            (f32::from(engine_roster.size.height) - 130.0).abs() < 0.75,
-            "peer list height must use the persisted setting, got {:?}",
-            engine_roster.size
+            f32::from(engine_sidebar.origin.x) >= f32::from(left_sidebar.origin.x) - 0.5
+                && f32::from(engine_sidebar.right()) <= f32::from(left_sidebar.right()) + 0.5,
+            "engine sidebar {:?} must live in the left sidebar {:?}",
+            engine_sidebar,
+            left_sidebar
         );
         let game_graph_region = vcx
             .debug_bounds("game-graph-region")
@@ -5415,60 +5427,6 @@ mod frontend_smoke {
         assert!(
             persisted_width.is_some_and(|width| (width - 310.0).abs() < 0.75),
             "finishing the drag must persist the pane width, got {persisted_width:?}"
-        );
-
-        let peer_splitter = vcx
-            .debug_bounds("peer-list-splitter")
-            .expect("the engine sidebar splitter must still have a debug selector");
-        let peer_drag_start = peer_splitter.center();
-        let peer_drag_end = gpui::point(
-            px(f32::from(peer_drag_start.x)),
-            px(f32::from(peer_drag_start.y) + 40.0),
-        );
-        vcx.simulate_mouse_down(
-            peer_drag_start,
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        vcx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        vcx.run_until_parked();
-        vcx.simulate_mouse_move(
-            peer_drag_end,
-            Some(gpui::MouseButton::Left),
-            gpui::Modifiers::none(),
-        );
-        vcx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        vcx.simulate_mouse_up(
-            peer_drag_end,
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        vcx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        let resized_roster = vcx
-            .debug_bounds("engine-roster")
-            .expect("the engine roster must still have a debug selector");
-        assert!(
-            (f32::from(resized_roster.size.height) - 170.0).abs() < 0.75,
-            "dragging the engine splitter 40px should resize the roster to 170px, got {:?}",
-            resized_roster.size
-        );
-        let persisted_height = window_handle
-            .read_with(&vcx.cx, |shell, _| {
-                shell
-                    .settings
-                    .get("view.peerlist_height")
-                    .and_then(serde_json::Value::as_f64)
-            })
-            .unwrap();
-        assert!(
-            persisted_height.is_some_and(|height| (height - 170.0).abs() < 0.75),
-            "finishing the vertical drag must persist the peer list height, got {persisted_height:?}"
         );
         let _ = std::fs::remove_dir_all(&config);
     }

@@ -8,8 +8,10 @@ pub mod engine_workflow;
 pub mod external_file;
 pub mod file_codec;
 pub mod fox_kifu;
+pub mod gif_exporter;
 pub mod katago_setup;
 pub mod legacy_styles;
+pub mod move_grading;
 pub mod persistence;
 pub mod plugin_commands;
 pub mod plugin_controller;
@@ -17,6 +19,7 @@ pub mod plugin_supervisor;
 pub mod plugin_wasm;
 pub mod plugin_workflow;
 pub mod recent_files;
+pub mod rules_sync;
 pub mod settings;
 pub mod territory_estimator;
 pub mod theme_workflow;
@@ -57,6 +60,7 @@ pub use fox_kifu::{
     fetch_user_recent_games, parse_fox_chess_list_response, parse_fox_sgf_response,
     parse_query_user_response, sanitize_fox_sgf,
 };
+pub use gif_exporter::{GifExportOptions, export_sgf_to_gif};
 pub use katago_setup::{
     CurlKataGoModelDownloadAdapter, HardwareBackend, KATAGO_OFFICIAL_RELEASE_BASE,
     KataGoEnvironment, KataGoModelDownloadAdapter, KataGoModelInstallError, KataGoModelTier,
@@ -66,6 +70,9 @@ pub use katago_setup::{
     install_katago_model, install_katago_model_with, katago_storage_dir,
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
+pub use move_grading::{
+    GameAnalyticsSummary, MoveEvaluation, MoveQuality, compute_game_move_evaluations,
+};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_commands::{BuiltinPluginCommand, BuiltinPluginCommandRegistry};
 pub use plugin_controller::{PluginController, PluginControllerOutcome};
@@ -81,6 +88,7 @@ pub use plugin_workflow::{
     scan_plugin_installations,
 };
 pub use recent_files::{RecentFileDto, RecentFilesStore};
+pub use rules_sync::{GameRuleConfig, GoRuleset};
 pub use settings::{
     LoadedSettings, SettingKind, SettingValidationError, SettingsPersistence, SettingsStore,
     SettingsValidation, is_legacy_overwrite_marker, load_settings_store, persist_settings_store,

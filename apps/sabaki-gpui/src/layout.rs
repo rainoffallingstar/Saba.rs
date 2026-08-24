@@ -10,6 +10,7 @@ use sabaki_host::SettingsStore;
 pub enum SplitPane {
     Left,
     Right,
+    #[allow(dead_code)]
     PeerList,
     WinrateGraph,
     Properties,

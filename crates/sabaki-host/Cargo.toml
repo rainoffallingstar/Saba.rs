@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 encoding_rs = "0.8.35"
+gif = "0.14"
 sabaki-domain-core = { path = "../domain-core" }
 sabaki-plugin-runtime = { path = "../plugin-runtime" }
 serde = { version = "1.0.229", features = ["derive"] }

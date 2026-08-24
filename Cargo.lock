@@ -4727,6 +4727,7 @@ name = "sabaki-host"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "gif",
  "sabaki-domain-core",
  "sabaki-plugin-runtime",
  "serde",

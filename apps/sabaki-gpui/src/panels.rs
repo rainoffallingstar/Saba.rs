@@ -2272,6 +2272,7 @@ pub fn render_about_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
 }
 
 /// Renders the vertical splitter between the roster and the GTP console.
+#[allow(dead_code)]
 pub fn render_peer_list_split_handle(palette: UiPalette, cx: &Context<ShellApp>) -> Stateful<Div> {
     div()
         .id("peer-list-splitter")
@@ -2320,6 +2321,7 @@ pub fn render_right_sidebar_split_handle(
 /// configured engines can be selected, attached, and assigned analysis/black/
 /// white roles. Role selection is explicit even though this client currently
 /// owns one process session at a time.
+#[allow(dead_code)]
 pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     div()
         .id("engine-roster")
@@ -2632,6 +2634,7 @@ pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         )
 }
 
+#[allow(dead_code)]
 pub fn render_gtp_console_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let selected = shell
         .active_console_role
@@ -3104,30 +3107,432 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         )
 }
 
-/// The M2 left sidebar combines Sabaki's upper engine roster and lower GTP
-/// transcript with a persisted vertical split.
+fn render_stat_row(
+    label: &'static str,
+    black: usize,
+    white: usize,
+    color: u32,
+    shell: &ShellApp,
+) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(color))
+                .child(label),
+        )
+        .child(
+            div()
+                .text_color(rgb(shell.palette.text))
+                .child(black.to_string()),
+        )
+        .child(
+            div()
+                .text_color(rgb(shell.palette.text))
+                .child(white.to_string()),
+        )
+}
+
+/// The KaTrain-style KataGo AI Analysis Panel on the left sidebar.
 pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let snapshot = shell.host.snapshot();
+    let rule_config = sabaki_host::GameRuleConfig::from_root_properties(
+        &snapshot.root_properties,
+        snapshot.board.width,
+    );
+    let evaluations = sabaki_host::compute_game_move_evaluations(&snapshot);
+    let summary = sabaki_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+
+    // Current node move evaluation (if any)
+    let current_eval = evaluations
+        .iter()
+        .find(|e| e.node_id == snapshot.current_node_id);
+
+    // Candidates sorted by visits descending
+    let mut candidates = shell.analysis.clone();
+    candidates.sort_by_key(|e| std::cmp::Reverse(e.visits));
+
+    let live_winrate = if !shell.analysis.is_empty() {
+        best_analysis_winrate(&shell.analysis, snapshot.board.next_player)
+    } else {
+        0.50
+    };
+
+    let best_score_lead = candidates.first().and_then(|e| e.score_lead);
+    let total_visits: u64 = candidates.iter().map(|e| e.visits).sum();
+
     div()
         .id("engine-sidebar")
         .debug_selector(|| "engine-sidebar".to_owned())
         .size_full()
         .min_h_0()
+        .overflow_y_scroll()
         .flex()
         .flex_col()
+        .gap_2()
+        .p_3()
+        .bg(rgb(shell.palette.input))
+        .text_xs()
+        // Section 1: Header with Rule, Komi, Handicap
         .child(
             div()
-                .flex_none()
-                .h(px(shell.peer_list_height))
-                .min_h_0()
-                .child(render_engine_roster_panel(shell, cx)),
+                .flex()
+                .items_center()
+                .justify_between()
+                .p_2()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child(format!("📊 {}", rule_config.ruleset.label())),
+                )
+                .child(div().text_color(rgb(shell.palette.muted)).child(format!(
+                    "贴目 {:.1}目{}",
+                    rule_config.komi,
+                    if rule_config.handicap >= 2 {
+                        format!(" (让{}子)", rule_config.handicap)
+                    } else {
+                        String::new()
+                    }
+                ))),
         )
-        .child(render_peer_list_split_handle(shell.palette, cx))
+        // Section 2: AI Live Scorecard (Winrate & Score Lead)
         .child(
             div()
-                .flex_1()
-                .min_h_0()
-                .pt_2()
-                .child(render_gtp_console_panel(shell, cx)),
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("AI 实时评估 (KATRAIN)"),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(if shell.analysis_task.is_some() {
+                                    shell.palette.success
+                                } else {
+                                    shell.palette.muted
+                                }))
+                                .child(if shell.analysis_task.is_some() {
+                                    "● 分析计算中..."
+                                } else {
+                                    "○ 待机"
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.text))
+                                .child(format!("胜率: {:.1}%", live_winrate * 100.0)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(if best_score_lead.unwrap_or(0.0) >= 0.0 {
+                                    shell.palette.accent
+                                } else {
+                                    shell.palette.danger_text
+                                }))
+                                .child(
+                                    best_score_lead
+                                        .map(|s| format!("领先: {:+.1} 目", s))
+                                        .unwrap_or_else(|| "领先: 0.0 目".to_owned()),
+                                ),
+                        ),
+                )
+                // Winrate bar
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child("黑")
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(px(8.0))
+                                .rounded(px(2.0))
+                                .bg(rgb(shell.palette.track))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(px(live_winrate as f32 * 140.0))
+                                        .bg(rgb(shell.palette.text)),
+                                ),
+                        )
+                        .child("白"),
+                )
+                // Move quality badge
+                .children(current_eval.map(|ev| {
+                    div()
+                        .mt_1()
+                        .p_1p5()
+                        .rounded_md()
+                        .bg(rgb(shell.palette.input))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(ev.quality.color_u32()))
+                                .child(format!("{} {}", ev.quality.badge(), ev.quality.label())),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!("损失 {:.1}目", ev.points_lost)),
+                        )
+                })),
+        )
+        // Section 3: AI Candidate Moves Table
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.subtle))
+                                .child(format!("AI 候选着法 ({} 选点)", candidates.len())),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!("{} visits", total_visits)),
+                        ),
+                )
+                .child(if candidates.is_empty() {
+                    div().p_2().text_color(rgb(shell.palette.subtle)).child(
+                        "点击底部【⚡ 启动分析】或下子，KataGo 将在此呈现候选点排行与前瞻变化图。",
+                    )
+                } else {
+                    div().flex().flex_col().gap_1().children(
+                        candidates.iter().take(6).enumerate().map(|(idx, entry)| {
+                            let vtx = entry.vertex.as_deref().unwrap_or("pass");
+                            let is_best = idx == 0;
+                            let wr_pct = entry.winrate * 100.0;
+                            let score_str = entry
+                                .score_lead
+                                .map(|s| format!("{:+.1}目", s))
+                                .unwrap_or_default();
+                            let pv_str = if entry.pv.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    "PV: {}",
+                                    entry
+                                        .pv
+                                        .iter()
+                                        .take(4)
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(" → ")
+                                )
+                            };
+
+                            div()
+                                .p_1p5()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(if is_best {
+                                    rgb(shell.palette.accent)
+                                } else {
+                                    rgb(shell.palette.border)
+                                })
+                                .bg(if is_best {
+                                    rgb(shell.palette.button_active)
+                                } else {
+                                    rgb(shell.palette.input)
+                                })
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(if is_best {
+                                                    rgb(shell.palette.accent)
+                                                } else {
+                                                    rgb(shell.palette.text)
+                                                })
+                                                .child(format!("#{} {}", idx + 1, vtx)),
+                                        )
+                                        .child(div().text_color(rgb(shell.palette.text)).child(
+                                            format!(
+                                                "{:.1}% · {} · {}v",
+                                                wr_pct, score_str, entry.visits
+                                            ),
+                                        )),
+                                )
+                                .children((!pv_str.is_empty()).then(|| {
+                                    div().text_color(rgb(shell.palette.subtle)).child(pv_str)
+                                }))
+                        }),
+                    )
+                }),
+        )
+        // Section 4: Full-Game Review Statistics Summary (KaTrain / sgf2gif)
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("整局好坏棋复盘 (SGF2GIF 统计)"),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!("共 {} 手", summary.total_moves)),
+                        ),
+                )
+                // KaTrain Category Counts Grid
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .text_color(rgb(shell.palette.muted))
+                                .child("评级")
+                                .child("黑棋")
+                                .child("白棋"),
+                        )
+                        .child(render_stat_row(
+                            "🌟 最佳 (Best)",
+                            summary.black_best_count,
+                            summary.white_best_count,
+                            0x10b981,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟢 好手 (Good)",
+                            summary.black_good_count,
+                            summary.white_good_count,
+                            0x0ea5e9,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟡 略亏 (Inaccuracy)",
+                            summary.black_inaccuracy_count,
+                            summary.white_inaccuracy_count,
+                            0xf59e0b,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟠 疑问 (Mistake)",
+                            summary.black_mistake_count,
+                            summary.white_mistake_count,
+                            0xf97316,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🔴 恶手 (Blunder)",
+                            summary.black_blunder_count,
+                            summary.white_blunder_count,
+                            0xef4444,
+                            shell,
+                        )),
+                )
+                // Averages
+                .child(
+                    div()
+                        .mt_1()
+                        .p_1()
+                        .rounded_sm()
+                        .bg(rgb(shell.palette.input))
+                        .flex()
+                        .justify_between()
+                        .child(div().child(format!("黑均损: {:.1}目", summary.black_avg_loss)))
+                        .child(div().child(format!("白均损: {:.1}目", summary.white_avg_loss))),
+                )
+                // AI verdict commentary
+                .child(
+                    div()
+                        .mt_0p5()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child(summary.verdict()),
+                )
+                // Export GIF Button
+                .child(
+                    div()
+                        .mt_1p5()
+                        .px_2()
+                        .py_1p5()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .border_1()
+                        .border_color(rgb(shell.palette.accent))
+                        .bg(rgb(shell.palette.button))
+                        .text_color(rgb(shell.palette.accent))
+                        .font_weight(FontWeight::MEDIUM)
+                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                        .child("🎬 导出动画 GIF 棋谱 (sgf2gif)...")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(ShellApp::on_export_gif_action),
+                        ),
+                ),
         )
 }
 

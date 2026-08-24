@@ -307,6 +307,7 @@ impl EngineRoleAssignments {
 
     /// Assigns a configured engine to one role. Selecting the same engine for
     /// an occupied role clears it, matching the checkable roster controls.
+    #[allow(dead_code)]
     pub fn toggle(&mut self, role: EngineRole, engine_name: &str) -> bool {
         let slot = match role {
             EngineRole::Analysis => &mut self.analysis,
