@@ -3582,6 +3582,67 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .text_color(rgb(shell.palette.subtle))
                         .child(summary.verdict()),
                 )
+                // Top Blunders Clickable List
+                .children((!summary.top_blunders.is_empty()).then(|| {
+                    div()
+                        .mt_1()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("主要失误恶手 (点击直接跳转复盘):"),
+                        )
+                        .children(summary.top_blunders.iter().map(|blunder| {
+                            let node_id = blunder.node_id.clone();
+                            let vtx = blunder.played_vertex.as_deref().unwrap_or("?");
+                            let player_label = if blunder.player == sabaki_domain_core::Color::Black
+                            {
+                                "黑"
+                            } else {
+                                "白"
+                            };
+                            div()
+                                .cursor_pointer()
+                                .p_1()
+                                .rounded_sm()
+                                .bg(rgb(shell.palette.input))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .hover(|style| {
+                                    style
+                                        .bg(rgb(shell.palette.button_active))
+                                        .border_color(rgb(shell.palette.accent))
+                                })
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(blunder.quality.color_u32()))
+                                        .child(format!(
+                                            "第 {} 手 ({}) {}",
+                                            blunder.move_number, player_label, vtx
+                                        )),
+                                )
+                                .child(div().text_color(rgb(shell.palette.danger_text)).child(
+                                    format!(
+                                        "{} -{:.1}目",
+                                        blunder.quality.badge(),
+                                        blunder.points_lost
+                                    ),
+                                ))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell, _, _, cx| {
+                                        shell.navigate_to_node(node_id.clone(), cx);
+                                    }),
+                                )
+                        }))
+                }))
                 // Export GIF Button
                 .child(
                     div()
@@ -4797,6 +4858,31 @@ pub fn render_goban_area(
         }
     }
 
+    let mut pv_preview = Vec::new();
+    let pv_source = shell
+        .hovered_candidate_pv
+        .as_deref()
+        .or_else(|| shell.analysis.first().map(|e| e.pv.as_slice()));
+    if let Some(pv) = pv_source {
+        let mut color = board.next_player;
+        for (step_idx, move_str) in pv.iter().enumerate().take(6) {
+            if let Some(coords) = parse_gtp_vertex(board.width, move_str) {
+                pv_preview.push((
+                    sabaki_domain_core::Vertex {
+                        column: coords.0,
+                        row: coords.1,
+                    },
+                    color,
+                    step_idx + 1,
+                ));
+                color = match color {
+                    sabaki_domain_core::Color::Black => sabaki_domain_core::Color::White,
+                    sabaki_domain_core::Color::White => sabaki_domain_core::Color::Black,
+                };
+            }
+        }
+    }
+
     let options = crate::goban_view::GobanRenderOptions {
         show_coordinates: shell
             .settings
@@ -4823,7 +4909,7 @@ pub fn render_goban_area(
         hover_stone_color,
         analysis_candidates,
         eval_dots,
-        pv_preview: Vec::new(),
+        pv_preview,
         ownership: shell
             .analysis
             .first()

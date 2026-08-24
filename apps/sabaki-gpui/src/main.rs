@@ -119,6 +119,9 @@ actions!(
         StartAnalysis,
         StopAnalysis,
         GenerateEngineMove,
+        ToggleGtpTerminal,
+        StartWholeGameReview,
+        ExportGif,
         Quit,
     ]
 );
@@ -159,6 +162,7 @@ struct ShellApp {
     analysis_run: sabaki_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
     batch_review_progress: Option<sabaki_host::BatchReviewProgress>,
+    hovered_candidate_pv: Option<Vec<String>>,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
     /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
@@ -418,6 +422,7 @@ impl ShellApp {
             analysis_run: sabaki_host::AnalysisRunController::default(),
             analysis_task: None,
             batch_review_progress: None,
+            hovered_candidate_pv: None,
             last_analysis_node: None,
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
@@ -4627,6 +4632,46 @@ fn main() {
                 shell.navigate(NavigationDirection::Last, cx)
             });
         });
+        let shell_gtp_terminal = shell.clone();
+        cx.on_action(move |_: &ToggleGtpTerminal, cx| {
+            shell_gtp_terminal.update(cx, |shell, cx| {
+                shell.gtp_terminal_open = !shell.gtp_terminal_open;
+                if shell.gtp_terminal_open {
+                    shell.active_text_input = Some(ActiveTextInput::GtpInput);
+                }
+                cx.notify();
+            });
+        });
+        let shell_review = shell.clone();
+        cx.on_action(move |_: &StartWholeGameReview, cx| {
+            shell_review.update(cx, |shell, cx| shell.start_whole_game_review(cx));
+        });
+        let shell_export_gif = shell.clone();
+        cx.on_action(move |_: &ExportGif, cx| {
+            shell_export_gif.update(cx, |shell, cx| {
+                let snapshot = shell.host.snapshot();
+                let options = sabaki_host::GifExportOptions::default();
+                match sabaki_host::export_sgf_to_gif(&snapshot, &options) {
+                    Ok(gif_bytes) => {
+                        let suggested = format!("saba_game_{}.gif", std::process::id());
+                        let dest = shell
+                            .dialog_service
+                            .pick_save_gif_path(&suggested)
+                            .unwrap_or_else(|| std::env::temp_dir().join(&suggested));
+                        if std::fs::write(&dest, &gif_bytes).is_ok() {
+                            shell.show_toast(
+                                format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()),
+                                cx,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        shell.show_toast(format!("GIF 导出失败: {e}"), cx);
+                    }
+                }
+                cx.notify();
+            });
+        });
         cx.on_action(|_: &Quit, cx| cx.quit());
 
         cx.bind_keys([
@@ -4635,6 +4680,7 @@ fn main() {
             KeyBinding::new("cmd-s", SaveGame, None),
             KeyBinding::new("cmd-shift-s", SaveGameAs, None),
             KeyBinding::new("cmd-comma", OpenPreferences, None),
+            KeyBinding::new("space", StartAnalysis, None),
             KeyBinding::new("cmd-1", SetPlayMode, None),
             KeyBinding::new("cmd-2", SetEditMode, None),
             KeyBinding::new("cmd-3", SetScoringMode, None),
@@ -4642,6 +4688,9 @@ fn main() {
             KeyBinding::new("cmd-shift-b", ToggleEnginesSidebar, None),
             KeyBinding::new("cmd-shift-c", ToggleCoordinates, None),
             KeyBinding::new("cmd-shift-m", ToggleMoveNumbers, None),
+            KeyBinding::new("cmd-t", ToggleGtpTerminal, None),
+            KeyBinding::new("cmd-r", StartWholeGameReview, None),
+            KeyBinding::new("cmd-e", ExportGif, None),
             KeyBinding::new("cmd-g", GenerateEngineMove, None),
             KeyBinding::new("cmd-z", UndoMove, None),
             KeyBinding::new("cmd-shift-z", RedoMove, None),
