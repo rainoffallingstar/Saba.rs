@@ -68,15 +68,15 @@ pub fn parse(content: &str) -> Result<String, LegacyImportError> {
                 root.push(("WR".to_owned(), rank));
             }
         } else if line.starts_with("\\[GAMEINFOMAIN=") {
-            if !root.iter().any(|(key, _)| key == "RE") {
-                if let Some(result) = find_result(line, "GRLT:", ",", "ZIPSU:", ",") {
-                    root.push(("RE".to_owned(), result));
-                }
+            if !root.iter().any(|(key, _)| key == "RE")
+                && let Some(result) = find_result(line, "GRLT:", ",", "ZIPSU:", ",")
+            {
+                root.push(("RE".to_owned(), result));
             }
-            if !root.iter().any(|(key, _)| key == "KM") {
-                if let Some(value) = find_numeric(line, "GONGJE:", ",") {
-                    root.push(("KM".to_owned(), (value as f64 / 10.0).to_string()));
-                }
+            if !root.iter().any(|(key, _)| key == "KM")
+                && let Some(value) = find_numeric(line, "GONGJE:", ",")
+            {
+                root.push(("KM".to_owned(), (value as f64 / 10.0).to_string()));
             }
         } else if line.starts_with("\\[GAMETAG=") {
             if !root.iter().any(|(key, _)| key == "DT") {
@@ -93,15 +93,15 @@ pub fn parse(content: &str) -> Result<String, LegacyImportError> {
                     ));
                 }
             }
-            if !root.iter().any(|(key, _)| key == "RE") {
-                if let Some(result) = find_result(line, ",W", ",", ",Z", ",") {
-                    root.push(("RE".to_owned(), result));
-                }
+            if !root.iter().any(|(key, _)| key == "RE")
+                && let Some(result) = find_result(line, ",W", ",", ",Z", ",")
+            {
+                root.push(("RE".to_owned(), result));
             }
-            if !root.iter().any(|(key, _)| key == "KM") {
-                if let Some(value) = find_numeric(line, ",G", ",") {
-                    root.push(("KM".to_owned(), (value as f64 / 10.0).to_string()));
-                }
+            if !root.iter().any(|(key, _)| key == "KM")
+                && let Some(value) = find_numeric(line, ",G", ",")
+            {
+                root.push(("KM".to_owned(), (value as f64 / 10.0).to_string()));
             }
         } else if line.starts_with("INI") {
             let setup: Vec<&str> = line.split(' ').collect();

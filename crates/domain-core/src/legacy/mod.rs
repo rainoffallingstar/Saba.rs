@@ -71,7 +71,7 @@ pub fn tygem_handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)
 
     // For square boards, the reference's width-only / height-only branches
     // reduce to this: odd sizes (except 7) add the middle line/column points.
-    if size % 2 != 0 && size != 7 {
+    if !size.is_multiple_of(2) && size != 7 {
         if count == 5 {
             result.push((middle, middle));
         }
@@ -100,7 +100,7 @@ pub fn handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)> {
 
     let mut result = vec![(near, far), (far, near), (far, far), (near, near)];
 
-    if size % 2 != 0 && size != 7 {
+    if !size.is_multiple_of(2) && size != 7 {
         if count == 5 {
             result.push((middle, middle));
         }

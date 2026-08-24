@@ -113,10 +113,10 @@ pub fn parse(content: &str) -> Result<String, LegacyImportError> {
         } else {
             ""
         };
-        if margin.is_empty() {
-            if let Some(score) = line.split(' ').filter_map(parse_float_prefix).last() {
-                margin = score.to_string();
-            }
+        if margin.is_empty()
+            && let Some(score) = line.split(' ').filter_map(parse_float_prefix).next_back()
+        {
+            margin = score.to_string();
         }
         if !winner.is_empty() {
             root.push(("RE".to_owned(), format!("{winner}+{margin}")));

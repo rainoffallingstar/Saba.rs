@@ -143,18 +143,16 @@ pub fn parse(content: &str) -> Result<String, LegacyImportError> {
                     root.push(("AB".to_owned(), vertex));
                 }
             }
-            Some("ReviewComment") => {
-                if line.starts_with(".Comment") {
-                    let parts: Vec<&str> = line.split(',').collect();
-                    if let Ok(node_num) = parts[1].parse::<usize>() {
-                        let mut comment = String::new();
-                        while index + 1 < lines.len() && !lines[index + 1].starts_with(".Comment") {
-                            index += 1;
-                            comment.push_str(lines[index].trim());
-                            comment.push('\n');
-                        }
-                        comments.push((node_num.saturating_sub(1), comment));
+            Some("ReviewComment") if line.starts_with(".Comment") => {
+                let parts: Vec<&str> = line.split(',').collect();
+                if let Ok(node_num) = parts[1].parse::<usize>() {
+                    let mut comment = String::new();
+                    while index + 1 < lines.len() && !lines[index + 1].starts_with(".Comment") {
+                        index += 1;
+                        comment.push_str(lines[index].trim());
+                        comment.push('\n');
                     }
+                    comments.push((node_num.saturating_sub(1), comment));
                 }
             }
             _ => {}
@@ -172,10 +170,7 @@ pub fn parse(content: &str) -> Result<String, LegacyImportError> {
         if node_num == 0 {
             root.push(("C".to_owned(), comment));
         } else if let Some((start, end)) = find_node_range(&body, node_num) {
-            body.insert_str(
-                end,
-                &format!("C[{}]", escape_sgf_value(&comment.trim_end())),
-            );
+            body.insert_str(end, &format!("C[{}]", escape_sgf_value(comment.trim_end())));
             let _ = start;
         }
     }
