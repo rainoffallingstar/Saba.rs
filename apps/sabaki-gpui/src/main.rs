@@ -173,7 +173,7 @@ struct ShellApp {
     properties_height: f32,
     split_drag: Option<SplitDrag>,
     active_drawer: Option<ActiveDrawer>,
-    plugin_menu_open: bool,
+    active_plugin_popover: Option<String>,
     game_graph_context_node: Option<sabaki_domain_core::NodeId>,
     installed_themes: Vec<sabaki_host::InstalledTheme>,
     legacy_asar_themes: Vec<std::path::PathBuf>,
@@ -425,7 +425,7 @@ impl ShellApp {
             properties_height,
             split_drag: None,
             active_drawer: None,
-            plugin_menu_open: false,
+            active_plugin_popover: None,
             game_graph_context_node: None,
             installed_themes,
             legacy_asar_themes,
@@ -3295,17 +3295,50 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::Preferences, "preferences opened", cx);
     }
 
-    fn set_plugin_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.plugin_menu_open = open;
+    fn toggle_plugin_popover(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.active_plugin_popover.as_deref() == Some(id) {
+            self.active_plugin_popover = None;
+        } else {
+            self.active_plugin_popover = Some(id.to_owned());
+        }
         cx.notify();
     }
 
-    fn toggle_plugin_menu(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.set_plugin_menu_open(!self.plugin_menu_open, cx);
+    fn close_plugin_popover(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.active_plugin_popover = None;
+        cx.notify();
     }
 
-    fn close_plugin_menu(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.set_plugin_menu_open(false, cx);
+    fn toggle_plugin_pinned(&mut self, plugin_id: &str, cx: &mut Context<Self>) {
+        let pinned = self.pinned_plugin_ids();
+        let mut new_pinned = pinned.clone();
+        if new_pinned.contains(&plugin_id.to_owned()) {
+            new_pinned.retain(|id| id != plugin_id);
+        } else {
+            new_pinned.push(plugin_id.to_owned());
+        }
+        let json_arr = serde_json::Value::Array(
+            new_pinned
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        );
+        let _ = self.settings.set("plugins.pinned", json_arr);
+        let _ = sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence);
+        cx.notify();
+    }
+
+    pub fn pinned_plugin_ids(&self) -> Vec<String> {
+        self.settings
+            .get("plugins.pinned")
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn open_game_info(&mut self, cx: &mut Context<Self>) {
@@ -3722,7 +3755,7 @@ impl Render for ShellApp {
             .child(panels::render_player_bar(
                 &snapshot, &status, palette, self, cx,
             ))
-            .child(if self.plugin_menu_open {
+            .child(if self.active_plugin_popover.is_some() {
                 panels::render_plugin_menu(self, cx)
             } else {
                 div().id("plugin-menu-hidden")
@@ -4569,6 +4602,13 @@ mod headless_smoke {
     /// ShellApp entity runs headlessly without windows or GPU. Skipped on
     /// Windows where the test platform is unavailable.
     fn with_headless_shell(test_name: &str, run: impl FnOnce(&mut ShellApp)) {
+        with_headless_shell_cx(test_name, |shell, _| run(shell));
+    }
+
+    fn with_headless_shell_cx(
+        test_name: &str,
+        run: impl FnOnce(&mut ShellApp, &mut gpui::Context<ShellApp>),
+    ) {
         use gpui::{TestAppContext, TestDispatcher};
         use rand::SeedableRng;
         let config = temp_config(test_name);
@@ -4586,7 +4626,7 @@ mod headless_smoke {
                 cx,
             )
         });
-        shell_entity.update(&mut cx, |shell, _cx| run(shell));
+        shell_entity.update(&mut cx, |shell, cx| run(shell, cx));
         let _ = std::fs::remove_dir_all(&config);
     }
     #[test]
@@ -4727,6 +4767,20 @@ mod headless_smoke {
         with_headless_shell("analysis-visible-defaults", |shell| {
             assert_eq!(shell.settings.get_bool("board.show_analysis"), Some(true));
             assert_eq!(shell.settings.get_bool("view.show_leftsidebar"), Some(true));
+        });
+    }
+
+    #[test]
+    fn pinned_plugins_can_be_queried_and_toggled() {
+        with_headless_shell_cx("pinned-plugins", |shell, cx| {
+            assert!(shell.pinned_plugin_ids().is_empty());
+            shell.toggle_plugin_pinned("org.sabaki.fox-kifu-sync", cx);
+            assert_eq!(
+                shell.pinned_plugin_ids(),
+                vec!["org.sabaki.fox-kifu-sync".to_owned()]
+            );
+            shell.toggle_plugin_pinned("org.sabaki.fox-kifu-sync", cx);
+            assert!(shell.pinned_plugin_ids().is_empty());
         });
     }
 }
@@ -4986,7 +5040,7 @@ mod frontend_smoke {
         assert!(vcx.debug_bounds("plugin-menu").is_none());
         window_handle
             .update(&mut vcx.cx, |shell, _window, cx| {
-                shell.set_plugin_menu_open(true, cx);
+                shell.toggle_plugin_popover("all", cx);
             })
             .expect("plugin button opens compact overlay menu");
         vcx.update(|window, cx| {

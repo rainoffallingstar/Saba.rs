@@ -42,6 +42,7 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "edit.flatten_inherit_root_props"
         | "engines.analyze_commands"
         | "engines.gemove_analyze_commands"
+        | "plugins.pinned"
         | "sgf.comment_properties" => Some(SettingKind::StringArray),
         "app.lang"
         | "board.analysis_type"
@@ -406,6 +407,10 @@ mod tests {
             assert_eq!(setting_kind(key), Some(SettingKind::NullableString));
         }
         assert_eq!(setting_kind("engines.list"), Some(SettingKind::StringArray));
+        assert_eq!(
+            setting_kind("plugins.pinned"),
+            Some(SettingKind::StringArray)
+        );
         assert_eq!(setting_kind("unknown.key"), None);
         assert!(is_legacy_overwrite_marker("setting.overwrite.v0.50.1"));
         assert!(!is_legacy_overwrite_marker("setting.overwrite.future"));

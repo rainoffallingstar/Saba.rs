@@ -537,12 +537,12 @@ pub fn render_player_bar(
                         )
                 })),
         )
-        // Right: White player + rank + hamburger menu
+        // Right: White player + rank + pinned plugin buttons + 🧩 plugin menu + hamburger menu
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap_1p5()
                 .children((!white_rank.is_empty()).then(|| {
                     div()
                         .text_color(rgb(0x9a9a9a))
@@ -550,24 +550,98 @@ pub fn render_player_bar(
                 }))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(white_name))
                 .child(div().child("○"))
+                // Pinned plugin quick buttons directly on the bar
+                .children(
+                    shell
+                        .installed_plugins
+                        .iter()
+                        .filter(|plugin| {
+                            plugin.enabled && shell.pinned_plugin_ids().contains(&plugin.plugin_id)
+                        })
+                        .enumerate()
+                        .map(|(plugin_idx, plugin)| {
+                            let plugin_id = plugin.plugin_id.clone();
+                            let is_active =
+                                shell.active_plugin_popover.as_ref() == Some(&plugin_id);
+                            let icon = plugin_icon(&plugin_id);
+                            let label = if plugin_id.contains("katago") {
+                                "KataGo"
+                            } else if plugin_id.contains("fox") {
+                                "野狐"
+                            } else if plugin_id.contains("position") {
+                                "局面"
+                            } else if plugin_id.contains("sgf") {
+                                "导出"
+                            } else {
+                                plugin.name.as_str()
+                            };
+                            div()
+                                .id(("pinned-plugin", plugin_idx))
+                                .px_2()
+                                .py_0p5()
+                                .cursor_pointer()
+                                .rounded_md()
+                                .bg(if is_active {
+                                    rgb(0x2a2a3a)
+                                } else {
+                                    rgb(0x1e1e1e)
+                                })
+                                .border_1()
+                                .border_color(if is_active {
+                                    rgb(shell.palette.accent)
+                                } else {
+                                    rgb(0x3a3a3a)
+                                })
+                                .text_color(if is_active {
+                                    rgb(0x8ec5ff)
+                                } else {
+                                    rgb(0xe8e8e8)
+                                })
+                                .hover(|style| {
+                                    style
+                                        .bg(rgb(0x2e2e2e))
+                                        .border_color(rgb(shell.palette.accent))
+                                })
+                                .child(format!("{icon} {label}"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell, _, _, cx| {
+                                        shell.toggle_plugin_popover(&plugin_id, cx);
+                                    }),
+                                )
+                        }),
+                )
                 .child(
                     div()
                         .id("plugin-menu-button")
                         .debug_selector(|| "plugin-menu-button".to_owned())
                         .px_2()
-                        .py_1()
+                        .py_0p5()
                         .cursor_pointer()
                         .rounded_md()
-                        .text_color(rgb(if shell.plugin_menu_open {
-                            0x8ec5ff
+                        .bg(if shell.active_plugin_popover.as_deref() == Some("all") {
+                            rgb(0x2a2a3a)
                         } else {
-                            0xe8e8e8
-                        }))
+                            rgb(0x1e1e1e)
+                        })
+                        .border_1()
+                        .border_color(if shell.active_plugin_popover.as_deref() == Some("all") {
+                            rgb(shell.palette.accent)
+                        } else {
+                            rgb(0x3a3a3a)
+                        })
+                        .text_color(rgb(
+                            if shell.active_plugin_popover.as_deref() == Some("all") {
+                                0x8ec5ff
+                            } else {
+                                0xe8e8e8
+                            },
+                        ))
                         .hover(|style| style.bg(rgb(0x2a2a2a)))
-                        .child("🧩")
+                        .child("🧩 插件")
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(ShellApp::toggle_plugin_menu),
+                            cx.listener(|shell, _, _, cx| shell.toggle_plugin_popover("all", cx)),
                         ),
                 )
                 .child(
@@ -575,7 +649,7 @@ pub fn render_player_bar(
                         .id("drawer-menu-button")
                         .debug_selector(|| "drawer-menu-button".to_owned())
                         .px_2()
-                        .py_1()
+                        .py_0p5()
                         .cursor_pointer()
                         .rounded_md()
                         .text_color(rgb(0xe8e8e8))
@@ -1121,10 +1195,14 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
 /// Compact overlay menu for optional extensions. It uses transient screen space
 /// above the player bar rather than consuming the right game-inspection panel.
 pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let active_target = shell.active_plugin_popover.as_deref().unwrap_or("all");
+    let is_all = active_target == "all";
+    let pinned_ids = shell.pinned_plugin_ids();
+
     let enabled: Vec<&PluginPanelEntry> = shell
         .installed_plugins
         .iter()
-        .filter(|plugin| plugin.enabled)
+        .filter(|plugin| plugin.enabled && (is_all || plugin.plugin_id == active_target))
         .collect();
 
     div()
@@ -1138,8 +1216,8 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
         .justify_center()
         .child(
             div()
-                .w(px(320.0))
-                .h(px(340.0))
+                .w(px(340.0))
+                .max_h(px(380.0))
                 .flex()
                 .flex_col()
                 .gap_2()
@@ -1159,33 +1237,55 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(shell.palette.text))
-                                .child("扩展组件"),
+                                .child(if is_all {
+                                    "🧩 扩展组件中心"
+                                } else if active_target.contains("fox") {
+                                    "🦊 野狐围棋对局查询"
+                                } else if active_target.contains("katago") {
+                                    "⚡ KataGo AI 引擎与模型"
+                                } else {
+                                    "🧩 扩展组件"
+                                }),
                         )
                         .child(
                             div()
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.accent))
-                                .hover(|style| style.underline())
-                                .child("设置")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|shell, _, _, cx| shell.open_preferences(cx)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.muted))
-                                .hover(|style| style.text_color(rgb(shell.palette.text)))
-                                .child("关闭")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(ShellApp::close_plugin_menu),
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.accent))
+                                        .hover(|style| style.underline())
+                                        .child("⚙️ 设置")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|shell, _, _, cx| {
+                                                shell.open_preferences(cx)
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.muted))
+                                        .hover(|style| style.text_color(rgb(shell.palette.text)))
+                                        .child("✕ 关闭")
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(ShellApp::close_plugin_popover),
+                                        ),
                                 ),
                         ),
                 )
+                .children(is_all.then(|| {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("提示：点击各插件的 📌 按钮可固定/取消固定到工具栏")
+                }))
                 .child(if enabled.is_empty() {
                     div()
                         .p_2()
@@ -1201,6 +1301,9 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
                         .gap_2()
                         .children(enabled.iter().map(|plugin| {
                             let plugin_id = plugin.plugin_id.clone();
+                            let is_pinned = pinned_ids.contains(&plugin_id);
+                            let toggle_id = plugin_id.clone();
+
                             div()
                                 .p_2()
                                 .rounded_md()
@@ -1212,14 +1315,58 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(shell.palette.text))
-                                        .child(format!(
-                                            "{} {}",
-                                            plugin_icon(&plugin_id),
-                                            plugin.name
-                                        )),
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgb(shell.palette.text))
+                                                .child(format!(
+                                                    "{} {}",
+                                                    plugin_icon(&plugin_id),
+                                                    plugin.name
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .cursor_pointer()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .border_1()
+                                                .border_color(if is_pinned {
+                                                    rgb(shell.palette.accent)
+                                                } else {
+                                                    rgb(shell.palette.border)
+                                                })
+                                                .bg(if is_pinned {
+                                                    rgb(shell.palette.button_active)
+                                                } else {
+                                                    rgb(shell.palette.button)
+                                                })
+                                                .text_xs()
+                                                .text_color(if is_pinned {
+                                                    rgb(shell.palette.accent)
+                                                } else {
+                                                    rgb(shell.palette.muted)
+                                                })
+                                                .hover(|style| {
+                                                    style.bg(rgb(shell.palette.button_active))
+                                                })
+                                                .child(if is_pinned {
+                                                    "📌 已固定"
+                                                } else {
+                                                    "📌 固定到栏"
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |shell, _, _, cx| {
+                                                        shell.toggle_plugin_pinned(&toggle_id, cx);
+                                                    }),
+                                                ),
+                                        ),
                                 )
                                 .children(plugin_id.contains("fox").then(|| {
                                     div()
