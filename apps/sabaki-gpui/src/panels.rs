@@ -2349,195 +2349,177 @@ pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .child(format!("{} configured", shell.engine_store.list().len())),
                 ),
         )
-        .child(div().flex().flex_col().gap_1().children(
-            shell.engine_store.list().iter().map(|record| {
-                let name = record.name.clone();
-                let selected_role = shell
-                    .active_console_role
-                    .filter(|role| shell.engine_roles.get(*role) == Some(name.as_str()));
-                let connected =
-                    selected_role.is_some_and(|role| shell.engine_controller.is_attached(role));
-                let selected = selected_role.is_some();
-                let roles = [
-                    crate::engine_console::EngineRole::Analysis,
-                    crate::engine_console::EngineRole::Black,
-                    crate::engine_console::EngineRole::White,
-                ];
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .border_1()
-                    .border_color(rgb(if selected {
-                        shell.palette.accent
-                    } else {
-                        shell.palette.border
-                    }))
-                    .rounded_md()
-                    .bg(rgb(if selected {
-                        shell.palette.button_active
-                    } else {
-                        shell.palette.input
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_xs()
-                                            .text_color(rgb(shell.palette.text))
-                                            .child(record.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(shell.palette.muted))
-                                            .child(format!("({})", record.path)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .px_1()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(rgb(if connected {
-                                                shell.palette.success
-                                            } else {
-                                                shell.palette.button
-                                            }))
-                                            .text_xs()
-                                            .text_color(rgb(if connected {
-                                                0xffffff
-                                            } else {
-                                                shell.palette.muted
-                                            }))
-                                            .child(if connected { "attached" } else { "detached" }),
-                                    )
-                                    .children((!connected).then(|| {
-                                        let connect_name = name.clone();
-                                        div()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .border_1()
-                                            .border_color(rgb(shell.palette.accent))
-                                            .bg(rgb(shell.palette.button))
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(rgb(shell.palette.text))
-                                            .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                            .child("attach")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |shell,
-                                                                  _: &MouseDownEvent,
-                                                                  _: &mut Window,
-                                                                  cx: &mut Context<ShellApp>| {
-                                                    let _ = &connect_name;
-                                                    let role = shell.active_console_role.unwrap_or(
-                                                        crate::engine_console::EngineRole::Analysis,
-                                                    );
-                                                    shell.on_engine_connect(role, cx);
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(shell.engine_store.list().iter().map(|record| {
+                    let name = record.name.clone();
+                    let selected_role = shell
+                        .active_console_role
+                        .filter(|role| shell.engine_roles.get(*role) == Some(name.as_str()));
+                    let connected =
+                        selected_role.is_some_and(|role| shell.engine_controller.is_attached(role));
+                    let selected = selected_role.is_some();
+                    let roles = [
+                        crate::engine_console::EngineRole::Analysis,
+                        crate::engine_console::EngineRole::Black,
+                        crate::engine_console::EngineRole::White,
+                    ];
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_2()
+                        .border_1()
+                        .border_color(rgb(if selected {
+                            shell.palette.accent
+                        } else {
+                            shell.palette.border
+                        }))
+                        .rounded_md()
+                        .bg(rgb(if selected {
+                            shell.palette.button_active
+                        } else {
+                            shell.palette.input
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.text))
+                                                .child(record.name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(rgb(if connected {
+                                                    shell.palette.button_active
+                                                } else {
+                                                    shell.palette.panel
+                                                }))
+                                                .text_xs()
+                                                .text_color(rgb(if connected {
+                                                    shell.palette.success
+                                                } else {
+                                                    shell.palette.muted
+                                                }))
+                                                .child(if connected {
+                                                    "● 已连接"
+                                                } else {
+                                                    "○ 离线"
                                                 }),
-                                            )
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.subtle))
+                                        .child(record.path.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(div().flex().gap_1().children(roles.into_iter().map(
+                                    |role| {
+                                        let role_name = name.clone();
+                                        let active =
+                                            shell.engine_roles.get(role) == Some(name.as_str());
+                                        div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .border_1()
+                                    .border_color(rgb(if active {
+                                        shell.palette.accent
+                                    } else {
+                                        shell.palette.border
                                     }))
-                                    .child({
-                                        let remove_name = name.clone();
-                                        div()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .border_1()
-                                            .border_color(rgb(shell.palette.danger_text))
-                                            .bg(rgb(shell.palette.danger))
-                                            .text_xs()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(rgb(shell.palette.danger_text))
-                                            .child("remove")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |shell,
-                                                                  _: &MouseDownEvent,
-                                                                  _: &mut Window,
-                                                                  cx: &mut Context<ShellApp>| {
-                                                    shell.on_engine_remove(&remove_name, cx);
-                                                }),
-                                            )
+                                    .bg(rgb(if active {
+                                        shell.palette.button_active
+                                    } else {
+                                        shell.palette.button
+                                    }))
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(if active {
+                                        shell.palette.text
+                                    } else {
+                                        shell.palette.muted
+                                    }))
+                                    .child(if active && shell.engine_controller.is_attached(role) {
+                                        format!("{} ●", role.label())
+                                    } else if active {
+                                        format!("{} ○", role.label())
+                                    } else {
+                                        role.label().to_owned()
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |shell,
+                                                          _: &MouseDownEvent,
+                                                          _: &mut Window,
+                                                          cx: &mut Context<ShellApp>| {
+                                            shell.on_engine_role_toggled(role, &role_name, cx);
+                                        }),
+                                    )
+                                    },
+                                )))
+                                .child({
+                                    let remove_name = name.clone();
+                                    div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .border_1()
+                                .border_color(rgb(shell.palette.danger_text))
+                                .bg(rgb(shell.palette.danger))
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(shell.palette.danger_text))
+                                .child("remove")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell,
+                                                      _: &MouseDownEvent,
+                                                      _: &mut Window,
+                                                      cx: &mut Context<ShellApp>| {
+                                        shell.on_engine_remove(&remove_name, cx);
                                     }),
-                            ),
-                    )
-                    .child(div().flex().gap_1().children(roles.into_iter().map(|role| {
-                        let role_name = name.clone();
-                        let active = shell.engine_roles.get(role) == Some(name.as_str());
-                        div()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(rgb(if active {
-                                shell.palette.accent
-                            } else {
-                                shell.palette.border
-                            }))
-                            .bg(rgb(if active {
-                                shell.palette.button_active
-                            } else {
-                                shell.palette.button
-                            }))
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(if active {
-                                shell.palette.text
-                            } else {
-                                shell.palette.muted
-                            }))
-                            .child(if active && shell.engine_controller.is_attached(role) {
-                                format!("{} ●", role.label())
-                            } else if active {
-                                format!("{} ○", role.label())
-                            } else {
-                                role.label().to_owned()
-                            })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |shell,
-                                                  _: &MouseDownEvent,
-                                                  _: &mut Window,
-                                                  cx: &mut Context<ShellApp>| {
-                                    shell.on_engine_role_toggled(role, &role_name, cx);
+                                )
                                 }),
-                            )
-                    })))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(
-                            move |shell,
-                                  event: &MouseDownEvent,
-                                  window: &mut Window,
-                                  cx: &mut Context<ShellApp>| {
-                                shell.on_engine_selected(&name, event, window, cx);
-                            },
-                        ),
-                    )
-            }),
-        ))
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(
+                                move |shell,
+                                      event: &MouseDownEvent,
+                                      window: &mut Window,
+                                      cx: &mut Context<ShellApp>| {
+                                    shell.on_engine_selected(&name, event, window, cx);
+                                },
+                            ),
+                        )
+                })),
+        )
         .child(
             div()
                 .track_focus(&shell.engine_spec_focus_handle)
@@ -2664,8 +2646,8 @@ pub fn render_gtp_console_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Sta
         .child(
             div()
                 .flex()
-                .items_center()
-                .justify_between()
+                .flex_col()
+                .gap_0p5()
                 .child(
                     div()
                         .text_xs()
@@ -4252,11 +4234,13 @@ pub fn render_goban_area(
                     .map(|(column, row)| sabaki_domain_core::Vertex { column, row })?;
                 Some(crate::goban_view::AnalysisCandidate {
                     vertex,
-                    label: format!("{}v {:.0}%", entry.visits, entry.winrate * 100.0),
+                    winrate_percent: entry.winrate * 100.0,
+                    visits: entry.visits,
+                    score_lead: entry.score_lead,
                     is_best: index == 0 || Some(vertex) == best_move,
                 })
             })
-            .take(5)
+            .take(8)
             .collect()
     } else {
         Vec::new()

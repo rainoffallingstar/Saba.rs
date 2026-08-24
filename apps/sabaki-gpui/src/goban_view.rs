@@ -62,7 +62,9 @@ pub fn move_numbers_from_moves(moves: &[MoveDto]) -> BTreeMap<Vertex, usize> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisCandidate {
     pub vertex: Vertex,
-    pub label: String,
+    pub winrate_percent: f64,
+    pub visits: u64,
+    pub score_lead: Option<f64>,
     pub is_best: bool,
 }
 
@@ -654,6 +656,7 @@ pub fn render_goban(
         ));
     }
 
+    // Lizzie-style AI analysis recommendation circles on empty intersections
     for candidate in &options.analysis_candidates {
         if candidate.vertex.row < height && candidate.vertex.column < width {
             if board
@@ -670,21 +673,59 @@ pub fn render_goban(
                 candidate.vertex.column,
                 candidate.vertex.row,
             );
+            let size = (spacing * 0.86).clamp(18.0, 36.0);
+            let bg_color = if candidate.is_best {
+                0x10b981
+            } else if candidate.winrate_percent >= 50.0 {
+                0x0ea5e9
+            } else if candidate.winrate_percent >= 40.0 {
+                0x6366f1
+            } else {
+                0x8b5cf6
+            };
+
+            let winrate_str = format!("{:.0}%", candidate.winrate_percent);
+            let sub_str = if let Some(lead) = candidate.score_lead {
+                format!("{:+.1}", lead)
+            } else {
+                format!("{}v", candidate.visits)
+            };
+
             children.push(
                 div()
                     .absolute()
-                    .left(px(x + 8.0))
-                    .top(px(y - 9.0))
-                    .px_1()
-                    .rounded(px(3.0))
-                    .bg(rgb(if candidate.is_best {
-                        0x1f6f43
+                    .left(px(x - size / 2.0))
+                    .top(px(y - size / 2.0))
+                    .size(px(size))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(rgb(if candidate.is_best {
+                        0xffffff
                     } else {
-                        0x305a8c
+                        0xc0d8f8
                     }))
-                    .text_xs()
-                    .text_color(rgb(0xffffff))
-                    .child(candidate.label.clone()),
+                    .bg(rgb(bg_color))
+                    .shadow_md()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xffffff))
+                            .line_height(px(size * 0.40))
+                            .child(winrate_str),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(0xe0f2fe))
+                            .line_height(px(size * 0.36))
+                            .child(sub_str),
+                    ),
             );
         }
     }
