@@ -689,6 +689,12 @@ impl ShellApp {
         let role = self
             .active_console_role
             .unwrap_or(crate::engine_console::EngineRole::Analysis);
+
+        // Auto-connect engine if it is configured for this role but not yet attached
+        if !self.engine_controller.is_attached(role) && self.engine_roles.get(role).is_some() {
+            self.on_engine_connect(role, cx);
+        }
+
         let (name, arguments) = Self::parse_engine_command_line(draft);
         let formatted = format_console_command(&name, &arguments);
         let result = match self.engine_controller.send(role, &name, arguments) {
@@ -699,7 +705,7 @@ impl ShellApp {
                     command: formatted.clone(),
                     success: false,
                     response: format!(
-                        "{} engine is detached — please connect it first",
+                        "{} engine is detached — click [🔌 连接引擎] or configure in Settings",
                         role.label()
                     ),
                 });
@@ -852,9 +858,16 @@ impl ShellApp {
                 .engine_roles
                 .get(EngineRole::Analysis)
                 .unwrap_or_default();
-            self.status = format!("attach selected analysis engine {name} before analyzing").into();
-            cx.notify();
-            return;
+            if !name.is_empty() {
+                self.on_engine_connect(EngineRole::Analysis, cx);
+                if !self.engine_controller.is_attached(EngineRole::Analysis) {
+                    return;
+                }
+            } else {
+                self.status = "select an analysis engine first (e.g. KataGo in Settings)".into();
+                cx.notify();
+                return;
+            }
         }
 
         let run = self.analysis_run.begin(

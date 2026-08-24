@@ -2752,9 +2752,9 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
     let selected_role = shell
         .active_console_role
         .unwrap_or(crate::engine_console::EngineRole::Analysis);
-    let selected_label = shell
-        .engine_roles
-        .get(selected_role)
+    let is_attached = shell.engine_controller.is_attached(selected_role);
+    let assigned_name = shell.engine_roles.get(selected_role);
+    let selected_label = assigned_name
         .map(|name| format!("{} · {name}", selected_role.label()))
         .unwrap_or_else(|| format!("{} (未配置引擎)", selected_role.label()));
 
@@ -2770,7 +2770,7 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .child(
             div()
                 .w_full()
-                .max_w(px(760.0))
+                .max_w(px(780.0))
                 .h(px(320.0))
                 .flex()
                 .flex_col()
@@ -2781,7 +2781,7 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                 .bg(rgb(0x18181c))
                 .shadow_lg()
                 .child(
-                    // Header: Title + Role selection tabs + Clear + Close
+                    // Header: Title + Role selection tabs + Connect/Disconnect + Clear + Close
                     div()
                         .flex()
                         .items_center()
@@ -2807,9 +2807,10 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                     crate::engine_console::EngineRole::Black,
                                     crate::engine_console::EngineRole::White,
                                 ].into_iter().map(|role| {
-                                    let is_active = shell.active_console_role == Some(role);
-                                    let assigned_name = shell.engine_roles.get(role);
-                                    let is_attached = shell.engine_controller.is_attached(role);
+                                    let is_active = shell.active_console_role == Some(role)
+                                        || (shell.active_console_role.is_none() && role == crate::engine_console::EngineRole::Analysis);
+                                    let assigned = shell.engine_roles.get(role);
+                                    let attached = shell.engine_controller.is_attached(role);
                                     div()
                                         .cursor_pointer()
                                         .px_2()
@@ -2822,15 +2823,40 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0x9a9a9a) })
                                         .child(format!(
                                             "{} {}{}",
-                                            if is_attached { "●" } else { "○" },
+                                            if attached { "●" } else { "○" },
                                             role.label(),
-                                            assigned_name.map(|n| format!(" ({n})")).unwrap_or_default()
+                                            assigned.map(|n| {
+                                                let clean = n.trim_matches('(').trim_matches(')');
+                                                format!(": {clean}")
+                                            }).unwrap_or_default()
                                         ))
                                         .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
                                             shell.active_console_role = Some(role);
                                             cx.notify();
                                         }))
                                 }))
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
+                                        .bg(if is_attached { rgb(shell.palette.danger) } else { rgb(shell.palette.button) })
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
+                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                        .child(if is_attached { "⏹ 断开引擎" } else { "🔌 连接引擎" })
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, event, window, cx| {
+                                            if shell.engine_controller.is_attached(selected_role) {
+                                                shell.on_engine_disconnect(selected_role, event, window, cx);
+                                            } else {
+                                                shell.on_engine_connect(selected_role, cx);
+                                            }
+                                        }))
+                                )
                         )
                         .child(
                             div()
@@ -2909,13 +2935,28 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .flex()
                                 .items_center()
                                 .gap_1p5()
-                                .children([
-                                    ("⚡ 开始分析", "kata-analyze B 10 rootInfo true"),
-                                    ("⏹ 停止", "stop"),
-                                    ("🎲 AI落子", "genmove B"),
-                                    ("🔄 清空", "clear_board"),
-                                    ("📋 列出指令", "list_commands"),
-                                ].into_iter().map(|(label, cmd)| {
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(rgb(0x24242c))
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.accent))
+                                        .text_xs()
+                                        .text_color(rgb(0x8ec5ff))
+                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
+                                        .child(if shell.analysis_task.is_some() { "⏹ 停止分析" } else { "⚡ 启动分析" })
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            if shell.analysis_task.is_some() {
+                                                shell.stop_analysis(cx);
+                                            } else {
+                                                shell.start_analysis(cx);
+                                            }
+                                        }))
+                                )
+                                .child(
                                     div()
                                         .cursor_pointer()
                                         .px_2()
@@ -2927,11 +2968,45 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .text_xs()
                                         .text_color(rgb(0xd0d0d8))
                                         .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
-                                        .child(label)
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
-                                            shell.send_engine_command(cmd, cx);
+                                        .child("🎲 AI落子 (genmove)")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            shell.generate_engine_move(cx);
                                         }))
-                                }))
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(rgb(0x24242c))
+                                        .border_1()
+                                        .border_color(rgb(0x383844))
+                                        .text_xs()
+                                        .text_color(rgb(0xd0d0d8))
+                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
+                                        .child("🔄 清空棋盘")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            shell.send_engine_command("clear_board", cx);
+                                        }))
+                                )
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(rgb(0x24242c))
+                                        .border_1()
+                                        .border_color(rgb(0x383844))
+                                        .text_xs()
+                                        .text_color(rgb(0xd0d0d8))
+                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
+                                        .child("📋 列出指令")
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                            shell.send_engine_command("list_commands", cx);
+                                        }))
+                                )
                         )
                         .child(
                             div()
