@@ -358,6 +358,10 @@ mod stream_tests {
 
     #[test]
     fn streams_lines_from_a_subprocess_until_finished() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
         let Some(python) = python() else {
             eprintln!("Python interpreter not found; skipping stream test");
             return;
@@ -405,6 +409,10 @@ sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.
 
     #[test]
     fn stop_asks_the_engine_to_finish() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
         let Some(python) = python() else {
             eprintln!("Python interpreter not found; skipping stop test");
             return;
