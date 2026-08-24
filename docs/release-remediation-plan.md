@@ -137,8 +137,25 @@ KataGo `1.17.2`（Metal backend）使用 formula 自带
 `kata1-b18c384nbt-s9996604416-d4316597426.bin.gz`，完成 GTP handshake、9×9
 `boardsize`/`clear_board`、`play B D4` 和 `genmove W`（`F6`）。首次 smoke 暴露
 `generate_optimized_gtp_config` 缺少 KataGo 1.17.2 必需的 logging keys，已修正并
-重新验证无 unused-config warning。该项只覆盖 play/genmove；流式 analysis、stop、
-detach/reconnect、分析属性保存/重开、异常退出与第二引擎仍未完成。
+重新验证无 unused-config warning。
+
+**追加真实流式证据：** 已通过生产下载 URL 下载 `b10c384h6nbttflrs.bin.gz`
+（`38,245,488` bytes，gzip 校验通过，SHA-256
+`0ba27eced5180b3e3d0b898b280c541112989765e789d1eb6cd0d31b2b2c1229`），并以
+KataGo `1.17.2` 在相同 Metal backend 上验证 9×9 replay、`kata-analyze B 10`
+的连续 `info move` 输出、`stop` 和后续 `protocol_version` 请求均成功。官方
+KataGo GTP 协议实际输出 `info move ...`，而不是此前 parser 假定的 JSON；Host
+parser 和 GPUI streaming adapter 已改为先解析官方 GTP 格式，同时保留 JSON proxy
+兼容。`kata-analyze` 的完成由显式 stop 控制，不再因不存在的 JSON completion
+sentinel 提前结束。
+
+**第二引擎基础证据：** 已安装 Homebrew GNU Go `3.8`，完成 GTP handshake、9×9
+`boardsize`/`clear_board`、`play B D4` 与 `genmove W`（`F7`）。其
+`known_command lz-analyze` 为 `false`，故不能替代 KataGo 的流式分析验证；其作用是
+独立 GTP engine 的启动、replay、play/genmove 互操作性 evidence。
+
+仍需由 GUI/真实安装包验证：分析结果保存/重开、异常退出恢复，以及用户环境中的
+完整 detach/reconnect 交互。
 
 ### P1.5 Electron 并行回归
 

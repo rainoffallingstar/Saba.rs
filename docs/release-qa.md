@@ -49,7 +49,11 @@ Run a release bundle on a machine with normal system audio. Confirm:
 4. Exercise CommentBox and node title with a system IME, selection, undo/redo,
    Enter submit and Escape cancel.
 5. Attach a real GTP engine, request a move and streaming analysis, then stop
-   analysis and save/reopen the generated SGF properties.
+   analysis and save/reopen the generated SGF properties. KataGo's official GTP
+   syntax is `kata-analyze [player] [interval-centiseconds] [key value ...]`,
+   for example `kata-analyze B 10 rootInfo true`; it streams `info move ...`
+   records until an explicit `stop`. Do not configure unrecognized flags such as
+   `-visits 100` as `kata-analyze` arguments.
 6. Resize sidebars, use GameGraph right-click hotspot mutation, and switch
    Classic/Dark/Mist before and after an application restart.
 7. On macOS 26, enter and exit native fullscreen at least five times, including

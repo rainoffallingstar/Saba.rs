@@ -833,12 +833,17 @@ impl ShellApp {
                                     break;
                                 }
                                 if let Some(entry) = parse_stream_line(&task_command, line) {
+                                    let proxy_completion = task_command == "kata-analyze"
+                                        && !entry.is_during_search
+                                        && line.trim_start().starts_with('{');
                                     pending.push(entry);
-                                }
-                                if task_command == "kata-analyze"
-                                    && pending.last().is_some_and(|entry| !entry.is_during_search)
-                                {
-                                    break;
+                                    // Official KataGo GTP `kata-analyze` emits
+                                    // continuous `info move` records without a
+                                    // completion sentinel. JSON proxy adapters
+                                    // retain their explicit completion record.
+                                    if proxy_completion {
+                                        break;
+                                    }
                                 }
                             }
                             if last_flush.elapsed() >= Duration::from_millis(120)
@@ -934,12 +939,17 @@ impl ShellApp {
                                 break;
                             }
                             if let Some(entry) = parse_stream_line(&task_command, line) {
+                                let proxy_completion = task_command == "kata-analyze"
+                                    && !entry.is_during_search
+                                    && line.trim_start().starts_with('{');
                                 pending.push(entry);
-                            }
-                            if task_command == "kata-analyze"
-                                && pending.last().is_some_and(|entry| !entry.is_during_search)
-                            {
-                                break;
+                                // Official KataGo GTP `kata-analyze` emits
+                                // continuous `info move` records without a
+                                // completion sentinel. JSON proxy adapters
+                                // retain their explicit completion record.
+                                if proxy_completion {
+                                    break;
+                                }
                             }
                         }
                         if last_flush.elapsed() >= Duration::from_millis(120) && !pending.is_empty()

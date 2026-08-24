@@ -422,10 +422,11 @@ pub fn analysis_command_from_settings(
     (name, arguments)
 }
 
-/// Parses one streamed analysis line for the given command: JSON for
-/// `kata-analyze`, Leela-family info lines otherwise.
-pub fn parse_stream_line(command: &str, line: &str) -> Option<sabaki_host::AnalysisEntry> {
-    if command == "kata-analyze" {
+/// Parses one streamed analysis line. Official KataGo `kata-analyze` and
+/// Leela-family `lz-analyze` both emit GTP `info move ...` records; a JSON
+/// record is accepted for compatibility with proxy adapters.
+pub fn parse_stream_line(_command: &str, line: &str) -> Option<sabaki_host::AnalysisEntry> {
+    if line.trim_start().starts_with('{') {
         sabaki_host::parse_kata_analysis_line(line)
     } else {
         sabaki_host::parse_lz_analysis_line(line)
@@ -522,6 +523,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_official_katago_gtp_stream_line() {
+        let entry = super::parse_stream_line(
+            "kata-analyze",
+            "info move F5 visits 10 winrate 0.5 scoreLead 2.1 pv F5 E6",
+        )
+        .expect("official KataGo GTP line parses");
+        assert_eq!(entry.vertex.as_deref(), Some("F5"));
+        assert_eq!(entry.visits, 10);
+        assert_eq!(entry.score_lead, Some(2.1));
+    }
+
+    #[test]
     fn analysis_command_reads_the_configured_setting() {
         let mut settings = sabaki_host::SettingsStore::default();
         assert_eq!(
@@ -543,7 +556,7 @@ mod tests {
         settings
             .set(
                 "engines.analyze_commands",
-                serde_json::json!(["kata-analyze -visits 100 -analysisWideRootNoise 0.02"]),
+                serde_json::json!(["kata-analyze B 10 rootInfo true"]),
             )
             .expect("the setting accepts a string array");
         assert_eq!(
@@ -551,10 +564,10 @@ mod tests {
             (
                 "kata-analyze".to_owned(),
                 vec![
-                    "-visits".to_owned(),
-                    "100".to_owned(),
-                    "-analysisWideRootNoise".to_owned(),
-                    "0.02".to_owned(),
+                    "B".to_owned(),
+                    "10".to_owned(),
+                    "rootInfo".to_owned(),
+                    "true".to_owned(),
                 ]
             )
         );

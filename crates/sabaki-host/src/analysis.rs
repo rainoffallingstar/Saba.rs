@@ -139,11 +139,12 @@ pub fn parse_kata_analysis_line(line: &str) -> Option<AnalysisEntry> {
     })
 }
 
-/// Parses an engine's analysis response content. `kata-analyze` transcripts
-/// are JSON lines; everything else uses the Leela-family format. Lines that
-/// do not parse are skipped.
-pub fn parse_analysis_response(command: &str, content: &str) -> Vec<AnalysisEntry> {
-    let kata_style = command == "kata-analyze" || command == "kata-analyze_interval";
+/// Parses an engine's analysis response content. KataGo's documented GTP
+/// `kata-analyze` extension emits `info move ...` records, compatible with the
+/// Leela-family format. JSON is retained only as a compatibility adapter for
+/// proxies that explicitly emit JSON records. Lines that do not parse are
+/// skipped.
+pub fn parse_analysis_response(_command: &str, content: &str) -> Vec<AnalysisEntry> {
     content
         .lines()
         .filter_map(|line| {
@@ -151,7 +152,7 @@ pub fn parse_analysis_response(command: &str, content: &str) -> Vec<AnalysisEntr
             if line.is_empty() {
                 return None;
             }
-            if kata_style {
+            if line.starts_with('{') {
                 parse_kata_analysis_line(line)
             } else {
                 parse_lz_analysis_line(line)
@@ -271,23 +272,23 @@ mod tests {
     }
 
     #[test]
-    fn response_parsing_dispatches_by_command_name() {
-        let lz_transcript =
-            "info move D4 visits 10 winrate 0.5\ninfo move Q16 visits 5 winrate 0.4";
-        let kata_transcript = concat!(
+    fn response_parsing_accepts_official_katago_gtp_and_proxy_json() {
+        let gtp_transcript = "info move F5 visits 10 winrate 0.5 scoreLead 2.1 pv F5 E6\ninfo move E6 visits 5 winrate 0.4";
+        let json_transcript = concat!(
             r#"{"id":1,"move":"D4","visits":10,"winrate":0.5,"isDuringSearch":true}"#,
             "\n",
             r#"{"id":1,"move":"Q16","visits":20,"winrate":0.6,"isDuringSearch":false}"#,
         );
 
-        let lz_entries = parse_analysis_response("lz-analyze", lz_transcript);
-        assert_eq!(lz_entries.len(), 2);
-        assert_eq!(lz_entries[0].visits, 10);
+        let katago_entries = parse_analysis_response("kata-analyze", gtp_transcript);
+        assert_eq!(katago_entries.len(), 2);
+        assert_eq!(katago_entries[0].vertex.as_deref(), Some("F5"));
+        assert_eq!(katago_entries[0].visits, 10);
 
-        let kata_entries = parse_analysis_response("kata-analyze", kata_transcript);
-        assert_eq!(kata_entries.len(), 2);
-        assert_eq!(kata_entries[1].id, Some(1));
-        assert!(!kata_entries[1].is_during_search);
+        let proxy_entries = parse_analysis_response("kata-analyze", json_transcript);
+        assert_eq!(proxy_entries.len(), 2);
+        assert_eq!(proxy_entries[1].id, Some(1));
+        assert!(!proxy_entries[1].is_during_search);
 
         let garbage =
             parse_analysis_response("lz-analyze", "garbage\ninfo move D4 visits 1 winrate 0.5");
