@@ -332,21 +332,21 @@ mod stream_tests {
     use super::AnalysisStream;
     use std::time::Duration;
 
-    /// A tiny python3 process that streams three lines with delays, then
-    /// exits. Skipped when python3 is unavailable.
-    fn python3() -> Option<()> {
-        std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|_| ())
+    /// Resolves a Python interpreter for the subprocess fixture. Windows
+    /// runners commonly expose `python` rather than the Unix `python3` name.
+    fn python() -> Option<&'static str> {
+        ["python3", "python"].into_iter().find(|candidate| {
+            std::process::Command::new(candidate)
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        })
     }
 
     #[test]
     fn streams_lines_from_a_subprocess_until_finished() {
-        let Some(()) = python3() else {
-            eprintln!("python3 not found; skipping stream test");
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping stream test");
             return;
         };
         let script = "\
@@ -357,7 +357,7 @@ sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":true}\\n'); sys.s
 time.sleep(0.02)
 sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.stdout.flush()
 ";
-        let mut stream = AnalysisStream::start("python3", &["-c".to_owned(), script.to_owned()])
+        let mut stream = AnalysisStream::start(python, &["-c".to_owned(), script.to_owned()])
             .expect("stream process starts");
 
         stream
@@ -392,8 +392,8 @@ sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.
 
     #[test]
     fn stop_asks_the_engine_to_finish() {
-        let Some(()) = python3() else {
-            eprintln!("python3 not found; skipping stop test");
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping stop test");
             return;
         };
         let script = "\
@@ -402,7 +402,7 @@ for line in sys.stdin:
     sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n')
     sys.stdout.flush()
 ";
-        let mut stream = AnalysisStream::start("python3", &["-c".to_owned(), script.to_owned()])
+        let mut stream = AnalysisStream::start(python, &["-c".to_owned(), script.to_owned()])
             .expect("stream process starts");
 
         stream
