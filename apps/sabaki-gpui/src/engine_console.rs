@@ -423,6 +423,54 @@ pub fn analysis_command_from_settings(
     (name, arguments)
 }
 
+/// Parses an engine's command-line arguments string into individual argument tokens,
+/// properly respecting double and single quotes and stripping enclosing quotes so paths
+/// with spaces or special characters work on all platforms.
+pub fn parse_engine_arguments(args: &str) -> Vec<String> {
+    let mut args_vec = Vec::new();
+    let mut chars = args.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            let quote = chars.next().unwrap();
+            let mut current = String::new();
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == quote {
+                    break;
+                }
+                current.push(next);
+            }
+            args_vec.push(current);
+        } else {
+            let mut current = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_whitespace() {
+                    break;
+                }
+                chars.next();
+                if next == '"' || next == '\'' {
+                    let inner_quote = next;
+                    while let Some(&q) = chars.peek() {
+                        chars.next();
+                        if q == inner_quote {
+                            break;
+                        }
+                        current.push(q);
+                    }
+                } else {
+                    current.push(next);
+                }
+            }
+            args_vec.push(current);
+        }
+    }
+    args_vec
+}
+
 /// Parses one streamed analysis line. Official KataGo `kata-analyze` and
 /// Leela-family `lz-analyze` both emit GTP `info move ...` records; a JSON
 /// record is accepted for compatibility with proxy adapters.
@@ -521,6 +569,25 @@ mod tests {
             .expect("D4 survives");
         assert_eq!(d4.visits, 500, "later batches replace earlier entries");
         assert!(!d4.is_during_search);
+    }
+
+    #[test]
+    fn parses_quoted_and_unquoted_engine_arguments() {
+        let args = super::parse_engine_arguments(
+            r#"gtp -model "/Users/foo/Library/Application Support/saba-rs/models/b10c.bin.gz" -config "/path with spaces/cfg.cfg" --threads 8"#,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "gtp",
+                "-model",
+                "/Users/foo/Library/Application Support/saba-rs/models/b10c.bin.gz",
+                "-config",
+                "/path with spaces/cfg.cfg",
+                "--threads",
+                "8",
+            ]
+        );
     }
 
     #[test]

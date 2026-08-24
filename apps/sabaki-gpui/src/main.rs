@@ -135,6 +135,7 @@ enum ActiveDrawer {
 enum ActiveTextInput {
     Comment,
     NodeTitle,
+    FoxQuery,
 }
 
 struct ShellApp {
@@ -161,7 +162,7 @@ struct ShellApp {
     engine_draft: SharedString,
     engine_spec_draft: SharedString,
     engine_spec_focus_handle: FocusHandle,
-    fox_query: SharedString,
+    fox_query_input: NativeTextInput,
     fox_query_focus_handle: FocusHandle,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
@@ -413,7 +414,7 @@ impl ShellApp {
             engine_draft: "".into(),
             engine_spec_draft: "".into(),
             engine_spec_focus_handle: cx.focus_handle(),
-            fox_query: "".into(),
+            fox_query_input: NativeTextInput::new(""),
             fox_query_focus_handle: cx.focus_handle(),
             theme_choice,
             theme,
@@ -529,9 +530,11 @@ impl ShellApp {
         &mut self,
         _: &MouseDownEvent,
         window: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        self.active_text_input = Some(ActiveTextInput::FoxQuery);
         window.focus(&self.fox_query_focus_handle);
+        cx.notify();
     }
 
     fn on_fox_query_key_down(
@@ -540,33 +543,25 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut query = self.fox_query.to_string();
-        match event.keystroke.key.as_str() {
-            "backspace" => {
-                query.pop();
-            }
-            "enter" => {
+        match Self::handle_text_input_key(&mut self.fox_query_input, event) {
+            InputKeyResult::Submit => {
                 self.fetch_fox_query(cx);
-                return;
             }
-            "escape" => {
-                self.fox_query = "".into();
+            InputKeyResult::Cancel => {
+                self.fox_query_input.set_text("");
+                cx.notify();
             }
-            _ => {
-                if let Some(key_char) = event.keystroke.key_char.as_ref() {
-                    query.push_str(key_char);
-                }
+            InputKeyResult::Changed | InputKeyResult::Ignored => {
+                cx.notify();
             }
         }
-        self.fox_query = query.into();
-        cx.notify();
     }
 
     fn fetch_fox_query(&mut self, cx: &mut Context<Self>) {
-        let query = self.fox_query.to_string();
-        let query = query.trim().to_owned();
+        let query = self.fox_query_input.text().trim().to_owned();
         if query.is_empty() {
             self.status = "输入野狐用户名或 ID 后按 Enter 查询".into();
+            self.show_toast("请输入野狐用户名或 ID 后按 Enter 查询".to_owned(), cx);
             cx.notify();
             return;
         }
@@ -758,11 +753,7 @@ impl ShellApp {
             cx.notify();
             return;
         };
-        let arguments: Vec<String> = record
-            .args
-            .split_whitespace()
-            .map(ToOwned::to_owned)
-            .collect();
+        let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let board_size = self.host.snapshot().board.width;
         let transport = match sabaki_host::ProcessGtpTransport::start(&record.path, &arguments) {
             Ok(transport) => transport,
@@ -1011,11 +1002,7 @@ impl ShellApp {
             cx.notify();
             return;
         };
-        let arguments: Vec<String> = record
-            .args
-            .split_whitespace()
-            .map(ToOwned::to_owned)
-            .collect();
+        let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let mut stream = match AnalysisStream::start(&record.path, &arguments) {
             Ok(stream) => stream,
             Err(error) => {
@@ -1698,15 +1685,41 @@ impl ShellApp {
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
+                let base_dir_for_task = base_dir.clone();
                 async move {
+                    let base_dir_for_thread = base_dir_for_task.clone();
                     let result = cx
                         .background_executor()
-                        .spawn(async move { sabaki_host::install_katago_model(&base_dir, tier) })
+                        .spawn(async move {
+                            sabaki_host::install_katago_model(&base_dir_for_thread, tier)
+                        })
                         .await;
                     weak.update(&mut cx, |shell, cx| match result {
                         Ok(path) => {
+                            if let Ok(env) = sabaki_host::ensure_katago_environment(
+                                &base_dir_for_task,
+                                tier,
+                                Some(&path),
+                            ) {
+                                let engine_name = env.engine_record.name.clone();
+                                shell.engine_store.upsert(env.engine_record.clone());
+                                shell
+                                    .engine_roles
+                                    .assign(EngineRole::Analysis, &engine_name);
+                                shell.engine_roles.assign(EngineRole::White, &engine_name);
+                                let _ = shell.engine_store.save(&mut shell.settings);
+                                let _ = shell.persist_engine_roles();
+                                let _ = sabaki_host::persist_settings_store(
+                                    &shell.settings,
+                                    &mut shell.settings_persistence,
+                                );
+                                if env.executable_exists {
+                                    shell.on_engine_connect(EngineRole::Analysis, cx);
+                                }
+                            }
                             shell.status =
-                                format!("KataGo model installed: {}", path.display()).into();
+                                format!("KataGo model installed and ready: {}", path.display())
+                                    .into();
                             shell.show_toast(success_message, cx);
                         }
                         Err(error) => {
@@ -1777,13 +1790,19 @@ impl ShellApp {
                                 &mut self.settings_persistence,
                             );
 
-                            let msg = if env.executable_exists {
+                            let msg = if env.executable_exists && env.model_exists {
+                                self.on_engine_connect(EngineRole::Analysis, cx);
                                 format!(
-                                    "⚡ KataGo 引擎已成功配置并就绪 ({})！\n已自动设为默认分析引擎",
+                                    "⚡ KataGo 引擎已成功配置并连接 ({})！\n已开始实时流式分析",
+                                    backend.label()
+                                )
+                            } else if env.executable_exists {
+                                format!(
+                                    "⚡ KataGo 已配置 ({})！尚未下载模型，请点击【⭐ 下载 10B 推荐模型】即可开始分析",
                                     backend.label()
                                 )
                             } else {
-                                "⚡ KataGo 配置已生成 (GTP 规则已写入)！\n提示: 请确保已安装 katago (macOS: brew install katago)".to_string()
+                                "⚡ KataGo 配置已写入！\n提示: 未检测到 katago，请确保已安装 (macOS: brew install katago)".to_string()
                             };
                             self.status = msg.clone().into();
                             self.show_toast(msg, cx);
@@ -3834,6 +3853,7 @@ impl ShellApp {
         match self.active_text_input {
             Some(ActiveTextInput::Comment) => Some(&mut self.comment_input),
             Some(ActiveTextInput::NodeTitle) => Some(&mut self.node_title_input),
+            Some(ActiveTextInput::FoxQuery) => Some(&mut self.fox_query_input),
             None => None,
         }
     }

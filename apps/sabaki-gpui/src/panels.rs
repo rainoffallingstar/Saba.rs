@@ -1007,11 +1007,15 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
                                         .bg(rgb(shell.palette.panel))
                                         .text_xs()
                                         .text_color(rgb(shell.palette.text))
-                                        .child(if shell.fox_query.is_empty() {
+                                        .child(if shell.fox_query_input.text().is_empty() {
                                             "输入野狐用户名或 ID，按 Enter 查询最新棋谱".to_owned()
                                         } else {
-                                            shell.fox_query.to_string()
+                                            shell.fox_query_input.text().to_owned()
                                         })
+                                        .child(NativeInputBinding::new(
+                                            shell.fox_query_focus_handle.clone(),
+                                            cx.entity().clone(),
+                                        ))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(ShellApp::on_fox_query_focus),
@@ -1384,11 +1388,15 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
                                                 .bg(rgb(shell.palette.panel))
                                                 .text_xs()
                                                 .text_color(rgb(shell.palette.text))
-                                                .child(if shell.fox_query.is_empty() {
+                                                .child(if shell.fox_query_input.text().is_empty() {
                                                     "野狐用户名或 ID".to_owned()
                                                 } else {
-                                                    shell.fox_query.to_string()
+                                                    shell.fox_query_input.text().to_owned()
                                                 })
+                                                .child(NativeInputBinding::new(
+                                                    shell.fox_query_focus_handle.clone(),
+                                                    cx.entity().clone(),
+                                                ))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(ShellApp::on_fox_query_focus),
