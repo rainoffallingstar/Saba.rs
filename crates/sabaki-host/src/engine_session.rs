@@ -279,11 +279,7 @@ mod tests {
     use super::{EngineSession, EngineSessionError, EngineSessionState, GtpTransport};
     use crate::engine_workflow::EngineRecord;
     use sabaki_domain_core::gtp::{GtpError, GtpResponse};
-    use std::{
-        cell::RefCell,
-        collections::{BTreeMap, VecDeque},
-        time::Duration,
-    };
+    use std::{cell::RefCell, collections::BTreeMap, time::Duration};
 
     #[derive(Default, Debug)]
     struct MockTransport {
@@ -386,7 +382,7 @@ mod tests {
             None,
             "the mock has no streamed lines yet"
         );
-        session.stop();
+        session.stop().expect("session stops cleanly");
     }
 
     #[test]
@@ -406,7 +402,7 @@ mod tests {
             session.stream_analyze("kata-analyze", Vec::new()),
             Err(GtpError::UnsupportedStreaming)
         ));
-        session.stop();
+        session.stop().expect("session stops cleanly");
     }
 
     #[test]

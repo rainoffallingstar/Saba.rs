@@ -1,18 +1,26 @@
 pub mod analysis;
+pub mod analysis_controller;
 pub mod autosave;
 pub mod close_flow;
+pub mod engine_controller;
 pub mod engine_session;
 pub mod engine_workflow;
 pub mod external_file;
 pub mod file_codec;
+pub mod fox_kifu;
+pub mod katago_setup;
 pub mod legacy_styles;
 pub mod persistence;
+pub mod plugin_commands;
+pub mod plugin_controller;
 pub mod plugin_supervisor;
 pub mod plugin_wasm;
 pub mod plugin_workflow;
 pub mod recent_files;
 pub mod settings;
+pub mod territory_estimator;
 pub mod theme_workflow;
+pub mod whole_game_review;
 
 use std::path::PathBuf;
 
@@ -24,8 +32,10 @@ pub use analysis::{
     AnalysisCommandSink, AnalysisEntry, parse_analysis_response, parse_kata_analysis_line,
     parse_lz_analysis_line, replay_position_stream,
 };
+pub use analysis_controller::{AnalysisRunController, AnalysisRunTicket};
 pub use autosave::{AutosaveCandidate, AutosaveInfo, AutosaveStore};
 pub use close_flow::{CloseRequestAction, decide_close_request};
+pub use engine_controller::{EngineController, EngineControllerError};
 pub use engine_session::{
     EngineSession, EngineSessionError, EngineSessionState, GtpTransport, ProcessGtpTransport,
 };
@@ -40,8 +50,25 @@ pub use external_file::{
 pub use file_codec::{
     FileCodecError, decode_legacy_bytes, decode_sgf_bytes, detect_sgf_encoding, encode_sgf,
 };
+pub use fox_kifu::{
+    CurlFoxHttpAdapter, FOX_CGI_FETCH_CHESS_URL, FOX_CHESS_LIST_URL, FOX_FETCH_CHESS_URL,
+    FOX_QUERY_USER_URL, FoxGameSummary, FoxHttpAdapter, FoxKifuClient, FoxUserSummary,
+    build_fetch_chess_list_url, build_fetch_chess_url, build_query_user_url, fetch_game_sgf,
+    fetch_user_recent_games, parse_fox_chess_list_response, parse_fox_sgf_response,
+    parse_query_user_response, sanitize_fox_sgf,
+};
+pub use katago_setup::{
+    CurlKataGoModelDownloadAdapter, HardwareBackend, KATAGO_OFFICIAL_RELEASE_BASE,
+    KataGoEnvironment, KataGoModelDownloadAdapter, KataGoModelInstallError, KataGoModelTier,
+    MODEL_BALANCED_NAME, MODEL_BALANCED_URL, MODEL_LIGHTWEIGHT_NAME, MODEL_LIGHTWEIGHT_URL,
+    MODEL_STRONGEST_NAME, MODEL_STRONGEST_URL, build_katago_engine_record,
+    ensure_katago_environment, find_katago_executable, generate_optimized_gtp_config,
+    install_katago_model, install_katago_model_with, katago_storage_dir,
+};
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
+pub use plugin_commands::{BuiltinPluginCommand, BuiltinPluginCommandRegistry};
+pub use plugin_controller::{PluginController, PluginControllerOutcome};
 pub use plugin_supervisor::{
     AUTO_DISABLE_AFTER_CRASHES, DEFAULT_REQUEST_TIMEOUT, PluginProcessInfo, PluginProcessStatus,
     PluginSupervisor, plugin_storage_root,
@@ -50,7 +77,8 @@ pub use plugin_wasm::{
     WASM_ENTRYPOINT_EXTENSION, WasmWorkflowError, invoke_wasm_command, load_wasm_module,
 };
 pub use plugin_workflow::{
-    PersistedPluginState, PluginPersistence, PluginStore, scan_plugin_installations,
+    PersistedPluginState, PluginPersistence, PluginStore, install_plugin_from_zip_file,
+    scan_plugin_installations,
 };
 pub use recent_files::{RecentFileDto, RecentFilesStore};
 pub use settings::{
@@ -58,12 +86,14 @@ pub use settings::{
     SettingsValidation, is_legacy_overwrite_marker, load_settings_store, persist_settings_store,
     setting_kind, validate_setting_value, validate_settings,
 };
+pub use territory_estimator::{TerritoryEstimate, estimate_territory};
 pub use theme_workflow::{
-    ALLOWED_THEME_ASSET_EXTENSIONS, InstalledTheme, THEME_SCHEMA_VERSION,
-    THEME_TOKEN_SCHEMA_VERSION, ThemeColor, ThemeError, ThemeManifest, ThemeScan, ThemeTokens,
-    install_theme, is_safe_relative_path, is_valid_theme_id, parse_hex_color, scan_theme_root,
-    uninstall_theme,
+    ALLOWED_THEME_ASSET_EXTENSIONS, InstalledTheme, MIN_THEME_TOKEN_SCHEMA_VERSION,
+    ShellThemeTokens, THEME_SCHEMA_VERSION, THEME_TOKEN_SCHEMA_VERSION, ThemeColor, ThemeError,
+    ThemeManifest, ThemeScan, ThemeTokens, install_theme, is_safe_relative_path, is_valid_theme_id,
+    parse_hex_color, scan_theme_root, uninstall_theme,
 };
+pub use whole_game_review::{BlunderEntry, BlunderGrade, ReviewedPosition, find_blunders};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedGameFile {
@@ -98,7 +128,7 @@ pub trait HostEventSink {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum HostEvent {
-    GameChanged { snapshot: GameSnapshot },
+    GameChanged { snapshot: Box<GameSnapshot> },
     AutosaveChanged { info: AutosaveInfo },
     ExternalFileStatusChanged { status: ExternalFileStatusDto },
 }
@@ -294,7 +324,7 @@ impl HostApplication {
     fn emit_snapshot(&self, events: &mut impl HostEventSink) -> GameSnapshot {
         let snapshot = self.game.snapshot();
         events.emit(HostEvent::GameChanged {
-            snapshot: snapshot.clone(),
+            snapshot: Box::new(snapshot.clone()),
         });
         snapshot
     }

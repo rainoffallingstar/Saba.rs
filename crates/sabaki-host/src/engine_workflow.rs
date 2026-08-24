@@ -141,6 +141,15 @@ impl EngineStore {
         Ok(())
     }
 
+    /// Adds or updates an engine record by name.
+    pub fn upsert(&mut self, engine: EngineRecord) {
+        if let Some(existing) = self.engines.iter_mut().find(|e| e.name == engine.name) {
+            *existing = engine;
+        } else {
+            self.engines.push(engine);
+        }
+    }
+
     pub fn remove(&mut self, name: &str) -> bool {
         let previous_len = self.engines.len();
         self.engines.retain(|engine| engine.name != name);

@@ -10,20 +10,15 @@ struct TrackedFile {
     fingerprint: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExternalFileStatus {
+    #[default]
     Untracked,
     Unchanged,
     Changed,
     Missing,
     Unreadable,
-}
-
-impl Default for ExternalFileStatus {
-    fn default() -> Self {
-        Self::Untracked
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

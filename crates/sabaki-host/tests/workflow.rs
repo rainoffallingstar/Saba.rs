@@ -179,7 +179,7 @@ fn restores_a_crashed_dirty_document_and_only_allows_save_as() {
         saved_snapshot.file_state.path.as_deref(),
         Some("/games/recovered.sgf")
     );
-    assert_eq!(file_access.files.get(&save_as_path).is_some(), true);
+    assert!(file_access.files.contains_key(&save_as_path));
     assert_eq!(
         file_access.files.get(&game_path).cloned(),
         Some("(;FF[4]SZ[19])".to_owned()),
@@ -283,9 +283,8 @@ fn dirty_external_conflict_keeps_local_changes_and_forces_save_as() {
         Some("(;FF[4]SZ[19])".to_owned()),
         "keeping local changes must not write back to the conflicted source"
     );
-    assert_eq!(
-        file_access.files.get(&save_as_path).is_some(),
-        true,
+    assert!(
+        file_access.files.contains_key(&save_as_path),
         "the kept local changes must be written to the Save As path"
     );
 }

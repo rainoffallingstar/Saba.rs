@@ -136,6 +136,9 @@ pub enum GameMode {
     Edit,
     Scoring,
     Estimator,
+    Find,
+    Guess,
+    Autoplay,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1074,13 +1077,13 @@ impl GameDocument {
         let mut markers = vec![vec![None; board.width]; board.height];
         let mut lines = Vec::new();
 
-        if let Some(move_data) = current_node.move_data()? {
-            if let Some(vertex) = move_data.vertex.filter(|vertex| board.has(*vertex)) {
-                markers[vertex.row][vertex.column] = Some(MarkerSnapshot {
-                    marker_type: "point".to_owned(),
-                    label: None,
-                });
-            }
+        if let Some(move_data) = current_node.move_data()?
+            && let Some(vertex) = move_data.vertex.filter(|vertex| board.has(*vertex))
+        {
+            markers[vertex.row][vertex.column] = Some(MarkerSnapshot {
+                marker_type: "point".to_owned(),
+                label: None,
+            });
         }
         apply_markup_properties(&mut markers, &mut lines, &current_node.properties, &board)?;
 
@@ -1238,15 +1241,14 @@ fn apply_markup_properties(
     }
     if let Some(labels) = properties.get("LB") {
         for composed_value in labels {
-            if let Some((point, label)) = composed_value.split_once(':') {
-                if let Some(vertex) = parse_sgf_vertex(point)? {
-                    if board.has(vertex) {
-                        markers[vertex.row][vertex.column] = Some(MarkerSnapshot {
-                            marker_type: "label".to_owned(),
-                            label: Some(label.to_owned()),
-                        });
-                    }
-                }
+            if let Some((point, label)) = composed_value.split_once(':')
+                && let Some(vertex) = parse_sgf_vertex(point)?
+                && board.has(vertex)
+            {
+                markers[vertex.row][vertex.column] = Some(MarkerSnapshot {
+                    marker_type: "label".to_owned(),
+                    label: Some(label.to_owned()),
+                });
             }
         }
     }
@@ -1266,15 +1268,14 @@ fn apply_markup_properties(
     }
     for (property, line_type) in [("AR", "arrow"), ("LN", "line")] {
         for composed_value in properties.get(property).into_iter().flatten() {
-            if let Some((start, end)) = composed_value.split_once(':') {
-                if let (Some(start), Some(end)) = (parse_sgf_vertex(start)?, parse_sgf_vertex(end)?)
-                {
-                    lines.push(BoardLineSnapshot {
-                        start,
-                        end,
-                        line_type: line_type.to_owned(),
-                    });
-                }
+            if let Some((start, end)) = composed_value.split_once(':')
+                && let (Some(start), Some(end)) = (parse_sgf_vertex(start)?, parse_sgf_vertex(end)?)
+            {
+                lines.push(BoardLineSnapshot {
+                    start,
+                    end,
+                    line_type: line_type.to_owned(),
+                });
             }
         }
     }

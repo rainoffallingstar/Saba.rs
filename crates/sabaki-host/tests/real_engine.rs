@@ -49,8 +49,8 @@ fn real_subprocess_session_handshakes_plays_and_stops() {
     };
 
     let record = EngineRecord::new("FakeGTP", &python, &script);
-    let transport =
-        ProcessGtpTransport::start(&record.path, &[record.args.clone()]).expect("process starts");
+    let transport = ProcessGtpTransport::start(&record.path, std::slice::from_ref(&record.args))
+        .expect("process starts");
     let mut session = EngineSession::start(transport, &record, 9).expect("real session starts");
 
     assert!(matches!(
@@ -90,8 +90,8 @@ fn a_killed_engine_errors_without_taking_down_the_host() {
     };
 
     let record = EngineRecord::new("FakeGTP", &python, &script);
-    let transport =
-        ProcessGtpTransport::start(&record.path, &[record.args.clone()]).expect("process starts");
+    let transport = ProcessGtpTransport::start(&record.path, std::slice::from_ref(&record.args))
+        .expect("process starts");
     let mut session = EngineSession::start(transport, &record, 9).expect("real session starts");
 
     session.stop().expect("engine stops");

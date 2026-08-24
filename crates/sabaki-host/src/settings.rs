@@ -50,7 +50,10 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "scoring.method"
         | "view.coordinates_type"
         | "view.move_numbers_type" => Some(SettingKind::String),
-        "gtp.console_log_path"
+        "engines.analysis"
+        | "engines.black"
+        | "engines.white"
+        | "gtp.console_log_path"
         | "theme.current"
         | "theme.custom_blackstones"
         | "theme.custom_whitestones"
@@ -399,6 +402,9 @@ mod tests {
             setting_kind("theme.current"),
             Some(SettingKind::NullableString)
         );
+        for key in ["engines.analysis", "engines.black", "engines.white"] {
+            assert_eq!(setting_kind(key), Some(SettingKind::NullableString));
+        }
         assert_eq!(setting_kind("engines.list"), Some(SettingKind::StringArray));
         assert_eq!(setting_kind("unknown.key"), None);
         assert!(is_legacy_overwrite_marker("setting.overwrite.v0.50.1"));
@@ -411,6 +417,9 @@ mod tests {
         assert!(validate_setting_value("sound.enable", &json!("yes")).is_err());
         assert!(validate_setting_value("theme.current", &json!(null)).is_ok());
         assert!(validate_setting_value("theme.current", &json!("mist")).is_ok());
+        assert!(validate_setting_value("engines.analysis", &json!("KataGo")).is_ok());
+        assert!(validate_setting_value("engines.black", &json!(null)).is_ok());
+        assert!(validate_setting_value("engines.white", &json!(3)).is_err());
         assert!(validate_setting_value("window.width", &json!(1200)).is_ok());
         assert!(validate_setting_value("window.width", &json!("wide")).is_err());
         assert!(

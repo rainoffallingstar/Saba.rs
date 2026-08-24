@@ -26,6 +26,8 @@ pub struct AnalysisEntry {
     pub pv: Vec<String>,
     /// `true` while the engine is still searching (kata-analyze only).
     pub is_during_search: bool,
+    /// Optional board territory ownership probabilities (-1.0 to +1.0) for each intersection.
+    pub ownership: Option<Vec<f64>>,
 }
 
 /// Parses one Leela-family analysis line:
@@ -44,6 +46,7 @@ pub fn parse_lz_analysis_line(line: &str) -> Option<AnalysisEntry> {
         score_lead: None,
         pv: Vec::new(),
         is_during_search: false,
+        ownership: None,
     };
     let mut saw_core_field = false;
     while let Some(field) = tokens.next() {
@@ -63,6 +66,21 @@ pub fn parse_lz_analysis_line(line: &str) -> Option<AnalysisEntry> {
             "scoreLead" => {
                 entry.score_lead = tokens.next()?.parse().ok();
                 saw_core_field = true;
+            }
+            "ownership" => {
+                let mut ownership_vals = Vec::new();
+                while let Some(next_tok) = tokens.clone().next() {
+                    if let Ok(val) = next_tok.parse::<f64>() {
+                        tokens.next();
+                        ownership_vals.push(val);
+                    } else {
+                        break;
+                    }
+                }
+                if !ownership_vals.is_empty() {
+                    entry.ownership = Some(ownership_vals);
+                    saw_core_field = true;
+                }
             }
             "pv" => {
                 entry.pv = tokens.map(ToOwned::to_owned).collect();
@@ -114,6 +132,10 @@ pub fn parse_kata_analysis_line(line: &str) -> Option<AnalysisEntry> {
             .get("isDuringSearch")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+        ownership: value
+            .get("ownership")
+            .and_then(serde_json::Value::as_array)
+            .map(|array| array.iter().filter_map(serde_json::Value::as_f64).collect()),
     })
 }
 
@@ -136,6 +158,49 @@ pub fn parse_analysis_response(command: &str, content: &str) -> Vec<AnalysisEntr
             }
         })
         .collect()
+}
+
+/// A sink that accepts GTP commands line-by-line, for streaming analysis
+/// processes that do not use request/response framing.
+pub trait AnalysisCommandSink {
+    fn send_command(&mut self, command: &str) -> std::io::Result<()>;
+}
+
+impl AnalysisCommandSink for sabaki_domain_core::gtp::AnalysisStream {
+    fn send_command(&mut self, command: &str) -> std::io::Result<()> {
+        sabaki_domain_core::gtp::AnalysisStream::send_command(self, command)
+    }
+}
+
+/// Formats a zero-based vertex as a GTP vertex (`D4`, skipping the `I`
+/// column), for analysis-process board replay.
+fn gtp_vertex(board_size: usize, column: usize, row: usize) -> String {
+    let letter_offset = if column >= 8 { column + 1 } else { column };
+    let column_char = char::from_u32((b'A' + letter_offset as u8) as u32).unwrap_or('A');
+    format!("{column_char}{}", board_size - row)
+}
+
+/// Replays a position into a streaming analysis process: board size, clear,
+/// then every move as `play <color> <vertex>` (passes as `play <color> pass`).
+pub fn replay_position_stream(
+    sink: &mut impl AnalysisCommandSink,
+    board_size: usize,
+    moves: &[sabaki_domain_core::MoveDto],
+) -> std::io::Result<()> {
+    sink.send_command(&format!("boardsize {board_size}"))?;
+    sink.send_command("clear_board")?;
+    for move_dto in moves {
+        let color = match move_dto.color {
+            sabaki_domain_core::Color::Black => "B",
+            sabaki_domain_core::Color::White => "W",
+        };
+        let vertex = match move_dto.vertex {
+            Some(vertex) => gtp_vertex(board_size, vertex.column, vertex.row),
+            None => "pass".to_owned(),
+        };
+        sink.send_command(&format!("play {color} {vertex}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -284,47 +349,4 @@ mod tests {
             vec!["boardsize 9".to_owned(), "clear_board".to_owned()]
         );
     }
-}
-
-/// A sink that accepts GTP commands line-by-line, for streaming analysis
-/// processes that do not use request/response framing.
-pub trait AnalysisCommandSink {
-    fn send_command(&mut self, command: &str) -> std::io::Result<()>;
-}
-
-impl AnalysisCommandSink for sabaki_domain_core::gtp::AnalysisStream {
-    fn send_command(&mut self, command: &str) -> std::io::Result<()> {
-        sabaki_domain_core::gtp::AnalysisStream::send_command(self, command)
-    }
-}
-
-/// Formats a zero-based vertex as a GTP vertex (`D4`, skipping the `I`
-/// column), for analysis-process board replay.
-fn gtp_vertex(board_size: usize, column: usize, row: usize) -> String {
-    let letter_offset = if column >= 8 { column + 1 } else { column };
-    let column_char = char::from_u32((b'A' + letter_offset as u8) as u32).unwrap_or('A');
-    format!("{column_char}{}", board_size - row)
-}
-
-/// Replays a position into a streaming analysis process: board size, clear,
-/// then every move as `play <color> <vertex>` (passes as `play <color> pass`).
-pub fn replay_position_stream(
-    sink: &mut impl AnalysisCommandSink,
-    board_size: usize,
-    moves: &[sabaki_domain_core::MoveDto],
-) -> std::io::Result<()> {
-    sink.send_command(&format!("boardsize {board_size}"))?;
-    sink.send_command("clear_board")?;
-    for move_dto in moves {
-        let color = match move_dto.color {
-            sabaki_domain_core::Color::Black => "B",
-            sabaki_domain_core::Color::White => "W",
-        };
-        let vertex = match move_dto.vertex {
-            Some(vertex) => gtp_vertex(board_size, vertex.column, vertex.row),
-            None => "pass".to_owned(),
-        };
-        sink.send_command(&format!("play {color} {vertex}"))?;
-    }
-    Ok(())
 }

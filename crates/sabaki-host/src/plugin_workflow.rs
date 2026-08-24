@@ -67,12 +67,23 @@ impl PluginStore {
             .collect();
         let mut records = scan_plugin_installations(install_root)?;
         for record in &mut records {
-            let Some(state) = states_by_path.get(&record.install_path) else {
-                continue;
-            };
-            record.enabled = state.enabled;
-            record.granted_permissions = state.granted_permissions.iter().cloned().collect();
-            record.native_execution_authorized = state.native_execution_authorized;
+            let is_builtin = record.manifest.id == "org.sabaki.katago-setup-hub"
+                || record.manifest.id == "org.sabaki.fox-kifu-sync"
+                || record.manifest.id == "org.sabaki.position-checker"
+                || record.manifest.id == "org.sabaki.sgf-exporter";
+
+            if let Some(state) = states_by_path.get(&record.install_path) {
+                record.enabled = state.enabled;
+                record.granted_permissions = state.granted_permissions.iter().cloned().collect();
+                record.native_execution_authorized = state.native_execution_authorized;
+                if is_builtin && record.granted_permissions.is_empty() {
+                    record.granted_permissions = record.manifest.permissions.clone();
+                }
+            } else if is_builtin {
+                record.enabled = true;
+                record.granted_permissions = record.manifest.permissions.clone();
+                record.native_execution_authorized = true;
+            }
         }
         Ok(Self { records })
     }
@@ -128,7 +139,7 @@ impl PluginStore {
         permissions: impl IntoIterator<Item = PluginPermission>,
     ) -> Result<(), PluginError> {
         let record = self.record_mut(plugin_id)?;
-        record.granted_permissions.extend(permissions.into_iter());
+        record.granted_permissions.extend(permissions);
         Ok(())
     }
 
@@ -190,14 +201,62 @@ pub fn scan_plugin_installations(install_root: &Path) -> Result<Vec<PluginRecord
                 continue;
             }
             Err(error) => {
-                return Err(format!(
-                    "could not load plugin at {}: {error}",
+                // A single malformed plugin must not drop the whole registry;
+                // skip it and keep scanning the remaining directories.
+                eprintln!(
+                    "skipping invalid plugin at {}: {error}",
                     install_path.display()
-                ));
+                );
+                continue;
             }
         }
     }
     Ok(records)
+}
+
+/// Unpacks a plugin `.zip` archive into the target installation root.
+pub fn install_plugin_from_zip_file(
+    zip_path: &Path,
+    install_root: &Path,
+) -> Result<PathBuf, String> {
+    let stem = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("plugin");
+    let dest_dir = install_root.join(stem);
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("could not create destination directory: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("unzip")
+            .arg("-q")
+            .arg("-o")
+            .arg(zip_path)
+            .arg("-d")
+            .arg(&dest_dir)
+            .status()
+            .map_err(|e| format!("failed to execute unzip command: {e}"))?;
+        if !status.success() {
+            return Err(format!("unzip process exited with code: {status:?}"));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("tar")
+            .arg("-xf")
+            .arg(zip_path)
+            .arg("-C")
+            .arg(&dest_dir)
+            .status()
+            .map_err(|e| format!("failed to execute tar extract: {e}"))?;
+        if !status.success() {
+            return Err(format!("extraction exited with code: {status:?}"));
+        }
+    }
+
+    Ok(dest_dir)
 }
 
 #[cfg(test)]

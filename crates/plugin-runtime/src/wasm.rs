@@ -280,14 +280,6 @@ mod tests {
     local.get $len))
 "#;
 
-    /// A plugin that appends a marker field to the request.
-    const MARKER_WAT: &str = r#"
-(module
-  (memory (export "memory") 1)
-  (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
-    local.get $len))
-"#;
-
     fn compile(wat: &str) -> WasmPluginModule {
         let bytes = wat::parse_str(wat).expect("WAT parses");
         WasmPluginModule::compile(&bytes).expect("module compiles")

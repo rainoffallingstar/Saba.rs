@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const THEME_SCHEMA_VERSION: u32 = 1;
-pub const THEME_TOKEN_SCHEMA_VERSION: u32 = 1;
+pub const THEME_TOKEN_SCHEMA_VERSION: u32 = 2;
+pub const MIN_THEME_TOKEN_SCHEMA_VERSION: u32 = 1;
 
 /// Maximum size of a single theme asset (10 MiB).
 pub const MAX_THEME_ASSET_BYTES: u64 = 10 * 1024 * 1024;
@@ -80,13 +81,40 @@ pub struct ThemeTokens {
     pub stone_black: String,
     pub stone_white: String,
     pub background: String,
+    /// Optional shell UI colors introduced by schema v2. Schema v1 packages
+    /// remain supported and clients derive a compatible palette from `background`.
+    #[serde(default)]
+    pub shell: Option<ShellThemeTokens>,
+}
+
+/// Validated semantic colors for native shell chrome, drawers, inputs, graphs
+/// and status feedback. A single group avoids leaking raw colors through UI
+/// modules while still letting a theme define a coherent application surface.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellThemeTokens {
+    pub text: String,
+    pub muted: String,
+    pub subtle: String,
+    pub panel: String,
+    pub input: String,
+    pub border: String,
+    pub button: String,
+    pub button_active: String,
+    pub accent: String,
+    pub danger: String,
+    pub danger_text: String,
+    pub success: String,
+    pub track: String,
 }
 
 impl ThemeTokens {
     pub fn parse(json: &str) -> Result<Self, String> {
         let tokens: Self =
             serde_json::from_str(json).map_err(|error| format!("invalid theme tokens: {error}"))?;
-        if tokens.schema_version != THEME_TOKEN_SCHEMA_VERSION {
+        if !(MIN_THEME_TOKEN_SCHEMA_VERSION..=THEME_TOKEN_SCHEMA_VERSION)
+            .contains(&tokens.schema_version)
+        {
             return Err(format!(
                 "unsupported theme-token schema version {}",
                 tokens.schema_version
@@ -101,6 +129,25 @@ impl ThemeTokens {
             &tokens.background,
         ] {
             parse_hex_color(color)?;
+        }
+        if let Some(shell) = &tokens.shell {
+            for color in [
+                &shell.text,
+                &shell.muted,
+                &shell.subtle,
+                &shell.panel,
+                &shell.input,
+                &shell.border,
+                &shell.button,
+                &shell.button_active,
+                &shell.accent,
+                &shell.danger,
+                &shell.danger_text,
+                &shell.success,
+                &shell.track,
+            ] {
+                parse_hex_color(color)?;
+            }
         }
         Ok(tokens)
     }
@@ -140,6 +187,7 @@ impl Default for ThemeTokens {
             stone_black: "#1a1a1a".to_owned(),
             stone_white: "#ffffff".to_owned(),
             background: "#f5f0e8".to_owned(),
+            shell: None,
         }
     }
 }
@@ -231,8 +279,7 @@ impl InstalledTheme {
         }
         let tokens_json = String::from_utf8(tokens_bytes)
             .map_err(|_| ThemeError::InvalidManifest("tokens.json is not UTF-8".to_owned()))?;
-        let tokens =
-            ThemeTokens::parse(&tokens_json).map_err(|error| ThemeError::InvalidTokens(error))?;
+        let tokens = ThemeTokens::parse(&tokens_json).map_err(ThemeError::InvalidTokens)?;
         for asset in &manifest.assets {
             let asset_path = install_path.join(asset);
             let metadata = fs::metadata(&asset_path).map_err(|error| ThemeError::MissingAsset {
@@ -267,13 +314,13 @@ pub struct ThemeScan {
 /// legacy entries with a migration notice; anything else is skipped.
 pub fn scan_theme_root(themes_root: &Path) -> Result<ThemeScan, ThemeError> {
     let mut scan = ThemeScan::default();
-    let mut entries = match fs::read_dir(themes_root) {
+    let entries = match fs::read_dir(themes_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(scan),
         Err(error) => return Err(ThemeError::Read(error)),
     };
     let mut paths = Vec::new();
-    while let Some(entry) = entries.next() {
+    for entry in entries {
         paths.push(entry.map_err(ThemeError::Read)?.path());
     }
     paths.sort();
@@ -435,6 +482,25 @@ mod tests {
         assert_eq!(theme.tokens.board_wood_color().rgb_u32(), 0xd9a866);
         assert_eq!(theme.manifest.assets, vec!["board.png".to_owned()]);
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn schema_v1_tokens_remain_supported_without_shell_colors() {
+        let tokens = ThemeTokens::parse(
+            r##"{"schemaVersion":1,"boardWood":"#d9a866","boardLine":"#4a2f12","starPoint":"#3a2410","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f0e8"}"##,
+        )
+        .expect("v1 theme remains valid");
+        assert_eq!(tokens.schema_version, 1);
+        assert!(tokens.shell.is_none());
+    }
+
+    #[test]
+    fn rejects_invalid_schema_v2_shell_colors() {
+        let error = ThemeTokens::parse(
+            r##"{"schemaVersion":2,"boardWood":"#d9a866","boardLine":"#4a2f12","starPoint":"#3a2410","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f0e8","shell":{"text":"bad","muted":"#444444","subtle":"#999999","panel":"#ffffff","input":"#ffffff","border":"#d8cfc0","button":"#f7ecd8","buttonActive":"#e8e0d4","accent":"#8a6d3b","danger":"#f5d6d6","dangerText":"#c0392b","success":"#2e6b34","track":"#dddddd"}}"##,
+        )
+        .expect_err("invalid shell color is rejected");
+        assert!(error.contains("not a #RRGGBB color"));
     }
 
     #[test]

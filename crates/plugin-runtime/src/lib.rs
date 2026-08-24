@@ -541,7 +541,7 @@ fn run_response_reader(
                     data: None,
                 };
                 let mut pending = pending.lock().expect("pending map is not poisoned");
-                for (_, sender) in pending.iter() {
+                for sender in pending.values() {
                     let _ = sender.send(JsonRpcResponse {
                         jsonrpc: "2.0".to_owned(),
                         id: 0,
