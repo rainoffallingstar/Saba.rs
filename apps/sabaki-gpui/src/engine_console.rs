@@ -403,7 +403,7 @@ pub fn merge_analysis_entries(
 /// The analysis command for the streaming analyze button, from the
 /// `engines.analyze_commands` setting (first entry wins); defaults to the
 /// official KataGo streaming command when the setting is absent or empty. An
-/// entry may carry valid GTP arguments (`"kata-analyze B 10 rootInfo true"`);
+/// entry may carry valid GTP arguments (`"kata-analyze B 100 rootInfo true"`);
 /// the command name and its arguments are returned separately so transports
 /// receive them verbatim.
 pub fn analysis_command_from_settings(
@@ -416,7 +416,7 @@ pub fn analysis_command_from_settings(
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
         .filter(|command| !command.trim().is_empty())
-        .unwrap_or_else(|| "kata-analyze B 10 rootInfo true".to_owned());
+        .unwrap_or_else(|| "kata-analyze B 100 rootInfo true".to_owned());
     let mut tokens = entry.split_whitespace();
     let name = tokens.next().unwrap_or("kata-analyze").to_owned();
     let arguments: Vec<String> = tokens.map(ToOwned::to_owned).collect();
@@ -611,7 +611,7 @@ mod tests {
                 "kata-analyze".to_owned(),
                 vec![
                     "B".to_owned(),
-                    "10".to_owned(),
+                    "100".to_owned(),
                     "rootInfo".to_owned(),
                     "true".to_owned(),
                 ]
@@ -657,7 +657,7 @@ mod tests {
                 "kata-analyze".to_owned(),
                 vec![
                     "B".to_owned(),
-                    "10".to_owned(),
+                    "100".to_owned(),
                     "rootInfo".to_owned(),
                     "true".to_owned(),
                 ]

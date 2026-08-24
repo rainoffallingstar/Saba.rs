@@ -2389,16 +2389,21 @@ pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .flex()
                                 .flex_col()
                                 .gap_0p5()
+                                .min_w_0()
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .justify_between()
+                                        .gap_1()
                                         .child(
                                             div()
                                                 .font_weight(FontWeight::SEMIBOLD)
                                                 .text_xs()
                                                 .text_color(rgb(shell.palette.text))
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
                                                 .child(record.name.clone()),
                                         )
                                         .child(
@@ -2406,6 +2411,8 @@ pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 .px_1p5()
                                                 .py_0p5()
                                                 .rounded_sm()
+                                                .flex_none()
+                                                .whitespace_nowrap()
                                                 .bg(rgb(if connected {
                                                     shell.palette.button_active
                                                 } else {
@@ -2428,6 +2435,7 @@ pub fn render_engine_roster_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                     div()
                                         .text_xs()
                                         .text_color(rgb(shell.palette.subtle))
+                                        .truncate()
                                         .child(record.path.clone()),
                                 ),
                         )
@@ -2659,6 +2667,7 @@ pub fn render_gtp_console_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Sta
                     div()
                         .text_xs()
                         .text_color(rgb(shell.palette.accent))
+                        .truncate()
                         .child(selected.clone()),
                 ),
         )
@@ -2768,6 +2777,7 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap_2()
                         .pb_2()
                         .border_b_1()
                         .border_color(rgb(0x2a2a30))
@@ -2775,15 +2785,18 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .gap_1p5()
+                                .min_w_0()
                                 .child(
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(rgb(0xf2f2f5))
+                                        .flex_none()
                                         .child("💻 GTP 终端"),
                                 )
-                                // Role tabs
+                                // Role tabs (short labels only; the full engine
+                                // name is shown in the transcript status line)
                                 .children([
                                     crate::engine_console::EngineRole::Analysis,
                                     crate::engine_console::EngineRole::Black,
@@ -2791,7 +2804,6 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 ].into_iter().map(|role| {
                                     let is_active = shell.active_console_role == Some(role)
                                         || (shell.active_console_role.is_none() && role == crate::engine_console::EngineRole::Analysis);
-                                    let assigned = shell.engine_roles.get(role);
                                     let attached = shell.engine_controller.is_attached(role);
                                     div()
                                         .cursor_pointer()
@@ -2799,24 +2811,28 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .py_0p5()
                                         .rounded_md()
                                         .border_1()
+                                        .flex_none()
                                         .border_color(if is_active { rgb(shell.palette.accent) } else { rgb(0x3a3a42) })
                                         .bg(if is_active { rgb(0x262630) } else { rgb(0x1e1e24) })
                                         .text_xs()
                                         .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0x9a9a9a) })
                                         .child(format!(
-                                            "{} {}{}",
+                                            "{} {}",
                                             if attached { "●" } else { "○" },
                                             role.label(),
-                                            assigned.map(|n| {
-                                                let clean = n.trim_matches('(').trim_matches(')');
-                                                format!(": {clean}")
-                                            }).unwrap_or_default()
                                         ))
                                         .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
                                             shell.active_console_role = Some(role);
                                             cx.notify();
                                         }))
                                 }))
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .flex_none()
                                 .child(
                                     div()
                                         .cursor_pointer()
@@ -2824,13 +2840,14 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .py_0p5()
                                         .rounded_md()
                                         .border_1()
+                                        .whitespace_nowrap()
                                         .border_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
                                         .bg(if is_attached { rgb(shell.palette.danger) } else { rgb(shell.palette.button) })
                                         .text_xs()
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
                                         .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                        .child(if is_attached { "⏹ 断开引擎" } else { "🔌 连接引擎" })
+                                        .child(if is_attached { "⏹ 断开" } else { "🔌 连接" })
                                         .on_mouse_down(MouseButton::Left, cx.listener(move |shell, event, window, cx| {
                                             if shell.engine_controller.is_attached(selected_role) {
                                                 shell.on_engine_disconnect(selected_role, event, window, cx);
@@ -2839,19 +2856,14 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                             }
                                         }))
                                 )
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
                                 .child(
                                     div()
                                         .cursor_pointer()
                                         .text_xs()
+                                        .whitespace_nowrap()
                                         .text_color(rgb(0x9a9a9a))
                                         .hover(|style| style.text_color(rgb(0xf2f2f5)))
-                                        .child("清空日志")
+                                        .child("清空")
                                         .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
                                             shell.engine_log.clear();
                                             cx.notify();
@@ -2861,9 +2873,10 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                     div()
                                         .cursor_pointer()
                                         .text_xs()
+                                        .whitespace_nowrap()
                                         .text_color(rgb(0x9a9a9a))
                                         .hover(|style| style.text_color(rgb(0xf2f2f5)))
-                                        .child("✕ 关闭")
+                                        .child("✕")
                                         .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::toggle_gtp_terminal)),
                                 )
                         )
@@ -2936,6 +2949,50 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                             } else {
                                                 shell.start_analysis(cx);
                                             }
+                                        }))
+                                )
+                                // Analysis visits quick-switch (KataGo maxVisits)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(0x9a9a9a))
+                                                .child("访问量:"),
+                                        )
+                                        .children([100u64, 500, 1000, 0].into_iter().map(|visits| {
+                                            let current = shell
+                                                .settings
+                                                .get("engines.analysis_max_visits")
+                                                .and_then(serde_json::Value::as_u64)
+                                                .unwrap_or(500);
+                                            let is_active = current == visits;
+                                            div()
+                                                .cursor_pointer()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(if is_active { rgb(0x30303c) } else { rgb(0x24242c) })
+                                                .border_1()
+                                                .border_color(if is_active { rgb(shell.palette.accent) } else { rgb(0x383844) })
+                                                .text_xs()
+                                                .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0xd0d0d8) })
+                                                .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
+                                                .child(if visits == 0 { "无限".to_owned() } else { visits.to_string() })
+                                                .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                                    let _ = shell.settings.set(
+                                                        "engines.analysis_max_visits",
+                                                        serde_json::json!(visits),
+                                                    );
+                                                    let _ = sabaki_host::persist_settings_store(
+                                                        &shell.settings,
+                                                        &mut shell.settings_persistence,
+                                                    );
+                                                    cx.notify();
+                                                }))
                                         }))
                                 )
                                 .child(

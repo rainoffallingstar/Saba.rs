@@ -853,6 +853,13 @@ impl ShellApp {
         }
         let analysis_snapshot = self.host.snapshot();
         let (command, command_arguments) = analysis_command_from_settings(&self.settings);
+        // KataGo limits search depth via `maxVisits`; 0 means unlimited.
+        // Applied through `kata-set-param` right before the stream starts.
+        let max_visits = self
+            .settings
+            .get("engines.analysis_max_visits")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(500);
         if !self.engine_controller.is_attached(EngineRole::Analysis) {
             let name = self
                 .engine_roles
@@ -915,6 +922,12 @@ impl ShellApp {
                 cx.notify();
                 return;
             }
+            // Apply the requested search-depth limit before streaming.
+            let _ = self.engine_controller.send(
+                EngineRole::Analysis,
+                "kata-set-param",
+                vec!["maxVisits".to_owned(), max_visits.to_string()],
+            );
             match self.engine_controller.start_analysis(
                 EngineRole::Analysis,
                 &command,
@@ -969,14 +982,21 @@ impl ShellApp {
                             >::recv_analysis_line(
                                 &mut session, Duration::from_millis(50)
                             ) {
-                                let line = line.trim();
-                                if line.is_empty() {
-                                    break;
+                                let trimmed = line.trim();
+                                // GTP responses begin with `=` / `?` and are
+                                // followed by an empty line before the streamed
+                                // `info` records. Skip both instead of treating
+                                // the empty line as the end of the stream.
+                                if trimmed.is_empty()
+                                    || trimmed.starts_with('=')
+                                    || trimmed.starts_with('?')
+                                {
+                                    continue;
                                 }
-                                if let Some(entry) = parse_stream_line(&task_command, line) {
+                                if let Some(entry) = parse_stream_line(&task_command, trimmed) {
                                     let proxy_completion = task_command == "kata-analyze"
                                         && !entry.is_during_search
-                                        && line.trim_start().starts_with('{');
+                                        && trimmed.starts_with('{');
                                     pending.push(entry);
                                     // Official KataGo GTP `kata-analyze` emits
                                     // continuous `info move` records without a
@@ -1045,6 +1065,8 @@ impl ShellApp {
             cx.notify();
             return;
         }
+        // Apply the requested search-depth limit before starting the stream.
+        let _ = stream.send_command(&format!("kata-set-param maxVisits {max_visits}"));
         let full_command = if command_arguments.is_empty() {
             command.clone()
         } else {
@@ -1071,14 +1093,19 @@ impl ShellApp {
                             break;
                         }
                         if let Some(line) = stream.recv_line_timeout(Duration::from_millis(50)) {
-                            let line = line.trim();
-                            if line.is_empty() {
-                                break;
+                            let trimmed = line.trim();
+                            // Skip GTP response headers and blank terminators;
+                            // only `info` records feed the analysis set.
+                            if trimmed.is_empty()
+                                || trimmed.starts_with('=')
+                                || trimmed.starts_with('?')
+                            {
+                                continue;
                             }
-                            if let Some(entry) = parse_stream_line(&task_command, line) {
+                            if let Some(entry) = parse_stream_line(&task_command, trimmed) {
                                 let proxy_completion = task_command == "kata-analyze"
                                     && !entry.is_during_search
-                                    && line.trim_start().starts_with('{');
+                                    && trimmed.starts_with('{');
                                 pending.push(entry);
                                 // Official KataGo GTP `kata-analyze` emits
                                 // continuous `info move` records without a
@@ -4813,7 +4840,7 @@ mod headless_smoke {
             let (command, arguments) =
                 crate::engine_console::analysis_command_from_settings(&shell.settings);
             assert_eq!(command, "kata-analyze");
-            assert_eq!(arguments, vec!["B", "10", "rootInfo", "true"]);
+            assert_eq!(arguments, vec!["B", "100", "rootInfo", "true"]);
         });
     }
 

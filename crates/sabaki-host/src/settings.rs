@@ -113,6 +113,7 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "autoscroll.min_interval"
         | "board.analysis_interval"
         | "board.variation_replay_interval"
+        | "engines.analysis_max_visits"
         | "comments.commit_delay"
         | "console.max_history_count"
         | "edit.history_batch_interval"
