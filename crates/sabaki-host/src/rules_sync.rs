@@ -120,7 +120,7 @@ impl GameRuleConfig {
     pub fn to_gtp_setup_commands(&self) -> Vec<String> {
         vec![
             format!("boardsize {}", self.board_size),
-            format!("clear_board"),
+            "clear_board".to_owned(),
             format!("kata-set-rules {}", self.ruleset.katago_name()),
             format!("komi {:.1}", self.komi),
         ]
