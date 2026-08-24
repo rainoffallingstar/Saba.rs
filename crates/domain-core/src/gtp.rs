@@ -333,13 +333,26 @@ mod stream_tests {
     use std::time::Duration;
 
     /// Resolves a Python interpreter for the subprocess fixture. Windows
-    /// runners commonly expose `python` rather than the Unix `python3` name.
+    /// runners can expose an App Execution Alias named `python` that launches
+    /// the Microsoft Store instead of an interpreter, so accept only candidates
+    /// whose version output identifies CPython.
     fn python() -> Option<&'static str> {
         ["python3", "python"].into_iter().find(|candidate| {
-            std::process::Command::new(candidate)
+            let Ok(output) = std::process::Command::new(candidate)
                 .arg("--version")
                 .output()
-                .is_ok_and(|output| output.status.success())
+            else {
+                return false;
+            };
+            if !output.status.success() {
+                return false;
+            }
+            let version = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            version.contains("Python ")
         })
     }
 
