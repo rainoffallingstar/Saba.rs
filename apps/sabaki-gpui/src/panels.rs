@@ -552,6 +552,26 @@ pub fn render_player_bar(
                 .child(div().child("○"))
                 .child(
                     div()
+                        .id("plugin-menu-button")
+                        .debug_selector(|| "plugin-menu-button".to_owned())
+                        .px_2()
+                        .py_1()
+                        .cursor_pointer()
+                        .rounded_md()
+                        .text_color(rgb(if shell.plugin_menu_open {
+                            0x8ec5ff
+                        } else {
+                            0xe8e8e8
+                        }))
+                        .hover(|style| style.bg(rgb(0x2a2a2a)))
+                        .child("🧩")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(ShellApp::toggle_plugin_menu),
+                        ),
+                )
+                .child(
+                    div()
                         .id("drawer-menu-button")
                         .debug_selector(|| "drawer-menu-button".to_owned())
                         .px_2()
@@ -753,8 +773,9 @@ fn plugin_description(plugin_id: &str) -> &'static str {
     }
 }
 
-/// The plugin action panel: renders each enabled plugin as its own dedicated card
-/// with custom buttons and actions. Settings/management are housed in Preferences.
+/// Legacy inline plugin panel retained only as a view fixture while the compact
+/// overlay menu owns the production UI.
+#[allow(dead_code)]
 pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let enabled_plugins: Vec<&PluginPanelEntry> = shell
         .installed_plugins
@@ -1095,6 +1116,201 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
     }
 
     panel
+}
+
+/// Compact overlay menu for optional extensions. It uses transient screen space
+/// above the player bar rather than consuming the right game-inspection panel.
+pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let enabled: Vec<&PluginPanelEntry> = shell
+        .installed_plugins
+        .iter()
+        .filter(|plugin| plugin.enabled)
+        .collect();
+
+    div()
+        .id("plugin-menu")
+        .debug_selector(|| "plugin-menu".to_owned())
+        .absolute()
+        .bottom(px(42.0))
+        .left_0()
+        .w_full()
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .w(px(320.0))
+                .h(px(340.0))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(shell.palette.accent))
+                .bg(rgb(shell.palette.panel))
+                .shadow_lg()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(shell.palette.text))
+                                .child("扩展组件"),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.accent))
+                                .hover(|style| style.underline())
+                                .child("设置")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, _, cx| shell.open_preferences(cx)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .hover(|style| style.text_color(rgb(shell.palette.text)))
+                                .child("关闭")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(ShellApp::close_plugin_menu),
+                                ),
+                        ),
+                )
+                .child(if enabled.is_empty() {
+                    div()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(shell.palette.input))
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("暂无启用的扩展组件，请到设置中启用插件。")
+                } else {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(enabled.iter().map(|plugin| {
+                            let plugin_id = plugin.plugin_id.clone();
+                            div()
+                                .p_2()
+                                .rounded_md()
+                                .bg(rgb(shell.palette.input))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(shell.palette.text))
+                                        .child(format!(
+                                            "{} {}",
+                                            plugin_icon(&plugin_id),
+                                            plugin.name
+                                        )),
+                                )
+                                .children(plugin_id.contains("fox").then(|| {
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .track_focus(&shell.fox_query_focus_handle)
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(rgb(shell.palette.accent))
+                                                .bg(rgb(shell.palette.panel))
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.text))
+                                                .child(if shell.fox_query.is_empty() {
+                                                    "野狐用户名或 ID".to_owned()
+                                                } else {
+                                                    shell.fox_query.to_string()
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(ShellApp::on_fox_query_focus),
+                                                )
+                                                .on_key_down(
+                                                    cx.listener(ShellApp::on_fox_query_key_down),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .rounded_md()
+                                                .cursor_pointer()
+                                                .bg(rgb(shell.palette.button))
+                                                .border_1()
+                                                .border_color(rgb(shell.palette.border))
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.text))
+                                                .hover(|style| {
+                                                    style.bg(rgb(shell.palette.button_active))
+                                                })
+                                                .child("查询")
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|shell, _, _, cx| {
+                                                        shell.fetch_fox_query(cx)
+                                                    }),
+                                                ),
+                                        )
+                                }))
+                                .children((!plugin.commands.is_empty()).then(|| {
+                                    div().flex().flex_wrap().gap_1().children(
+                                        plugin.command_ids.iter().zip(plugin.commands.iter()).map(
+                                            |(command_id, title)| {
+                                                let plugin_id = plugin_id.clone();
+                                                let command_id = command_id.clone();
+                                                div()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .cursor_pointer()
+                                                    .bg(rgb(shell.palette.button))
+                                                    .border_1()
+                                                    .border_color(rgb(shell.palette.border))
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(rgb(shell.palette.text))
+                                                    .hover(|style| {
+                                                        style.bg(rgb(shell.palette.button_active))
+                                                    })
+                                                    .child(title.clone())
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(move |shell, _, _, cx| {
+                                                            shell.on_plugin_command(
+                                                                &plugin_id,
+                                                                &command_id,
+                                                                cx,
+                                                            )
+                                                        }),
+                                                    )
+                                            },
+                                        ),
+                                    )
+                                }))
+                        }))
+                }),
+        )
 }
 
 /// Renders a compact WinrateGraph from the current variation's persisted and

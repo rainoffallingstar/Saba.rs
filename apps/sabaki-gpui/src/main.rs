@@ -173,6 +173,7 @@ struct ShellApp {
     properties_height: f32,
     split_drag: Option<SplitDrag>,
     active_drawer: Option<ActiveDrawer>,
+    plugin_menu_open: bool,
     game_graph_context_node: Option<sabaki_domain_core::NodeId>,
     installed_themes: Vec<sabaki_host::InstalledTheme>,
     legacy_asar_themes: Vec<std::path::PathBuf>,
@@ -424,6 +425,7 @@ impl ShellApp {
             properties_height,
             split_drag: None,
             active_drawer: None,
+            plugin_menu_open: false,
             game_graph_context_node: None,
             installed_themes,
             legacy_asar_themes,
@@ -3293,6 +3295,19 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::Preferences, "preferences opened", cx);
     }
 
+    fn set_plugin_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.plugin_menu_open = open;
+        cx.notify();
+    }
+
+    fn toggle_plugin_menu(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_plugin_menu_open(!self.plugin_menu_open, cx);
+    }
+
+    fn close_plugin_menu(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_plugin_menu_open(false, cx);
+    }
+
     fn open_game_info(&mut self, cx: &mut Context<Self>) {
         self.open_drawer(ActiveDrawer::GameInfo, "game info opened", cx);
     }
@@ -3598,7 +3613,6 @@ impl Render for ShellApp {
                             .border_l_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.panel))
-                            .child(panels::render_plugins_panel(self, cx))
                             .child(
                                 if self
                                     .settings
@@ -3708,6 +3722,11 @@ impl Render for ShellApp {
             .child(panels::render_player_bar(
                 &snapshot, &status, palette, self, cx,
             ))
+            .child(if self.plugin_menu_open {
+                panels::render_plugin_menu(self, cx)
+            } else {
+                div().id("plugin-menu-hidden")
+            })
             .child(match self.active_drawer {
                 Some(ActiveDrawer::Preferences) => {
                     panels::render_preferences_drawer(&settings_rows, self, cx)
@@ -4945,11 +4964,6 @@ mod frontend_smoke {
         assert_eq!(right_sidebar.size.width, px(200.0));
         let panels = [
             (
-                "plugins-panel",
-                vcx.debug_bounds("plugins-panel")
-                    .expect("plugins panel must have a debug selector"),
-            ),
-            (
                 "variation-tree-panel",
                 vcx.debug_bounds("variation-tree-panel")
                     .expect("variation panel must have a debug selector"),
@@ -4969,6 +4983,17 @@ mod frontend_smoke {
                 right_sidebar
             );
         }
+        assert!(vcx.debug_bounds("plugin-menu").is_none());
+        window_handle
+            .update(&mut vcx.cx, |shell, _window, cx| {
+                shell.set_plugin_menu_open(true, cx);
+            })
+            .expect("plugin button opens compact overlay menu");
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        assert!(vcx.debug_bounds("plugin-menu").is_some());
         window_handle
             .update(&mut vcx.cx, |shell, _window, cx| shell.open_preferences(cx))
             .expect("Preferences action must update the shell");
