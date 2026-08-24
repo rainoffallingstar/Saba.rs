@@ -3227,16 +3227,50 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         )
                         .child(
                             div()
-                                .text_color(rgb(if shell.analysis_task.is_some() {
-                                    shell.palette.success
-                                } else {
-                                    shell.palette.muted
-                                }))
-                                .child(if shell.analysis_task.is_some() {
-                                    "● 分析计算中..."
-                                } else {
-                                    "○ 待机"
-                                }),
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(rgb(shell.palette.accent))
+                                        .bg(rgb(shell.palette.button))
+                                        .text_color(rgb(shell.palette.accent))
+                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                        .child(
+                                            if shell
+                                                .batch_review_progress
+                                                .is_some_and(|p| p.is_running)
+                                            {
+                                                "⏹ 停止全盘复盘"
+                                            } else {
+                                                "⏩ 全盘 AI 复盘"
+                                            },
+                                        )
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|shell, _, _, cx| {
+                                                shell.start_whole_game_review(cx)
+                                            }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(rgb(if shell.analysis_task.is_some() {
+                                            shell.palette.success
+                                        } else {
+                                            shell.palette.muted
+                                        }))
+                                        .child(if shell.analysis_task.is_some() {
+                                            "● 分析中"
+                                        } else {
+                                            "○ 待机"
+                                        }),
+                                ),
                         ),
                 )
                 .child(
@@ -4712,6 +4746,22 @@ pub fn render_goban_area(
         GameMode::Play | GameMode::Guess | GameMode::Autoplay
     )
     .then_some(board.next_player);
+    let evaluations = sabaki_host::compute_game_move_evaluations(snapshot);
+    let mut eval_dots = std::collections::BTreeMap::new();
+    for eval in &evaluations {
+        if let Some(vtx_str) = eval.played_vertex.as_deref()
+            && let Some(vtx) = parse_gtp_vertex(board.width, vtx_str)
+        {
+            eval_dots.insert(
+                sabaki_domain_core::Vertex {
+                    column: vtx.0,
+                    row: vtx.1,
+                },
+                eval.quality,
+            );
+        }
+    }
+
     let options = crate::goban_view::GobanRenderOptions {
         show_coordinates: shell
             .settings
@@ -4737,6 +4787,8 @@ pub fn render_goban_area(
         hovered_vertex: shell.hovered_vertex,
         hover_stone_color,
         analysis_candidates,
+        eval_dots,
+        pv_preview: Vec::new(),
         ownership: shell
             .analysis
             .first()

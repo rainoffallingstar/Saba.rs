@@ -158,6 +158,7 @@ struct ShellApp {
     analysis_best_move: Option<Vertex>,
     analysis_run: sabaki_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
+    batch_review_progress: Option<sabaki_host::BatchReviewProgress>,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
     /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
@@ -416,6 +417,7 @@ impl ShellApp {
             analysis_best_move: None,
             analysis_run: sabaki_host::AnalysisRunController::default(),
             analysis_task: None,
+            batch_review_progress: None,
             last_analysis_node: None,
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
@@ -1282,6 +1284,43 @@ impl ShellApp {
         } else {
             self.status = "no analysis running".into();
         }
+        cx.notify();
+    }
+
+    fn start_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        if self.batch_review_progress.is_some_and(|p| p.is_running) {
+            self.stop_whole_game_review(cx);
+            return;
+        }
+
+        if !self.engine_controller.is_attached(EngineRole::Analysis) {
+            self.on_engine_connect(EngineRole::Analysis, cx);
+            if !self.engine_controller.is_attached(EngineRole::Analysis) {
+                self.show_toast("请先连接 KataGo 分析引擎".to_owned(), cx);
+                return;
+            }
+        }
+
+        let snapshot = self.host.snapshot();
+        let total_moves = snapshot.moves.len();
+        self.batch_review_progress = Some(sabaki_host::BatchReviewProgress {
+            current_move: 1,
+            total_moves: total_moves.max(1),
+            is_running: true,
+        });
+
+        self.show_toast(
+            format!("⏩ 开启全盘 AI 复盘分析 (共 {} 手)...", total_moves),
+            cx,
+        );
+        self.start_analysis(cx);
+        cx.notify();
+    }
+
+    fn stop_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        self.stop_analysis(cx);
+        self.batch_review_progress = None;
+        self.show_toast("全盘复盘已停止".to_owned(), cx);
         cx.notify();
     }
 

@@ -34,6 +34,10 @@ pub struct GobanRenderOptions {
     pub hover_stone_color: Option<Color>,
     /// Engine candidates annotated directly on the board.
     pub analysis_candidates: Vec<AnalysisCandidate>,
+    /// Move evaluations mapped to vertices for KaTrain-style colored quality dots.
+    pub eval_dots: BTreeMap<Vertex, sabaki_host::MoveQuality>,
+    /// Prospective PV variation ghost sequence preview.
+    pub pv_preview: Vec<(Vertex, Color, usize)>,
     /// Optional territory ownership probabilities from KataGo.
     pub ownership: Option<Vec<f64>>,
     /// Alive-stone overrides from `GameSnapshot.score_overrides`; overridden
@@ -726,6 +730,59 @@ pub fn render_goban(
                             .line_height(px(size * 0.36))
                             .child(sub_str),
                     ),
+            );
+        }
+    }
+
+    // KaTrain-style Move Quality Eval Dots on played stones
+    for (vtx, quality) in &options.eval_dots {
+        if vtx.row < height && vtx.column < width {
+            let (x, y) = intersection_position(board, board_pixel_size, vtx.column, vtx.row);
+            let dot_size = (spacing * 0.32).clamp(6.0, 12.0);
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(x + spacing * 0.18))
+                    .top(px(y - spacing * 0.32))
+                    .size(px(dot_size))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgb(0xffffff))
+                    .bg(rgb(quality.color_u32())),
+            );
+        }
+    }
+
+    // Prospective PV variation sequence preview ghost stones
+    for (vtx, color, step_num) in &options.pv_preview {
+        if vtx.row < height && vtx.column < width {
+            let (x, y) = intersection_position(board, board_pixel_size, vtx.column, vtx.row);
+            let psize = spacing * 0.88;
+            children.push(
+                div()
+                    .absolute()
+                    .left(px(x - psize / 2.0))
+                    .top(px(y - psize / 2.0))
+                    .size(px(psize))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(rgb(0x007aff))
+                    .bg(if *color == Color::Black {
+                        hsla(0.0, 0.0, 0.1, 0.6)
+                    } else {
+                        hsla(0.0, 0.0, 0.95, 0.6)
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(if *color == Color::Black {
+                        rgb(0xffffff)
+                    } else {
+                        rgb(0x111111)
+                    })
+                    .child(step_num.to_string()),
             );
         }
     }

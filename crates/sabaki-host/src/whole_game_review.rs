@@ -67,6 +67,24 @@ pub type ReviewedPosition = (
     Vec<String>,
 );
 
+/// Progress state for an active whole-game batch review run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BatchReviewProgress {
+    pub current_move: usize,
+    pub total_moves: usize,
+    pub is_running: bool,
+}
+
+impl BatchReviewProgress {
+    pub fn percent(self) -> f32 {
+        if self.total_moves == 0 {
+            0.0
+        } else {
+            (self.current_move as f32 / self.total_moves as f32) * 100.0
+        }
+    }
+}
+
 /// Computes the blunder list from a sequence of evaluated game positions.
 pub fn find_blunders(
     evaluations: &[ReviewedPosition],

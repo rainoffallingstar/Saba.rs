@@ -101,7 +101,9 @@ pub use theme_workflow::{
     ThemeManifest, ThemeScan, ThemeTokens, install_theme, is_safe_relative_path, is_valid_theme_id,
     parse_hex_color, scan_theme_root, uninstall_theme,
 };
-pub use whole_game_review::{BlunderEntry, BlunderGrade, ReviewedPosition, find_blunders};
+pub use whole_game_review::{
+    BatchReviewProgress, BlunderEntry, BlunderGrade, ReviewedPosition, find_blunders,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedGameFile {
