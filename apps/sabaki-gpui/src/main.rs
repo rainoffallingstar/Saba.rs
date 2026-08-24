@@ -3410,13 +3410,58 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn on_branch_candidate_pv(&mut self, pv: &[String], cx: &mut Context<Self>) {
+        if pv.is_empty() {
+            return;
+        }
+        let board_size = self.host.snapshot().board.width;
+        let mut color = self.host.snapshot().board.next_player;
+        let mut played_count = 0;
+        let mut events = RecordingSink;
+
+        for move_str in pv {
+            if let Some(coords) = crate::engine_console::parse_gtp_vertex(board_size, move_str) {
+                let vertex = Vertex {
+                    column: coords.0,
+                    row: coords.1,
+                };
+                if self
+                    .host
+                    .play_move(color, Some(vertex), &mut events)
+                    .is_ok()
+                {
+                    played_count += 1;
+                    color = match color {
+                        Color::Black => Color::White,
+                        Color::White => Color::Black,
+                    };
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if played_count > 0 {
+            self.last_vertex = None;
+            self.synchronize_recovery();
+            self.show_toast(
+                format!("🌿 已成功在棋谱树上生成 AI 推荐变化分支 (共 {played_count} 手)"),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     fn on_export_gif_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let options = sabaki_host::GifExportOptions::default();
         match sabaki_host::export_sgf_to_gif(&snapshot, &options) {
             Ok(gif_bytes) => {
-                let default_name = format!("saba_game_{}.gif", std::process::id());
-                let dest = std::env::temp_dir().join(&default_name);
+                let suggested = format!("saba_game_{}.gif", std::process::id());
+                let dest = self
+                    .dialog_service
+                    .pick_save_gif_path(&suggested)
+                    .unwrap_or_else(|| std::env::temp_dir().join(&suggested));
                 if std::fs::write(&dest, &gif_bytes).is_ok() {
                     self.show_toast(format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()), cx);
                 } else {

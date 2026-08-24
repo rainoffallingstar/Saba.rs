@@ -3435,12 +3435,47 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 })
                                                 .child(format!("#{} {}", idx + 1, vtx)),
                                         )
-                                        .child(div().text_color(rgb(shell.palette.text)).child(
-                                            format!(
-                                                "{:.1}% · {} · {}v",
-                                                wr_pct, score_str, entry.visits
-                                            ),
-                                        )),
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(shell.palette.text))
+                                                        .child(format!(
+                                                            "{:.1}% · {} · {}v",
+                                                            wr_pct, score_str, entry.visits
+                                                        )),
+                                                )
+                                                .children((!entry.pv.is_empty()).then(|| {
+                                                    let pv_clone = entry.pv.clone();
+                                                    div()
+                                                        .cursor_pointer()
+                                                        .px_1()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .border_1()
+                                                        .border_color(rgb(shell.palette.accent))
+                                                        .bg(rgb(shell.palette.button))
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.accent))
+                                                        .hover(|style| {
+                                                            style.bg(rgb(shell
+                                                                .palette
+                                                                .button_active))
+                                                        })
+                                                        .child("+ 分支")
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(move |shell, _, _, cx| {
+                                                                shell.on_branch_candidate_pv(
+                                                                    &pv_clone, cx,
+                                                                );
+                                                            }),
+                                                        )
+                                                })),
+                                        ),
                                 )
                                 .children((!pv_str.is_empty()).then(|| {
                                     div().text_color(rgb(shell.palette.subtle)).child(pv_str)
