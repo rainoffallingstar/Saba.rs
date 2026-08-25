@@ -109,13 +109,31 @@ pub struct GtpProcessSupervisor {
 const STDERR_TAIL_LINES: usize = 64;
 
 impl GtpProcessSupervisor {
+    /// Starts the engine inheriting the caller's working directory.
     pub fn start(executable: &str, arguments: &[String]) -> Result<Self, GtpError> {
-        let mut child = Command::new(executable)
+        Self::start_in(executable, arguments, None)
+    }
+
+    /// Starts the engine in an explicit working directory. KataGo's generated
+    /// config writes relative `logDir = katago_logs`; from a non-writable cwd
+    /// (e.g. a packaged `.app` bundle) the engine aborts during startup, which
+    /// surfaces as a failed handshake. Callers that know a writable directory
+    /// (the app config dir) must pass it here.
+    pub fn start_in(
+        executable: &str,
+        arguments: &[String],
+        current_dir: Option<&std::path::Path>,
+    ) -> Result<Self, GtpError> {
+        let mut command = Command::new(executable);
+        command
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        if let Some(dir) = current_dir {
+            command.current_dir(dir);
+        }
+        let mut child = command.spawn()?;
         let standard_input = child.stdin.take().ok_or(GtpError::MissingStandardInput)?;
         let standard_output = child.stdout.take().ok_or(GtpError::MissingStandardOutput)?;
         let standard_error = child.stderr.take();
@@ -356,13 +374,29 @@ pub struct AnalysisStream {
 }
 
 impl AnalysisStream {
+    /// Starts an analysis process inheriting the caller's working directory.
     pub fn start(executable: &str, arguments: &[String]) -> Result<Self, GtpError> {
-        let mut child = Command::new(executable)
+        Self::start_in(executable, arguments, None)
+    }
+
+    /// Starts an analysis process in an explicit working directory, so a
+    /// packaged app (non-writable cwd) can still run KataGo whose config
+    /// writes a relative `logDir`.
+    pub fn start_in(
+        executable: &str,
+        arguments: &[String],
+        current_dir: Option<&std::path::Path>,
+    ) -> Result<Self, GtpError> {
+        let mut command = Command::new(executable);
+        command
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        if let Some(dir) = current_dir {
+            command.current_dir(dir);
+        }
+        let mut child = command.spawn()?;
         let standard_input = child.stdin.take().ok_or(GtpError::MissingStandardInput)?;
         let standard_output = child.stdout.take().ok_or(GtpError::MissingStandardOutput)?;
         let (sender, receiver) = std::sync::mpsc::channel();

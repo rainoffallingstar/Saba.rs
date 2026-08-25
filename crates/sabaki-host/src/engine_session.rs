@@ -51,8 +51,20 @@ pub struct ProcessGtpTransport {
 
 impl ProcessGtpTransport {
     pub fn start(executable: &str, arguments: &[String]) -> Result<Self, GtpError> {
+        Self::start_in(executable, arguments, None)
+    }
+
+    /// Starts the engine in an explicit working directory. KataGo's generated
+    /// config writes a relative `logDir`; a non-writable cwd (packaged app)
+    /// makes it abort during startup, which the UI surfaces as a handshake
+    /// failure. The app passes its writable config directory here.
+    pub fn start_in(
+        executable: &str,
+        arguments: &[String],
+        current_dir: Option<&std::path::Path>,
+    ) -> Result<Self, GtpError> {
         Ok(Self {
-            supervisor: GtpProcessSupervisor::start(executable, arguments)?,
+            supervisor: GtpProcessSupervisor::start_in(executable, arguments, current_dir)?,
         })
     }
 }

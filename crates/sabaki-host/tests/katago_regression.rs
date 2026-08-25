@@ -263,3 +263,148 @@ fn katago_analysis_stream_survives_midstream_bounded_commands() {
         .expect("final stop is sent");
     supervisor.stop().ok();
 }
+
+/// The exact application handshake path: spawn `katago gtp`, run the full
+/// `EngineSession` lifecycle (name, version, capability probe, board setup)
+/// and then replay a 10-move game through `EngineController::attach`. This is
+/// the path the shell uses on "连接", and it reproduced the reported
+/// "引擎连接握手失败" even after the model path was repaired.
+#[test]
+fn full_session_handshake_and_replay_with_real_katago() {
+    use sabaki_domain_core::{Color, MoveDto, Vertex};
+    use sabaki_host::{EngineController, EngineRecord, ProcessGtpTransport};
+
+    let Some(engine) = sabaki_host::find_katago_executable(None) else {
+        eprintln!("katago binary not found; skipping full handshake probe");
+        return;
+    };
+    let Some(model) = find_katago_model() else {
+        eprintln!("katago model not found; skipping full handshake probe");
+        return;
+    };
+    let Some(config) = find_katago_config() else {
+        eprintln!("katago config not found; skipping full handshake probe");
+        return;
+    };
+    let args = format!("gtp -model \"{}\" -config \"{}\"", model, config);
+    let record = EngineRecord::new("KataGo (real)", engine.display().to_string(), args);
+
+    let transport = ProcessGtpTransport::start(
+        &record.path,
+        &[
+            "gtp".to_owned(),
+            "-model".to_owned(),
+            model.clone(),
+            "-config".to_owned(),
+            config,
+        ],
+    )
+    .expect("process starts");
+
+    // Replay the exact move sequence the shell replays (a 10-move game).
+    let moves: Vec<MoveDto> = [
+        ((3, 3), Color::Black),
+        ((15, 15), Color::White),
+        ((3, 15), Color::Black),
+        ((15, 3), Color::White),
+        ((9, 9), Color::Black),
+        ((9, 3), Color::White),
+        ((3, 9), Color::Black),
+        ((15, 9), Color::White),
+        ((9, 15), Color::Black),
+        ((16, 3), Color::White),
+    ]
+    .into_iter()
+    .map(|((column, row), color)| MoveDto {
+        color,
+        vertex: Some(Vertex { column, row }),
+    })
+    .collect();
+
+    // `attach` runs the full handshake (name, version, capability probe, board
+    // setup) and then replays the position — the exact "连接" path.
+    let mut controller = EngineController::<u8, ProcessGtpTransport>::default();
+    controller
+        .attach(1, transport, &record, 19, &moves)
+        .expect("attach + replay must succeed");
+    assert!(controller.is_attached(1));
+
+    // The session remains usable: generate one move.
+    let response = controller
+        .request_move(1, Color::Black)
+        .expect("genmove succeeds");
+    assert!(response.success, "genmove response: {response:?}");
+
+    controller.detach_all();
+}
+
+/// Regression for the packaged-app handshake failure: KataGo's generated
+/// config writes a relative `logDir = katago_logs`, and from a non-writable
+/// working directory (a macOS .app launches with an unwritable cwd) KataGo
+/// aborts during startup — surfacing as "GTP engine stopped before completing
+/// a response". The supervisor must spawn engines in an explicit writable cwd
+/// (`start_in`) so this never happens.
+#[test]
+fn katago_handshake_needs_a_writable_working_directory() {
+    use std::path::{Path, PathBuf};
+
+    if cfg!(windows) || !PathBuf::from("/System").is_dir() {
+        eprintln!("skipped (requires a Unix /System directory)");
+        return;
+    }
+    let Some(engine) = sabaki_host::find_katago_executable(None) else {
+        eprintln!("katago binary not found; skipping cwd regression probe");
+        return;
+    };
+    let Some(model) = find_katago_model() else {
+        eprintln!("katago model not found; skipping cwd regression probe");
+        return;
+    };
+    let Some(config) = find_katago_config() else {
+        eprintln!("katago config not found; skipping cwd regression probe");
+        return;
+    };
+    let args = vec![
+        "gtp".to_owned(),
+        "-model".to_owned(),
+        model,
+        "-config".to_owned(),
+        config,
+    ];
+
+    // 1. A non-writable cwd must make the engine abort during startup (the
+    //    pre-fix behavior the packaged app hit).
+    let mut in_non_writable = GtpProcessSupervisor::start_in(
+        &engine.to_string_lossy(),
+        &args,
+        Some(Path::new("/System")),
+    )
+    .expect("engine process starts even from a bad cwd");
+    let failed = in_non_writable.send("name", Vec::new());
+    let _ = in_non_writable.stop();
+    assert!(
+        failed.is_err(),
+        "expected the engine to abort from a non-writable cwd"
+    );
+    assert!(
+        in_non_writable.stderr_tail().contains("katago_logs"),
+        "the abort reason should mention the log directory, got: {}",
+        in_non_writable.stderr_tail()
+    );
+
+    // 2. start_in with a writable cwd must handshake successfully (the fix).
+    let writable = std::env::temp_dir().join(format!("katago-cwd-{}", std::process::id()));
+    std::fs::create_dir_all(&writable).expect("writable dir creates");
+    let mut with_cwd =
+        GtpProcessSupervisor::start_in(&engine.to_string_lossy(), &args, Some(&writable))
+            .expect("engine process starts with writable cwd");
+    let name = with_cwd
+        .send("name", Vec::new())
+        .expect("handshake succeeds with writable cwd");
+    assert!(
+        name.success && name.content.to_lowercase().contains("katago"),
+        "handshake name: {name:?}"
+    );
+    with_cwd.stop().ok();
+    let _ = std::fs::remove_dir_all(&writable);
+}

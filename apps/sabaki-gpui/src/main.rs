@@ -875,7 +875,15 @@ impl ShellApp {
         let name = record.name.clone();
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let board_size = self.host.snapshot().board.width;
-        let transport = match sabaki_host::ProcessGtpTransport::start(&record.path, &arguments) {
+        // KataGo's config writes a relative `logDir`; a non-writable cwd (e.g.
+        // a packaged .app) makes the engine abort during startup. Spawn in the
+        // writable engine runtime directory instead.
+        let runtime_dir = self.engine_runtime_directory();
+        let transport = match sabaki_host::ProcessGtpTransport::start_in(
+            &record.path,
+            &arguments,
+            Some(&runtime_dir),
+        ) {
             Ok(transport) => transport,
             Err(error) => {
                 self.status = format!("engine process failed: {error}").into();
@@ -1233,14 +1241,16 @@ impl ShellApp {
             return;
         };
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
-        let mut stream = match AnalysisStream::start(&record.path, &arguments) {
-            Ok(stream) => stream,
-            Err(error) => {
-                self.status = format!("analysis process failed: {error}").into();
-                cx.notify();
-                return;
-            }
-        };
+        let runtime_dir = self.engine_runtime_directory();
+        let mut stream =
+            match AnalysisStream::start_in(&record.path, &arguments, Some(&runtime_dir)) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    self.status = format!("analysis process failed: {error}").into();
+                    cx.notify();
+                    return;
+                }
+            };
         if let Err(error) = replay_position_stream(&mut stream, board_size, &moves) {
             self.status = format!("analysis setup failed: {error}").into();
             cx.notify();
@@ -2085,6 +2095,19 @@ impl ShellApp {
             },
         )
         .detach();
+    }
+
+    /// The writable directory engine subprocesses run in. KataGo's generated
+    /// config writes a relative `logDir`; running from a packaged app's
+    /// read-only cwd makes it abort during startup (surfaced as a handshake
+    /// failure). The engine runtime dir lives under the user config directory,
+    /// which is always writable.
+    fn engine_runtime_directory(&mut self) -> std::path::PathBuf {
+        let base = crate::file_workflow::current_user_config_directory()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let runtime = base.join("engines").join("katago").join("runtime");
+        std::fs::create_dir_all(&runtime).ok();
+        runtime
     }
 
     /// Shows a prominent transient toast notification, auto-clearing after a
