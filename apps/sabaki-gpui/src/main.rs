@@ -407,13 +407,13 @@ impl ShellApp {
             &settings,
             "view.leftsidebar_width",
             "view.leftsidebar_minwidth",
-            250.0,
+            280.0,
         );
         let right_sidebar_width = pane_size_from_settings(
             &settings,
             "view.sidebar_width",
             "view.sidebar_minwidth",
-            200.0,
+            280.0,
         );
         let peer_list_height = pane_size_from_settings(
             &settings,
@@ -509,9 +509,19 @@ impl ShellApp {
         if settings.get_bool("view.show_leftsidebar").is_none() {
             let _ = settings.set("view.show_leftsidebar", serde_json::json!(true));
         }
+        if settings.get_bool("view.show_analysis_preview").is_none() {
+            let _ = settings.set("view.show_analysis_preview", serde_json::json!(true));
+        }
+        if settings.get("view.leftsidebar_minwidth").is_none() {
+            let _ = settings.set("view.leftsidebar_minwidth", serde_json::json!(240));
+        }
+        if settings.get("view.sidebar_minwidth").is_none() {
+            let _ = settings.set("view.sidebar_minwidth", serde_json::json!(240));
+        }
         let active_console_role = EngineRole::ALL
             .into_iter()
             .find(|role| engine_roles.get(*role).is_some());
+        let analysis_enabled = engine_roles.get(EngineRole::Analysis).is_some();
 
         Self {
             host,
@@ -543,7 +553,9 @@ impl ShellApp {
             last_analysis_trial_move: None,
             active_analysis_trial_move: None,
             restart_analysis_after_stop: false,
-            analysis_enabled: false,
+            // Keep a configured Analysis role continuously evaluating the
+            // current position; explicit Stop remains the opt-out.
+            analysis_enabled,
             restart_analysis_after_position_change: false,
             last_analysis_node: None,
             engine_log: Vec::new(),
@@ -1135,11 +1147,20 @@ impl ShellApp {
                                                     role.label()
                                                 )
                                                 .into();
+                                                let auto_analysis =
+                                                    role == EngineRole::Analysis && shell.analysis_enabled;
                                                 shell.show_toast(
-                                                    format!(
-                                                        "🔌 已连接 {} 引擎: {display_name}（就绪，未自动开始分析）",
-                                                        role.label()
-                                                    ),
+                                                    if auto_analysis {
+                                                        format!(
+                                                            "🔌 已连接 {} 引擎: {display_name}（就绪，正在启动自动分析）",
+                                                            role.label()
+                                                        )
+                                                    } else {
+                                                        format!(
+                                                            "🔌 已连接 {} 引擎: {display_name}（就绪）",
+                                                            role.label()
+                                                        )
+                                                    },
                                                     cx,
                                                 );
                                                 let current_node_id = shell
@@ -3705,7 +3726,11 @@ impl ShellApp {
         // switches so the button always means "show/hide this pane".
         let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
         let show_comments = self.settings.get_bool("view.show_comments").unwrap_or(true);
-        let visible = right_pane_visible(show_graph, show_comments);
+        let show_analysis_preview = self
+            .settings
+            .get_bool("view.show_analysis_preview")
+            .unwrap_or(true);
+        let visible = right_pane_visible(show_graph, show_comments, show_analysis_preview);
         let target = !visible;
         let mut failed = false;
         for (key, value) in [
@@ -3714,6 +3739,7 @@ impl ShellApp {
                 "view.show_comments",
                 if target { show_comments } else { false },
             ),
+            ("view.show_analysis_preview", target),
         ] {
             if let Err(error) = self.settings.set(key, serde_json::json!(value)) {
                 self.status = format!("panels sidebar not accepted: {error}").into();
@@ -4625,6 +4651,14 @@ impl ShellApp {
         }
     }
 
+    /// Ignore delayed leave events from a different candidate row. GPUI hover
+    /// transitions can overlap while moving from one row into another's action.
+    fn clear_hovered_candidate_if(&mut self, vertex: &str, cx: &mut Context<Self>) {
+        if self.hovered_candidate_vertex.as_deref() == Some(vertex) {
+            self.set_hovered_candidate(None, cx);
+        }
+    }
+
     fn on_trial_candidate(&mut self, vertex: &str, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let Some((column, row)) = parse_gtp_vertex(snapshot.board.width, vertex) else {
@@ -4656,10 +4690,21 @@ impl ShellApp {
         if self.trial_move.take().is_some() {
             self.active_analysis_trial_move = None;
             self.last_analysis_trial_move = None;
-            self.restart_analysis_after_position_change = false;
             self.analysis.clear();
             self.analysis_best_move = None;
-            self.status = "已退出试下局面".into();
+            if self.analysis_task.is_some() {
+                // Invalidate the ephemeral run before restoring the real
+                // position, so a late trial batch cannot repopulate it.
+                self.restart_analysis_after_position_change = self.analysis_enabled;
+                self.analysis_run.request_replay_and_stop();
+                self.status = "已退出试下局面，正在恢复当前局面分析…".into();
+            } else {
+                self.restart_analysis_after_position_change = false;
+                self.status = "已退出试下局面".into();
+                if self.analysis_enabled {
+                    self.start_analysis(cx);
+                }
+            }
             cx.notify();
         }
     }
@@ -4982,7 +5027,12 @@ impl Render for ShellApp {
             .unwrap_or(false);
         let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
         let show_comments = self.settings.get_bool("view.show_comments").unwrap_or(true);
-        let show_right_sidebar = right_pane_visible(show_graph, show_comments);
+        let show_analysis_preview = self
+            .settings
+            .get_bool("view.show_analysis_preview")
+            .unwrap_or(true);
+        let show_right_sidebar =
+            right_pane_visible(show_graph, show_comments, show_analysis_preview);
         let palette = self.palette;
         let weak_shell = cx.entity().downgrade();
         let on_node_clicked = Rc::new(
@@ -5107,12 +5157,16 @@ impl Render for ShellApp {
                             .border_l_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.panel))
-                            .child(panels::render_analysis_preview_panel(
-                                &snapshot,
-                                &self.theme,
-                                self,
-                                cx,
-                            ))
+                            .child(if show_analysis_preview {
+                                panels::render_analysis_preview_panel(
+                                    &snapshot,
+                                    &self.theme,
+                                    self,
+                                    cx,
+                                )
+                            } else {
+                                div().id("analysis-preview-panel-hidden")
+                            })
                             .child(
                                 if self
                                     .settings
@@ -5723,6 +5777,11 @@ fn main() {
             )
             .unwrap();
         let shell: Entity<ShellApp> = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+        shell.update(cx, |shell, cx| {
+            if shell.analysis_enabled {
+                shell.start_analysis(cx);
+            }
+        });
 
         let shell_for_close = shell.clone();
         window

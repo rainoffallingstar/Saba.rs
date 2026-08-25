@@ -14,7 +14,9 @@ use gpui::{
 use sabaki_domain_core::{GameMode, GameSnapshot, Vertex};
 
 use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
-use crate::goban_view::{pv_preview_points, render_goban, render_goban_click_layer};
+use crate::goban_view::{
+    pv_preview_points, render_goban, render_goban_click_layer, render_goban_with_id,
+};
 use crate::layout::SplitPane;
 use crate::native_text_input::NativeInputBinding;
 use crate::navigation::NavigationAvailability;
@@ -3331,7 +3333,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             div()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(shell.palette.subtle))
-                                .child("AI 实时评估 (KATRAIN)"),
+                                .child("AI 局面评估"),
                         )
                         .child(
                             div()
@@ -3375,8 +3377,10 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         }))
                                         .child(if shell.analysis_task.is_some() {
                                             "● 分析中"
+                                        } else if shell.analysis_enabled {
+                                            "○ 自动分析"
                                         } else {
-                                            "○ 待机"
+                                            "○ 已暂停"
                                         }),
                                 ),
                         ),
@@ -3474,7 +3478,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             div()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(shell.palette.subtle))
-                                .child(format!("AI 候选着法 ({} 选点)", candidates.len())),
+                                .child(format!("候选点 · {}", candidates.len())),
                         )
                         .child(
                             div()
@@ -3483,9 +3487,10 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         ),
                 )
                 .child(if candidates.is_empty() {
-                    div().p_2().text_color(rgb(shell.palette.subtle)).child(
-                        "点击底部【⚡ 启动分析】或下子，KataGo 将在此呈现候选点排行与前瞻变化图。",
-                    )
+                    div()
+                        .p_2()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("自动分析开启后，候选点和变化会在这里实时更新。")
                 } else {
                     div().flex().flex_col().gap_1().children(
                         candidates.iter().take(6).enumerate().map(|(idx, entry)| {
@@ -3626,14 +3631,11 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .id(("candidate-row", idx))
                                 .on_hover(cx.listener(
                                     move |shell, is_hovering: &bool, _window, cx| {
-                                        shell.set_hovered_candidate(
-                                            if *is_hovering {
-                                                hover_vertex.clone()
-                                            } else {
-                                                None
-                                            },
-                                            cx,
-                                        );
+                                        if *is_hovering {
+                                            shell.set_hovered_candidate(hover_vertex.clone(), cx);
+                                        } else if let Some(vertex) = hover_vertex.as_deref() {
+                                            shell.clear_hovered_candidate_if(vertex, cx);
+                                        }
                                     },
                                 ))
                         }),
@@ -5012,21 +5014,40 @@ pub fn render_analysis_preview_panel(
             pv_preview,
         )
     });
-    let board = preview.as_ref().map(|(_, pv_preview)| {
+    let preview_board_size = (shell.right_sidebar_width - 32.0).clamp(150.0, 194.0);
+    let preview_panel_height = preview_board_size + 60.0;
+    let preview_stones = preview
+        .as_ref()
+        .map(|(_, pv_preview)| pv_preview.clone())
+        .unwrap_or_default();
+    let mut preview_board = snapshot.board.clone();
+    if preview.is_none() {
+        // An idle preview is deliberately an empty board, not a duplicate of
+        // the main goban. This makes the panel read as an analysis viewport.
+        preview_board.sign_map = vec![vec![0; preview_board.width]; preview_board.height];
+        preview_board.current_vertex = None;
+    }
+    let board = {
         let options = crate::goban_view::GobanRenderOptions {
             show_coordinates: true,
             coordinates_type: "A1".to_owned(),
-            pv_preview: pv_preview.clone(),
+            pv_preview: preview_stones,
             ..Default::default()
         };
-        render_goban(&snapshot.board, 164.0, theme, &options)
-    });
+        render_goban_with_id(
+            "analysis-preview-goban",
+            &preview_board,
+            preview_board_size,
+            theme,
+            &options,
+        )
+    };
 
     div()
         .id("analysis-preview-panel")
         .debug_selector(|| "analysis-preview-panel".to_owned())
         .flex_none()
-        .h(px(220.0))
+        .h(px(preview_panel_height))
         .p_2p5()
         .border_b_1()
         .border_color(rgb(shell.palette.border))
@@ -5081,25 +5102,15 @@ pub fn render_analysis_preview_panel(
                     div()
                 }),
         )
-        .child(if let Some(board) = board {
+        .child(
             div()
                 .flex_1()
                 .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(board)
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .text_color(rgb(shell.palette.subtle))
-                .child("将鼠标移到候选点以预览 AI 后续着法")
-        })
+                .child(board),
+        )
 }
 
 /// The goban plus the analysis best-move ring overlay. Rendering options come

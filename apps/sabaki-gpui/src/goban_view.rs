@@ -467,6 +467,19 @@ pub fn render_goban(
     theme: &ThemeTokens,
     options: &GobanRenderOptions,
 ) -> Stateful<Div> {
+    render_goban_with_id("goban", board, board_pixel_size, theme, options)
+}
+
+/// Renders a goban with a caller-owned stable element id. Secondary boards
+/// (such as the analysis preview) must not share the main board's hit-test and
+/// visual-test identity.
+pub fn render_goban_with_id(
+    element_id: &'static str,
+    board: &BoardSnapshot,
+    board_pixel_size: f32,
+    theme: &ThemeTokens,
+    options: &GobanRenderOptions,
+) -> Stateful<Div> {
     let width = board.width;
     let height = board.height;
     let board_size = board_pixel_size;
@@ -698,24 +711,9 @@ pub fn render_goban(
                 candidate.vertex.column,
                 candidate.vertex.row,
             );
-            let size = (spacing * 0.86).clamp(18.0, 36.0);
-            let bg_color = if candidate.is_best {
-                0x10b981
-            } else if candidate.winrate_percent >= 50.0 {
-                0x0ea5e9
-            } else if candidate.winrate_percent >= 40.0 {
-                0x6366f1
-            } else {
-                0x8b5cf6
-            };
-
-            let winrate_str = format!("{:.0}%", candidate.winrate_percent);
-            let sub_str = if let Some(lead) = candidate.score_lead {
-                format!("{:+.1}", lead)
-            } else {
-                format!("{}v", candidate.visits)
-            };
-
+            // Keep the main board readable. Full percentages and visit counts
+            // belong in the side table; on-board markers only identify rank.
+            let size = (spacing * 0.55).clamp(13.0, 22.0);
             children.push(
                 div()
                     .absolute()
@@ -724,33 +722,21 @@ pub fn render_goban(
                     .size(px(size))
                     .rounded_full()
                     .border_2()
-                    .border_color(rgb(if candidate.is_best {
-                        0xffffff
-                    } else {
-                        0xc0d8f8
-                    }))
-                    .bg(rgb(bg_color))
-                    .shadow_md()
+                    .border_color(rgb(0xffffff))
+                    .bg(hsla(
+                        if candidate.is_best { 0.45 } else { 0.60 },
+                        0.75,
+                        0.45,
+                        0.92,
+                    ))
+                    .shadow_sm()
                     .flex()
-                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0xffffff))
-                            .line_height(px(size * 0.40))
-                            .child(winrate_str),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0xe0f2fe))
-                            .line_height(px(size * 0.36))
-                            .child(sub_str),
-                    ),
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xffffff))
+                    .child(if candidate.is_best { "1" } else { "·" }),
             );
         }
     }
@@ -776,9 +762,16 @@ pub fn render_goban(
 
     // Prospective PV variation sequence preview ghost stones
     for (vtx, color, step_num) in &options.pv_preview {
-        if vtx.row < height && vtx.column < width {
+        if vtx.row < height
+            && vtx.column < width
+            && board
+                .sign_map
+                .get(vtx.row)
+                .and_then(|row| row.get(vtx.column))
+                == Some(&0)
+        {
             let (x, y) = intersection_position(board, board_pixel_size, vtx.column, vtx.row);
-            let psize = spacing * 0.88;
+            let psize = spacing * 0.72;
             children.push(
                 div()
                     .absolute()
@@ -965,13 +958,14 @@ pub fn render_goban(
     }
 
     div()
-        .id("goban")
-        .debug_selector(|| "goban".to_owned())
+        .id(element_id)
+        .debug_selector(move || element_id.to_owned())
         .relative()
         .size(px(board_size))
+        .flex_none()
         .child(
             div()
-                .debug_selector(|| "goban-wood".to_owned())
+                .debug_selector(move || format!("{element_id}-wood"))
                 .absolute()
                 .left(px(BOARD_MARGIN_PX / 2.0))
                 .top(px(BOARD_MARGIN_PX / 2.0))

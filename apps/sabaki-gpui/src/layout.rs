@@ -74,10 +74,13 @@ pub fn pane_size_from_settings(
     clamp_pane_size(width, min_width, 800.0)
 }
 
-/// Original Sabaki shows the right sidebar whenever the game graph or the
-/// comment box is enabled.
-pub fn right_pane_visible(show_graph: bool, show_comments: bool) -> bool {
-    show_graph || show_comments
+/// The right pane remains available for graph/comments and for the AI preview.
+pub fn right_pane_visible(
+    show_graph: bool,
+    show_comments: bool,
+    show_analysis_preview: bool,
+) -> bool {
+    show_graph || show_comments || show_analysis_preview
 }
 
 #[cfg(test)]
@@ -151,9 +154,10 @@ mod tests {
 
     #[test]
     fn right_pane_visibility_matches_upstream_inference() {
-        assert!(!right_pane_visible(false, false));
-        assert!(right_pane_visible(true, false));
-        assert!(right_pane_visible(false, true));
-        assert!(right_pane_visible(true, true));
+        assert!(!right_pane_visible(false, false, false));
+        assert!(right_pane_visible(true, false, false));
+        assert!(right_pane_visible(false, true, false));
+        assert!(right_pane_visible(false, false, true));
+        assert!(right_pane_visible(true, true, true));
     }
 }
