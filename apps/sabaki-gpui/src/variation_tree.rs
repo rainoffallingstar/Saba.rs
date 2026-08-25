@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, rc::Rc};
 
 use gpui::{
-    App, Div, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Stateful, Styled,
-    Window, div, px, rgb,
+    App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Stateful,
+    Styled, Window, div, px, rgb,
 };
 use sabaki_domain_core::{GameSnapshot, NodeId};
 
@@ -242,7 +242,6 @@ where
     G: Fn(&NodeId, &mut Window, &mut App) + 'static,
 {
     let line_color = palette.accent;
-    let current_node_color = palette.danger_text;
     let grid_size = grid_size.max(12.0);
     let node_size = node_size.max(3.0);
     let scale_x = grid_size / HORIZONTAL_SPACING_PX;
@@ -272,22 +271,22 @@ where
         let node_id = node.node_id.clone();
         let context_node_id = node.node_id.clone();
         let color = if node.is_current {
-            current_node_color
+            0x0284c7 // KaTrain active node cyan
         } else {
             match node.color {
                 GameGraphNodeColor::Neutral => palette.text,
                 GameGraphNodeColor::Comment => palette.subtle,
-                GameGraphNodeColor::BadMove => palette.danger_text,
-                GameGraphNodeColor::DoubtfulMove => 0xc98a00,
-                GameGraphNodeColor::InterestingMove => palette.accent,
-                GameGraphNodeColor::GoodMove => palette.success,
+                GameGraphNodeColor::BadMove => 0xef4444, // KaTrain Blunder Red
+                GameGraphNodeColor::DoubtfulMove => 0xf97316, // KaTrain Inaccuracy/Mistake Orange
+                GameGraphNodeColor::InterestingMove => 0x0ea5e9, // KaTrain Good/Interesting Teal
+                GameGraphNodeColor::GoodMove => 0x10b981, // KaTrain Best Move Green
             }
         };
         let (shape_scale, label) = match node.kind {
             GameGraphNodeKind::Circle => (1.0, ""),
             GameGraphNodeKind::Square => (1.0, "P"),
             GameGraphNodeKind::Diamond => (1.0, "+"),
-            GameGraphNodeKind::Bookmark => (1.2, "H"),
+            GameGraphNodeKind::Bookmark => (1.2, "★"),
         };
         let visual_node_size = (node_size * shape_scale * 2.0).clamp(10.0, 18.0);
         let hitbox_size = grid_size.max(22.0);
@@ -310,17 +309,22 @@ where
                     div()
                         .size(px(visual_node_size))
                         .rounded_full()
-                        .border_1()
-                        .border_color(rgb(if node.is_current || node.is_current_path {
+                        .border_2()
+                        .border_color(rgb(if node.is_current {
+                            0xffffff
+                        } else if node.is_current_path {
                             palette.accent
                         } else {
                             palette.border
                         }))
                         .bg(rgb(color))
+                        .shadow_sm()
                         .flex()
                         .items_center()
                         .justify_center()
                         .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xffffff))
                         .child(label),
                 )
                 .on_mouse_down(

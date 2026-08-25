@@ -324,8 +324,12 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
         Color::White => rgb(stone_white),
     };
     let border_color = match color {
-        Color::Black => rgb(0x000000),
-        Color::White => rgb(0x888888),
+        Color::Black => rgb(0x111114),
+        Color::White => rgb(0xb0b0bc),
+    };
+    let highlight_color = match color {
+        Color::Black => hsla(0.0, 0.0, 1.0, 0.14),
+        Color::White => hsla(0.0, 0.0, 1.0, 0.55),
     };
     div()
         .absolute()
@@ -336,6 +340,16 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
         .border_1()
         .border_color(border_color)
         .bg(stone_color)
+        .shadow_sm()
+        .child(
+            div()
+                .absolute()
+                .top(px(size * 0.12))
+                .left(px(size * 0.16))
+                .size(px(size * 0.36))
+                .rounded_full()
+                .bg(highlight_color),
+        )
 }
 
 /// Renders a child or sibling ghost stone. Child moves are filled; sibling
@@ -694,7 +708,7 @@ pub fn render_goban_with_id(
         ));
     }
 
-    // Lizzie-style AI analysis recommendation circles on empty intersections
+    // KaTrain-style AI analysis recommendation circles on empty intersections
     for candidate in &options.analysis_candidates {
         if candidate.vertex.row < height && candidate.vertex.column < width {
             if board
@@ -711,9 +725,26 @@ pub fn render_goban_with_id(
                 candidate.vertex.column,
                 candidate.vertex.row,
             );
-            // Keep the main board readable. Full percentages and visit counts
-            // belong in the side table; on-board markers only identify rank.
-            let size = (spacing * 0.55).clamp(13.0, 22.0);
+            let size = (spacing * 0.88).clamp(20.0, 36.0);
+            let bg_color = if candidate.is_best {
+                0x10b981 // KaTrain best: emerald green
+            } else if candidate.winrate_percent >= 50.0 {
+                0x0ea5e9 // KaTrain good: sky blue
+            } else if candidate.winrate_percent >= 40.0 {
+                0x6366f1 // KaTrain moderate: indigo
+            } else {
+                0x8b5cf6 // KaTrain low: purple
+            };
+
+            let winrate_str = format!("{:.0}%", candidate.winrate_percent);
+            let sub_str = if candidate.visits >= 1000 {
+                format!("{:.1}k", candidate.visits as f64 / 1000.0)
+            } else if let Some(lead) = candidate.score_lead {
+                format!("{:+.1}", lead)
+            } else {
+                format!("{}v", candidate.visits)
+            };
+
             children.push(
                 div()
                     .absolute()
@@ -722,21 +753,33 @@ pub fn render_goban_with_id(
                     .size(px(size))
                     .rounded_full()
                     .border_2()
-                    .border_color(rgb(0xffffff))
-                    .bg(hsla(
-                        if candidate.is_best { 0.45 } else { 0.60 },
-                        0.75,
-                        0.45,
-                        0.92,
-                    ))
-                    .shadow_sm()
+                    .border_color(rgb(if candidate.is_best {
+                        0xffffff
+                    } else {
+                        0xc0d8f8
+                    }))
+                    .bg(rgb(bg_color))
+                    .shadow_md()
                     .flex()
+                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xffffff))
-                    .child(if candidate.is_best { "1" } else { "·" }),
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xffffff))
+                            .line_height(px(size * 0.40))
+                            .child(winrate_str),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(0xe0f2fe))
+                            .line_height(px(size * 0.36))
+                            .child(sub_str),
+                    ),
             );
         }
     }
@@ -887,7 +930,7 @@ pub fn render_goban_with_id(
                 div()
                     .absolute()
                     .left(px(x - 8.0))
-                    .top(px(BOARD_MARGIN_PX / 2.0 - 8.0))
+                    .top(px(BOARD_MARGIN_PX * 0.75 - 7.0))
                     .w(px(16.0))
                     .h(px(14.0))
                     .flex()
@@ -903,7 +946,7 @@ pub fn render_goban_with_id(
                 div()
                     .absolute()
                     .left(px(x - 8.0))
-                    .top(px(board_size - BOARD_MARGIN_PX + 6.0))
+                    .top(px(board_size - BOARD_MARGIN_PX * 0.75 - 7.0))
                     .w(px(16.0))
                     .h(px(14.0))
                     .flex()
@@ -926,7 +969,7 @@ pub fn render_goban_with_id(
             children.push(
                 div()
                     .absolute()
-                    .left(px(BOARD_MARGIN_PX / 2.0 - 8.0))
+                    .left(px(BOARD_MARGIN_PX * 0.75 - 8.0))
                     .top(px(y - 7.0))
                     .w(px(16.0))
                     .h(px(14.0))
@@ -942,7 +985,7 @@ pub fn render_goban_with_id(
             children.push(
                 div()
                     .absolute()
-                    .left(px(board_size - BOARD_MARGIN_PX + 4.0))
+                    .left(px(board_size - BOARD_MARGIN_PX * 0.75 - 8.0))
                     .top(px(y - 7.0))
                     .w(px(16.0))
                     .h(px(14.0))

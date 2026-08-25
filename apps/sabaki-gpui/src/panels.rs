@@ -1459,8 +1459,8 @@ pub fn render_winrate_graph_panel(
         )
         .child(if has_values {
             let graph_points = points.to_vec();
-            let graph_accent = palette.accent;
-            let graph_danger = palette.danger_text;
+            let graph_accent = 0x0ea5e9; // KaTrain cyan/sky blue
+            let graph_danger = 0xef4444; // KaTrain blunder red
             div()
                 .id("winrate-graph-plot")
                 .relative()
@@ -1473,7 +1473,22 @@ pub fn render_winrate_graph_panel(
                     canvas(
                         |_, _, _| (),
                         move |bounds, (), window, _cx| {
-                            let valid: Vec<(f32, f32, u32)> = graph_points
+                            // 50% even-game centerline
+                            let mut baseline =
+                                PathBuilder::stroke(px(1.0)).dash_array(&[px(3.0), px(3.0)]);
+                            baseline.move_to(point(
+                                bounds.origin.x,
+                                bounds.origin.y + bounds.size.height * 0.5,
+                            ));
+                            baseline.line_to(point(
+                                bounds.origin.x + bounds.size.width,
+                                bounds.origin.y + bounds.size.height * 0.5,
+                            ));
+                            if let Ok(path) = baseline.build() {
+                                window.paint_path(path, hsla(0.0, 0.0, 1.0, 0.12));
+                            }
+
+                            let valid: Vec<(f32, f32, u32, bool, bool)> = graph_points
                                 .iter()
                                 .enumerate()
                                 .filter_map(|(index, point)| {
@@ -1483,17 +1498,44 @@ pub fn render_winrate_graph_panel(
                                     } else {
                                         index as f32 / last_index
                                     };
-                                    let color = if point.is_current || point.is_blunder {
+                                    let color = if point.is_blunder {
                                         graph_danger
                                     } else {
                                         graph_accent
                                     };
-                                    Some((x, y, color))
+                                    Some((x, y, color, point.is_current, point.is_blunder))
                                 })
                                 .collect();
+
                             if valid.len() >= 2 {
-                                let mut path = PathBuilder::stroke(px(1.5));
-                                for (index, (x, y, _)) in valid.iter().enumerate() {
+                                // Shaded area fill under the curve (KaTrain smooth area)
+                                let mut area = PathBuilder::fill();
+                                if let Some(&(first_x, _, _, _, _)) = valid.first() {
+                                    area.move_to(point(
+                                        bounds.origin.x + bounds.size.width * first_x,
+                                        bounds.origin.y + bounds.size.height,
+                                    ));
+                                    for &(x, y, _, _, _) in &valid {
+                                        area.line_to(point(
+                                            bounds.origin.x + bounds.size.width * x,
+                                            bounds.origin.y + bounds.size.height * y,
+                                        ));
+                                    }
+                                    if let Some(&(last_x, _, _, _, _)) = valid.last() {
+                                        area.line_to(point(
+                                            bounds.origin.x + bounds.size.width * last_x,
+                                            bounds.origin.y + bounds.size.height,
+                                        ));
+                                    }
+                                    area.close();
+                                    if let Ok(path) = area.build() {
+                                        window.paint_path(path, hsla(0.55, 0.85, 0.45, 0.16));
+                                    }
+                                }
+
+                                // Main winrate stroke line
+                                let mut path = PathBuilder::stroke(px(2.0));
+                                for (index, (x, y, _, _, _)) in valid.iter().enumerate() {
                                     let position = point(
                                         bounds.origin.x + bounds.size.width * *x,
                                         bounds.origin.y + bounds.size.height * *y,
@@ -1508,20 +1550,29 @@ pub fn render_winrate_graph_panel(
                                     window.paint_path(path, rgb(graph_accent));
                                 }
                             }
-                            for (x, y, color) in valid {
+
+                            // KaTrain-style node dots & blunder indicators
+                            for (x, y, color, is_current, is_blunder) in valid {
                                 let center = point(
                                     bounds.origin.x + bounds.size.width * x,
                                     bounds.origin.y + bounds.size.height * y,
                                 );
+                                let dot_radius = if is_current {
+                                    px(4.5)
+                                } else if is_blunder {
+                                    px(3.5)
+                                } else {
+                                    px(2.0)
+                                };
                                 window.paint_quad(gpui::quad(
                                     gpui::Bounds {
-                                        origin: point(center.x - px(3.0), center.y - px(3.0)),
-                                        size: gpui::size(px(6.0), px(6.0)),
+                                        origin: point(center.x - dot_radius, center.y - dot_radius),
+                                        size: gpui::size(dot_radius * 2.0, dot_radius * 2.0),
                                     },
-                                    px(3.0),
+                                    dot_radius,
                                     rgb(color),
-                                    px(0.0),
-                                    gpui::transparent_black(),
+                                    if is_current { px(1.5) } else { px(0.0) },
+                                    rgb(0xffffff),
                                     gpui::BorderStyle::default(),
                                 ));
                             }
@@ -3451,74 +3502,6 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .child(div().child(format!("黑均损: {:.1}目", summary.black_avg_loss)))
                         .child(div().child(format!("白均损: {:.1}目", summary.white_avg_loss))),
                 )
-                // AI verdict commentary
-                .child(
-                    div()
-                        .mt_0p5()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child(summary.verdict()),
-                )
-                // Top Blunders Clickable List
-                .children((!summary.top_blunders.is_empty()).then(|| {
-                    div()
-                        .mt_1()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("主要失误恶手 (点击直接跳转复盘):"),
-                        )
-                        .children(summary.top_blunders.iter().map(|blunder| {
-                            let node_id = blunder.node_id.clone();
-                            let vtx = blunder.played_vertex.as_deref().unwrap_or("?");
-                            let player_label = if blunder.player == sabaki_domain_core::Color::Black
-                            {
-                                "黑"
-                            } else {
-                                "白"
-                            };
-                            div()
-                                .cursor_pointer()
-                                .p_1()
-                                .rounded_sm()
-                                .bg(rgb(shell.palette.input))
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .hover(|style| {
-                                    style
-                                        .bg(rgb(shell.palette.button_active))
-                                        .border_color(rgb(shell.palette.accent))
-                                })
-                                .child(
-                                    div()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(rgb(blunder.quality.color_u32()))
-                                        .child(format!(
-                                            "第 {} 手 ({}) {}",
-                                            blunder.move_number, player_label, vtx
-                                        )),
-                                )
-                                .child(div().text_color(rgb(shell.palette.danger_text)).child(
-                                    format!(
-                                        "{} -{:.1}目",
-                                        blunder.quality.badge(),
-                                        blunder.points_lost
-                                    ),
-                                ))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell, _, _, cx| {
-                                        shell.navigate_to_node(node_id.clone(), cx);
-                                    }),
-                                )
-                        }))
-                }))
                 // Export GIF Button
                 .child(
                     Button::new("export-gif-button")
@@ -4647,7 +4630,7 @@ pub fn render_analysis_preview_panel(
     }
     let board = {
         let options = crate::goban_view::GobanRenderOptions {
-            show_coordinates: true,
+            show_coordinates: false,
             coordinates_type: "A1".to_owned(),
             pv_preview: preview_stones,
             ..Default::default()
