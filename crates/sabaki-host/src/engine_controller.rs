@@ -198,11 +198,21 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
         session.recv_analysis_line(timeout)
     }
 
-    /// Stops a leased streaming session's search.
+    /// Stops a leased streaming session's search without consuming its tail.
     pub fn stop_leased_analysis(
         session: &mut EngineSession<T>,
     ) -> Result<(), EngineControllerError> {
-        session.stop_analysis().map(|_| ()).map_err(Into::into)
+        session.stop_streaming().map_err(Into::into)
+    }
+
+    /// True once the leased session's engine output stream closed.
+    pub fn session_stream_closed(session: &EngineSession<T>) -> bool {
+        session.is_stream_closed()
+    }
+
+    /// Trailing engine stderr lines for diagnosing abrupt exits.
+    pub fn session_stderr_tail(session: &EngineSession<T>) -> String {
+        session.stderr_tail()
     }
 
     fn session_mut(&mut self, role: R) -> Result<&mut EngineSession<T>, EngineControllerError> {

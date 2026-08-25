@@ -19,9 +19,26 @@ pub trait GtpTransport {
         Err(GtpError::UnsupportedStreaming)
     }
 
+    /// Asks a running streaming analysis to stop without consuming its
+    /// in-flight output records. Defaults to `send_streaming("stop")` so
+    /// bounded-command channel stealing can never corrupt the stream tail.
+    fn stop_streaming(&mut self) -> Result<(), GtpError> {
+        self.send_streaming("stop", Vec::new())
+    }
+
     /// Waits up to `timeout` for the next line of a streaming command.
     fn recv_line_timeout(&mut self, _timeout: std::time::Duration) -> Option<String> {
         None
+    }
+
+    /// True once the engine's output stream closed (the engine exited).
+    fn is_stream_closed(&self) -> bool {
+        false
+    }
+
+    /// Trailing engine stderr lines, for diagnosing abrupt exits.
+    fn stderr_tail(&self) -> String {
+        String::new()
     }
 
     fn stop(&mut self) -> Result<(), std::io::Error>;
@@ -49,8 +66,20 @@ impl GtpTransport for ProcessGtpTransport {
         self.supervisor.send_streaming(name, arguments)
     }
 
+    fn stop_streaming(&mut self) -> Result<(), GtpError> {
+        self.supervisor.send_streaming("stop", Vec::new())
+    }
+
     fn recv_line_timeout(&mut self, timeout: std::time::Duration) -> Option<String> {
         self.supervisor.recv_line_timeout(timeout)
+    }
+
+    fn is_stream_closed(&self) -> bool {
+        self.supervisor.is_stream_closed()
+    }
+
+    fn stderr_tail(&self) -> String {
+        self.supervisor.stderr_tail()
     }
 
     fn stop(&mut self) -> Result<(), std::io::Error> {
@@ -246,8 +275,25 @@ impl<T: GtpTransport> EngineSession<T> {
     }
 
     /// Asks a searching engine to stop and return its current analysis.
+    /// Bounded GTP `stop`; safe to run mid-stream because the supervisor now
+    /// skips in-flight streaming records when collecting the response.
     pub fn stop_analysis(&mut self) -> Result<GtpResponse, GtpError> {
         self.transport.send("stop", Vec::new())
+    }
+
+    /// Asks a streaming search to stop without consuming its tail records.
+    pub fn stop_streaming(&mut self) -> Result<(), GtpError> {
+        self.transport.stop_streaming()
+    }
+
+    /// True once the engine's output stream closed (engine exited).
+    pub fn is_stream_closed(&self) -> bool {
+        self.transport.is_stream_closed()
+    }
+
+    /// Trailing engine stderr lines for diagnosing abrupt exits.
+    pub fn stderr_tail(&self) -> String {
+        self.transport.stderr_tail()
     }
 
     /// Starts a streaming analysis on the already-connected session (no new

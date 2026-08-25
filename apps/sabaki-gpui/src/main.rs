@@ -1057,6 +1057,49 @@ impl ShellApp {
                                         &mut session
                                     );
                                 }
+                                // Drain the stream tail so the engine's final
+                                // search results land in the analysis set
+                                // before the session returns to the controller.
+                                let drain_deadline = Instant::now() + Duration::from_secs(3);
+                                let mut saw_header = false;
+                                while Instant::now() < drain_deadline {
+                                    match sabaki_host::EngineController::<
+                                        EngineRole,
+                                        sabaki_host::ProcessGtpTransport,
+                                    >::recv_analysis_line(
+                                        &mut session, Duration::from_millis(50)
+                                    ) {
+                                        Some(line) => {
+                                            let trimmed = line.trim();
+                                            if trimmed.starts_with('=') || trimmed.starts_with('?')
+                                            {
+                                                saw_header = true;
+                                                continue;
+                                            }
+                                            if trimmed.is_empty() {
+                                                if saw_header {
+                                                    break;
+                                                }
+                                                continue;
+                                            }
+                                            if let Some(entry) =
+                                                parse_stream_line(&task_command, trimmed)
+                                            {
+                                                pending.push(entry);
+                                            }
+                                        }
+                                        None => {
+                                            if sabaki_host::EngineController::<
+                                                EngineRole,
+                                                sabaki_host::ProcessGtpTransport,
+                                            >::session_stream_closed(
+                                                &session
+                                            ) {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                                 break;
                             }
                             if let Some(line) = sabaki_host::EngineController::<
@@ -1089,6 +1132,31 @@ impl ShellApp {
                                         break;
                                     }
                                 }
+                            } else if sabaki_host::EngineController::<
+                                EngineRole,
+                                sabaki_host::ProcessGtpTransport,
+                            >::session_stream_closed(&session)
+                            {
+                                let stderr = sabaki_host::EngineController::<
+                                    EngineRole,
+                                    sabaki_host::ProcessGtpTransport,
+                                >::session_stderr_tail(
+                                    &session
+                                );
+                                let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                    shell.show_toast(
+                                        if stderr.is_empty() {
+                                            "⚠️ KataGo 引擎进程已退出，请重新连接".to_owned()
+                                        } else {
+                                            format!(
+                                                "⚠️ KataGo 引擎进程已退出: {}",
+                                                stderr.lines().last().unwrap_or_default()
+                                            )
+                                        },
+                                        cx,
+                                    );
+                                });
+                                break;
                             }
                             if last_flush.elapsed() >= Duration::from_millis(120)
                                 && !pending.is_empty()
@@ -1173,6 +1241,37 @@ impl ShellApp {
                             if stream_run.is_current() {
                                 let _ = stream.send_command("stop");
                             }
+                            // Drain the stream tail so the final search
+                            // results land in the analysis set.
+                            let drain_deadline = Instant::now() + Duration::from_secs(3);
+                            let mut saw_header = false;
+                            while Instant::now() < drain_deadline {
+                                match stream.recv_line_timeout(Duration::from_millis(50)) {
+                                    Some(line) => {
+                                        let trimmed = line.trim();
+                                        if trimmed.starts_with('=') || trimmed.starts_with('?') {
+                                            saw_header = true;
+                                            continue;
+                                        }
+                                        if trimmed.is_empty() {
+                                            if saw_header {
+                                                break;
+                                            }
+                                            continue;
+                                        }
+                                        if let Some(entry) =
+                                            parse_stream_line(&task_command, trimmed)
+                                        {
+                                            pending.push(entry);
+                                        }
+                                    }
+                                    None => {
+                                        if stream.is_stream_closed() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                             break;
                         }
                         if let Some(line) = stream.recv_line_timeout(Duration::from_millis(50)) {
@@ -1198,6 +1297,14 @@ impl ShellApp {
                                     break;
                                 }
                             }
+                        } else if stream.is_stream_closed() {
+                            let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                shell.show_toast(
+                                    "⚠️ KataGo 分析进程已退出，请重新连接".to_owned(),
+                                    cx,
+                                );
+                            });
+                            break;
                         }
                         if last_flush.elapsed() >= Duration::from_millis(120) && !pending.is_empty()
                         {
