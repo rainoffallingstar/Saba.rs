@@ -164,7 +164,12 @@ impl GtpEngine for MockGtpEngine {
 }
 
 impl sabaki_host::GtpTransport for MockGtpEngine {
-    fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
+    fn send_with_timeout(
+        &mut self,
+        name: &str,
+        arguments: Vec<String>,
+        _timeout: std::time::Duration,
+    ) -> Result<GtpResponse, GtpError> {
         GtpEngine::send(self, name, arguments)
     }
 
@@ -370,9 +375,7 @@ pub fn best_analysis_winrate(
     entries: &[sabaki_host::AnalysisEntry],
     next_player: sabaki_domain_core::Color,
 ) -> f64 {
-    let raw = entries
-        .iter()
-        .max_by_key(|entry| entry.visits)
+    let raw = best_analysis_entry(entries)
         .map(|entry| entry.winrate.clamp(0.0, 1.0))
         .unwrap_or(0.0);
     match next_player {
@@ -381,9 +384,27 @@ pub fn best_analysis_winrate(
     }
 }
 
+/// Returns the strongest candidate using visits, then a stable vertex
+/// tie-breaker. Every analysis projection should use this selection rather
+/// than relying on the storage order of streamed candidates.
+pub fn best_analysis_entry(
+    entries: &[sabaki_host::AnalysisEntry],
+) -> Option<&sabaki_host::AnalysisEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.winrate.is_finite())
+        .max_by(|left, right| {
+            left.visits
+                .cmp(&right.visits)
+                .then_with(|| right.vertex.cmp(&left.vertex))
+        })
+}
+
 /// Merges a batch of streamed analysis entries into the current set, keyed by
 /// vertex: later batches replace earlier entries for the same move (KataGo
-/// re-emits candidates as the search progresses).
+/// re-emits candidates as the search progresses). The returned list is sorted
+/// strongest-first, so panels that present the default candidate stay aligned
+/// with the board marker and persisted result.
 pub fn merge_analysis_entries(
     existing: &[sabaki_host::AnalysisEntry],
     new: Vec<sabaki_host::AnalysisEntry>,
@@ -398,7 +419,14 @@ pub fn merge_analysis_entries(
             by_vertex.insert(vertex, entry);
         }
     }
-    by_vertex.into_values().collect()
+    let mut merged = by_vertex.into_values().collect::<Vec<_>>();
+    merged.sort_by(|left, right| {
+        right
+            .visits
+            .cmp(&left.visits)
+            .then_with(|| left.vertex.cmp(&right.vertex))
+    });
+    merged
 }
 
 /// The analysis command for the streaming analyze button, from the
@@ -418,9 +446,9 @@ pub fn analysis_command_from_settings(
         .map(ToOwned::to_owned)
         .filter(|command| !command.trim().is_empty())
         .unwrap_or_else(|| "kata-analyze B 100 rootInfo true".to_owned());
-    let mut tokens = entry.split_whitespace();
-    let name = tokens.next().unwrap_or("kata-analyze").to_owned();
-    let arguments: Vec<String> = tokens.map(ToOwned::to_owned).collect();
+    let mut tokens = sabaki_host::parse_engine_arguments(&entry).into_iter();
+    let name = tokens.next().unwrap_or_else(|| "kata-analyze".to_owned());
+    let arguments = tokens.collect();
     (name, arguments)
 }
 
@@ -428,58 +456,27 @@ pub fn analysis_command_from_settings(
 /// properly respecting double and single quotes and stripping enclosing quotes so paths
 /// with spaces or special characters work on all platforms.
 pub fn parse_engine_arguments(args: &str) -> Vec<String> {
-    let mut args_vec = Vec::new();
-    let mut chars = args.chars().peekable();
-    while let Some(&c) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-            continue;
-        }
-        if c == '"' || c == '\'' {
-            let quote = chars.next().unwrap();
-            let mut current = String::new();
-            while let Some(&next) = chars.peek() {
-                chars.next();
-                if next == quote {
-                    break;
-                }
-                current.push(next);
-            }
-            args_vec.push(current);
-        } else {
-            let mut current = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
-                    break;
-                }
-                chars.next();
-                if next == '"' || next == '\'' {
-                    let inner_quote = next;
-                    while let Some(&q) = chars.peek() {
-                        chars.next();
-                        if q == inner_quote {
-                            break;
-                        }
-                        current.push(q);
-                    }
-                } else {
-                    current.push(next);
-                }
-            }
-            args_vec.push(current);
-        }
-    }
-    args_vec
+    sabaki_host::parse_engine_arguments(args)
 }
 
 /// Parses one streamed analysis line. Official KataGo `kata-analyze` and
 /// Leela-family `lz-analyze` both emit GTP `info move ...` records; a JSON
 /// record is accepted for compatibility with proxy adapters.
+#[allow(dead_code)]
 pub fn parse_stream_line(_command: &str, line: &str) -> Option<sabaki_host::AnalysisEntry> {
+    parse_stream_entries(_command, line).into_iter().next()
+}
+
+/// Parses every candidate carried by one physical analysis-output line. KataGo
+/// packs many `info move` records into a single line; callers streaming live
+/// results must not silently discard all but the first candidate.
+pub fn parse_stream_entries(_command: &str, line: &str) -> Vec<sabaki_host::AnalysisEntry> {
     if line.trim_start().starts_with('{') {
         sabaki_host::parse_kata_analysis_line(line)
+            .into_iter()
+            .collect()
     } else {
-        sabaki_host::parse_lz_analysis_line(line)
+        sabaki_host::parse_lz_analysis_entries(line)
     }
 }
 
@@ -592,6 +589,43 @@ mod tests {
     }
 
     #[test]
+    fn merged_entries_keep_the_strongest_candidate_first() {
+        let entries = super::merge_analysis_entries(
+            &[],
+            vec![
+                sabaki_host::AnalysisEntry {
+                    id: None,
+                    vertex: Some("A1".to_owned()),
+                    visits: 5,
+                    winrate: 0.4,
+                    score_lead: None,
+                    pv: Vec::new(),
+                    is_during_search: false,
+                    ownership: None,
+                },
+                sabaki_host::AnalysisEntry {
+                    id: None,
+                    vertex: Some("Z1".to_owned()),
+                    visits: 20,
+                    winrate: 0.6,
+                    score_lead: None,
+                    pv: Vec::new(),
+                    is_during_search: false,
+                    ownership: None,
+                },
+            ],
+        );
+        assert_eq!(
+            super::best_analysis_entry(&entries).and_then(|entry| entry.vertex.as_deref()),
+            Some("Z1")
+        );
+        assert_eq!(
+            entries.first().and_then(|entry| entry.vertex.as_deref()),
+            Some("Z1")
+        );
+    }
+
+    #[test]
     fn parses_official_katago_gtp_stream_line() {
         let entry = super::parse_stream_line(
             "kata-analyze",
@@ -645,6 +679,25 @@ mod tests {
                     "10".to_owned(),
                     "rootInfo".to_owned(),
                     "true".to_owned(),
+                ]
+            )
+        );
+
+        settings
+            .set(
+                "engines.analyze_commands",
+                serde_json::json!(["kata-analyze B 10 report 'root info'"]),
+            )
+            .expect("the setting accepts quoted arguments");
+        assert_eq!(
+            super::analysis_command_from_settings(&settings),
+            (
+                "kata-analyze".to_owned(),
+                vec![
+                    "B".to_owned(),
+                    "10".to_owned(),
+                    "report".to_owned(),
+                    "root info".to_owned(),
                 ]
             )
         );

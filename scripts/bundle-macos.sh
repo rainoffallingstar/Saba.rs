@@ -13,7 +13,10 @@ BUNDLE_DIR="$OUTPUT_DIR/$APP_NAME.app"
 cd "$ROOT_DIR"
 echo "==> Building Saba.rs $VERSION"
 cargo build --release --locked -p sabaki-gpui --bin "$EXECUTABLE"
-BINARY="$ROOT_DIR/target/release/$EXECUTABLE"
+# Honor Cargo's target override so release packaging works in constrained
+# workspaces where builds intentionally use a volume with more free space.
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+BINARY="$TARGET_DIR/release/$EXECUTABLE"
 test -x "$BINARY" || { echo "error: release binary not found: $BINARY" >&2; exit 1; }
 
 rm -rf "$BUNDLE_DIR"

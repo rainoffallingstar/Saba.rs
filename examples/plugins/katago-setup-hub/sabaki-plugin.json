@@ -10,7 +10,7 @@
     "commands": [
       {
         "id": "org.sabaki.katago-setup-hub.setup",
-        "title": "Auto-Configure KataGo Engine"
+        "title": "Configure Existing KataGo Engine"
       },
       {
         "id": "org.sabaki.katago-setup-hub.download_balanced",
@@ -33,17 +33,17 @@
         "widgets": [
           {
             "type": "label",
-            "text": "一键自动探测本地硬件并下载官方 KataGo 与神经网络模型"
+            "text": "探测并配置已安装的 KataGo；可另行下载官方神经网络模型"
           },
           {
             "type": "value",
             "label": "硬件后端",
-            "value": "Apple Silicon (Metal / GPU 加速)"
+            "value": "Detected when configuration runs"
           },
           {
             "type": "button",
             "id": "org.sabaki.katago-setup-hub.setup",
-            "title": "⚡ 一键配置 KataGo 引擎"
+            "title": "⚡ 配置已安装的 KataGo"
           },
           {
             "type": "button",

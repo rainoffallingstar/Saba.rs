@@ -9,6 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use sabaki_domain_core::{Color, NodeId};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AnalysisRunOutcome {
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct AnalysisRunTicket {
     shared: Arc<Mutex<AnalysisRunState>>,
@@ -18,6 +25,16 @@ pub struct AnalysisRunTicket {
 impl AnalysisRunTicket {
     pub fn generation(&self) -> usize {
         self.generation
+    }
+
+    /// The document node captured when this run began.
+    pub fn node_id(&self) -> NodeId {
+        self.shared
+            .lock()
+            .expect("analysis run state is not poisoned")
+            .node_id
+            .clone()
+            .expect("analysis run ticket always has a bound node")
     }
 
     /// A worker stops when a newer run invalidated it or a caller requested a
@@ -36,6 +53,18 @@ impl AnalysisRunTicket {
             .expect("analysis run state is not poisoned")
             .generation
             == self.generation
+    }
+
+    /// A worker must dispose its leased engine session when a newer run has
+    /// invalidated this ticket. Keeping this query on the ticket lets the
+    /// worker make the ownership decision without borrowing the UI controller.
+    pub fn should_dispose(&self) -> bool {
+        !self.is_current()
+            || self
+                .shared
+                .lock()
+                .expect("analysis run state is not poisoned")
+                .dispose_session
     }
 }
 
@@ -175,6 +204,7 @@ mod tests {
         let controller = AnalysisRunController::default();
         let first = controller.begin("one".to_owned(), Color::Black);
         assert!(!first.should_stop());
+        assert_eq!(first.node_id(), "one");
         controller.request_stop();
         assert!(first.should_stop());
 
@@ -199,6 +229,7 @@ mod tests {
         assert!(controller.finish(&ticket));
 
         controller.cancel_and_dispose();
+        assert!(ticket.should_dispose());
         assert!(controller.should_dispose(&ticket));
         assert!(!controller.finish(&ticket));
     }

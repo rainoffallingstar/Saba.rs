@@ -88,13 +88,38 @@ pub fn parse_lz_analysis_line(line: &str) -> Option<AnalysisEntry> {
                 break;
             }
             // "order", "lcb", "prior", "utility", "scoreSelfplay", ... are
-            // engine-specific extras we intentionally skip.
-            _ => {
-                tokens.next()?;
-            }
+            // engine-specific extras. Do not assume every future extension has
+            // exactly one value: consuming blindly can swallow a later known
+            // field such as `visits` or `pv`.
+            _ => {}
         }
     }
     saw_core_field.then_some(entry)
+}
+
+/// Parses every Leela/KataGo `info move` record in one physical output line.
+/// KataGo commonly packs dozens of candidates plus a trailing `rootInfo` into
+/// one 10KB+ line, rather than emitting one candidate per line.
+pub fn parse_lz_analysis_entries(line: &str) -> Vec<AnalysisEntry> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let starts: Vec<usize> = tokens
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| (pair == ["info", "move"]).then_some(index))
+        .collect();
+    let root_info = tokens
+        .iter()
+        .position(|token| *token == "rootInfo")
+        .unwrap_or(tokens.len());
+    starts
+        .iter()
+        .enumerate()
+        .filter_map(|(entry_index, &start)| {
+            let next_entry = starts.get(entry_index + 1).copied().unwrap_or(root_info);
+            let end = next_entry.min(root_info);
+            parse_lz_analysis_line(&tokens[start..end].join(" "))
+        })
+        .collect()
 }
 
 /// Parses one KataGo analysis JSON line. Lines without a `move` field or
@@ -147,15 +172,15 @@ pub fn parse_kata_analysis_line(line: &str) -> Option<AnalysisEntry> {
 pub fn parse_analysis_response(_command: &str, content: &str) -> Vec<AnalysisEntry> {
     content
         .lines()
-        .filter_map(|line| {
+        .flat_map(|line| {
             let line = line.trim();
             if line.is_empty() {
-                return None;
+                return Vec::new();
             }
             if line.starts_with('{') {
-                parse_kata_analysis_line(line)
+                parse_kata_analysis_line(line).into_iter().collect()
             } else {
-                parse_lz_analysis_line(line)
+                parse_lz_analysis_entries(line)
             }
         })
         .collect()
@@ -181,15 +206,14 @@ fn gtp_vertex(board_size: usize, column: usize, row: usize) -> String {
     format!("{column_char}{}", board_size - row)
 }
 
-/// Replays a position into a streaming analysis process: board size, clear,
-/// then every move as `play <color> <vertex>` (passes as `play <color> pass`).
-pub fn replay_position_stream(
-    sink: &mut impl AnalysisCommandSink,
+/// Builds the GTP setup commands which replay a position into a streaming
+/// analysis process. Callers that own response framing can validate every
+/// command before starting `kata-analyze`.
+pub fn replay_position_stream_commands(
     board_size: usize,
     moves: &[sabaki_domain_core::MoveDto],
-) -> std::io::Result<()> {
-    sink.send_command(&format!("boardsize {board_size}"))?;
-    sink.send_command("clear_board")?;
+) -> Vec<String> {
+    let mut commands = vec![format!("boardsize {board_size}"), "clear_board".to_owned()];
     for move_dto in moves {
         let color = match move_dto.color {
             sabaki_domain_core::Color::Black => "B",
@@ -199,14 +223,30 @@ pub fn replay_position_stream(
             Some(vertex) => gtp_vertex(board_size, vertex.column, vertex.row),
             None => "pass".to_owned(),
         };
-        sink.send_command(&format!("play {color} {vertex}"))?;
+        commands.push(format!("play {color} {vertex}"));
+    }
+    commands
+}
+
+/// Replays a position into a streaming analysis process: board size, clear,
+/// then every move as `play <color> <vertex>` (passes as `play <color> pass`).
+pub fn replay_position_stream(
+    sink: &mut impl AnalysisCommandSink,
+    board_size: usize,
+    moves: &[sabaki_domain_core::MoveDto],
+) -> std::io::Result<()> {
+    for command in replay_position_stream_commands(board_size, moves) {
+        sink.send_command(&command)?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_analysis_response, parse_kata_analysis_line, parse_lz_analysis_line};
+    use super::{
+        parse_analysis_response, parse_kata_analysis_line, parse_lz_analysis_entries,
+        parse_lz_analysis_line,
+    };
 
     #[test]
     fn parses_lz_style_analysis_lines() {
@@ -243,6 +283,16 @@ mod tests {
     }
 
     #[test]
+    fn unknown_flag_does_not_swallow_a_later_known_field() {
+        let entry =
+            parse_lz_analysis_line("info move D4 newEngineFlag visits 100 winrate 0.5 pv D4")
+                .expect("known fields after an unknown flag still parse");
+        assert_eq!(entry.visits, 100);
+        assert_eq!(entry.winrate, 0.5);
+        assert_eq!(entry.pv, vec!["D4"]);
+    }
+
+    #[test]
     fn malformed_lines_yield_none() {
         assert!(parse_lz_analysis_line("not an analysis line").is_none());
         assert!(parse_lz_analysis_line("info").is_none());
@@ -269,6 +319,23 @@ mod tests {
     fn invalid_kata_lines_yield_none() {
         assert!(parse_kata_analysis_line("not json").is_none());
         assert!(parse_kata_analysis_line(r#"{"visits":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn parses_all_candidates_from_one_realistic_katago_output_frame() {
+        let frame = concat!(
+            "info move D4 visits 100 winrate 0.55 scoreLead 2.0 pv D4 Q16 ",
+            "info move Q16 visits 80 winrate 0.45 scoreLead -2.0 pv Q16 D4 ",
+            "rootInfo visits 180 winrate 0.52 scoreLead 1.0"
+        );
+        let entries = parse_lz_analysis_entries(frame);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].vertex.as_deref(), Some("D4"));
+        assert_eq!(entries[0].visits, 100);
+        assert_eq!(entries[0].pv, vec!["D4", "Q16"]);
+        assert_eq!(entries[1].vertex.as_deref(), Some("Q16"));
+        assert_eq!(entries[1].visits, 80);
+        assert_eq!(entries[1].pv, vec!["Q16", "D4"]);
     }
 
     #[test]

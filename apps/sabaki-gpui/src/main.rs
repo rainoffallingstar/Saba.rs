@@ -37,14 +37,14 @@ use gpui::{
 };
 use sabaki_domain_core::gtp::AnalysisStream;
 use sabaki_domain_core::legacy::handicap_placement;
-use sabaki_domain_core::{Color, GameMode, Vertex};
-use sabaki_host::{HostPersistence, replay_position_stream};
+use sabaki_domain_core::{Color, GameMode, MoveDto, Vertex};
+use sabaki_host::{HostPersistence, replay_position_stream_commands};
 
 use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogService};
 use crate::engine_console::{
     EngineLogEntry, EngineRole, EngineRoleAssignments, analysis_command_from_settings,
-    best_analysis_move, best_analysis_winrate, entry_for_response, format_console_command,
-    merge_analysis_entries, parse_engine_spec, parse_gtp_vertex, parse_stream_line,
+    best_analysis_entry, best_analysis_move, entry_for_response, format_console_command,
+    merge_analysis_entries, parse_engine_spec, parse_gtp_vertex, parse_stream_entries,
 };
 use crate::external_file::{ExternalCheckOutcome, check_external_file, track_after_file_operation};
 use crate::file_workflow::{
@@ -161,11 +161,37 @@ struct ShellApp {
     analysis_best_move: Option<Vertex>,
     analysis_run: sabaki_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
+    /// Background handshake/replay task. Blocking GTP I/O must never run on
+    /// GPUI's foreground event loop.
+    engine_connect_tasks: BTreeMap<EngineRole, Task<()>>,
+    /// Invalidates late connection/command callbacks per role. A Black-role
+    /// reconnect must not stale a concurrently running Analysis/White task.
+    engine_generations: BTreeMap<EngineRole, u64>,
+    /// A bounded raw GTP console request temporarily owns a ready session while
+    /// waiting for its response, keeping the UI event loop responsive.
+    engine_command_tasks: BTreeMap<EngineRole, Task<()>>,
+    /// An immutable analysis intent waiting for a matching role connection.
+    /// Binding it to a role generation and node prevents an old handshake from
+    /// starting analysis after a disconnect, role change, or navigation.
+    pending_analysis_request: Option<PendingAnalysisRequest>,
     batch_review_progress: Option<sabaki_host::BatchReviewProgress>,
-    hovered_candidate_pv: Option<Vec<String>>,
+    batch_review_state: Option<BatchReviewState>,
+    /// Candidate currently hovered in either the board overlay or candidate
+    /// list. The vertex is stored instead of a copied PV so live engine updates
+    /// immediately refresh the preview line.
+    hovered_candidate_vertex: Option<String>,
+    /// Ephemeral move used for response analysis. It is replayed into the
+    /// engine only and never appended to the SGF tree.
+    trial_move: Option<MoveDto>,
+    last_analysis_trial_move: Option<MoveDto>,
+    active_analysis_trial_move: Option<MoveDto>,
     /// Set when a maxVisits quick-switch lands while analysis is streaming;
     /// after the run finishes cleanly, analysis restarts with the new limit.
     restart_analysis_after_stop: bool,
+    /// Keep analysis continuous across real moves/navigation when the user has
+    /// started analysis explicitly.
+    analysis_enabled: bool,
+    restart_analysis_after_position_change: bool,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
     /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
@@ -221,6 +247,88 @@ struct SplitDrag {
     pane: SplitPane,
     start_position: f32,
     start_size: f32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingAnalysisRequest {
+    role: EngineRole,
+    role_generation: u64,
+    node_id: sabaki_domain_core::NodeId,
+}
+
+impl PendingAnalysisRequest {
+    fn matches(&self, role: EngineRole, role_generation: u64, node_id: &str) -> bool {
+        self.role == role && self.role_generation == role_generation && self.node_id == node_id
+    }
+}
+
+struct BatchReviewState {
+    original_node_id: sabaki_domain_core::NodeId,
+    node_ids: Vec<sabaki_domain_core::NodeId>,
+    next_index: usize,
+}
+
+impl BatchReviewState {
+    fn new(
+        original_node_id: sabaki_domain_core::NodeId,
+        node_ids: Vec<sabaki_domain_core::NodeId>,
+    ) -> Option<Self> {
+        (!node_ids.is_empty()).then_some(Self {
+            original_node_id,
+            node_ids,
+            next_index: 0,
+        })
+    }
+
+    fn current_node_id(&self) -> Option<&sabaki_domain_core::NodeId> {
+        self.node_ids.get(self.next_index)
+    }
+
+    fn advance(&mut self) -> Option<&sabaki_domain_core::NodeId> {
+        if self.next_index + 1 >= self.node_ids.len() {
+            return None;
+        }
+        self.next_index += 1;
+        self.current_node_id()
+    }
+}
+
+#[cfg(test)]
+mod batch_review_state_tests {
+    use super::BatchReviewState;
+
+    #[test]
+    fn advances_in_order_and_stops_at_last_node() {
+        let mut state = BatchReviewState::new(
+            "root".to_owned(),
+            vec!["b1".to_owned(), "w1".to_owned(), "b2".to_owned()],
+        )
+        .expect("non-empty review plan");
+        assert_eq!(state.original_node_id, "root");
+        assert_eq!(state.current_node_id(), Some(&"b1".to_owned()));
+        assert_eq!(state.advance(), Some(&"w1".to_owned()));
+        assert_eq!(state.advance(), Some(&"b2".to_owned()));
+        assert_eq!(state.advance(), None);
+        assert_eq!(state.current_node_id(), Some(&"b2".to_owned()));
+    }
+
+    #[test]
+    fn empty_review_plan_is_rejected() {
+        assert!(BatchReviewState::new("root".to_owned(), Vec::new()).is_none());
+    }
+
+    #[test]
+    fn pending_request_requires_matching_role_generation_and_node() {
+        let request = super::PendingAnalysisRequest {
+            role: super::EngineRole::Analysis,
+            role_generation: 7,
+            node_id: "node-a".to_owned(),
+        };
+        assert!(request.matches(super::EngineRole::Analysis, 7, "node-a"));
+        assert!(!request.matches(super::EngineRole::White, 7, "node-a"));
+        assert!(!request.matches(super::EngineRole::Analysis, 8, "node-a"));
+        assert!(!request.matches(super::EngineRole::Analysis, 7, "node-b"));
+    }
 }
 
 /// Resolves the new-game defaults stored in the settings store and returns
@@ -424,9 +532,19 @@ impl ShellApp {
             analysis_best_move: None,
             analysis_run: sabaki_host::AnalysisRunController::default(),
             analysis_task: None,
+            engine_connect_tasks: BTreeMap::new(),
+            engine_generations: EngineRole::ALL.into_iter().map(|role| (role, 0)).collect(),
+            engine_command_tasks: BTreeMap::new(),
+            pending_analysis_request: None,
             batch_review_progress: None,
-            hovered_candidate_pv: None,
+            batch_review_state: None,
+            hovered_candidate_vertex: None,
+            trial_move: None,
+            last_analysis_trial_move: None,
+            active_analysis_trial_move: None,
             restart_analysis_after_stop: false,
+            analysis_enabled: false,
+            restart_analysis_after_position_change: false,
             last_analysis_node: None,
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
@@ -708,57 +826,134 @@ impl ShellApp {
             .active_console_role
             .unwrap_or(crate::engine_console::EngineRole::Analysis);
 
-        // Auto-connect engine if it is configured for this role but not yet attached
+        // A streaming role remains connected but cannot safely accept an
+        // arbitrary console command until its stream is stopped. Do not try to
+        // auto-connect it again: that was the old detached/reconnect loop.
+        if self.engine_controller.is_streaming(role) {
+            let message = format!(
+                "{} engine is analyzing — stop analysis before sending raw GTP commands",
+                role.label()
+            );
+            self.status = message.clone().into();
+            self.record_engine_log(EngineLogEntry {
+                command: draft.to_owned(),
+                success: false,
+                response: message,
+            });
+            cx.notify();
+            return;
+        }
+        // Auto-connect an unconnected configured role. A successful connection
+        // now remains Ready instead of immediately starting a stream.
         if !self.engine_controller.is_attached(role) && self.engine_roles.get(role).is_some() {
             self.on_engine_connect(role, cx);
+            let message = format!(
+                "{} engine is connecting; retry the command when it is ready",
+                role.label()
+            );
+            self.status = message.clone().into();
+            self.record_engine_log(EngineLogEntry {
+                command: draft.to_owned(),
+                success: false,
+                response: message,
+            });
+            cx.notify();
+            return;
         }
 
+        if self.engine_command_tasks.contains_key(&role)
+            || self.engine_controller.is_command_pending(role)
+        {
+            self.status = format!("{} engine is completing another command", role.label()).into();
+            cx.notify();
+            return;
+        }
         let (name, arguments) = Self::parse_engine_command_line(draft);
         let formatted = format_console_command(&name, &arguments);
-        let result = match self.engine_controller.send(role, &name, arguments) {
-            Ok(response) => Ok(response),
-            Err(sabaki_host::EngineControllerError::Detached) => {
-                self.status = format!("{} engine is detached", role.label()).into();
+        let session = match self.engine_controller.lease_for_command(role) {
+            Ok(session) => session,
+            Err(_) => {
+                self.status = format!("{} engine is not ready", role.label()).into();
                 self.record_engine_log(EngineLogEntry {
-                    command: formatted.clone(),
+                    command: formatted,
                     success: false,
-                    response: format!(
-                        "{} engine is detached — click [🔌 连接引擎] or configure in Settings",
-                        role.label()
-                    ),
+                    response: "engine is not ready for a bounded command".to_owned(),
                 });
-                self.gtp_input.set_text("");
-                self.engine_draft = "".into();
                 cx.notify();
                 return;
             }
-            Err(error) => Err(error.to_string()),
         };
-        match result {
-            Ok(response) => {
-                self.record_engine_log(entry_for_response(formatted.clone(), &response));
-                if response.success
-                    && name == "boardsize"
-                    && let Some(size) = draft
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|value| value.parse().ok())
-                {
-                    self.board_size = size;
-                }
-                self.status = format!("{} engine: {formatted}", role.label()).into();
-            }
-            Err(error) => {
-                self.record_engine_log(EngineLogEntry {
-                    command: formatted.clone(),
-                    success: false,
-                    response: format!("protocol error: {error}"),
-                });
-                self.status = format!("{} engine failed: {error}", role.label()).into();
-            }
-        }
+        self.status = format!("{} engine: running {formatted}…", role.label()).into();
         self.gtp_input.set_text("");
         self.engine_draft = "".into();
+        let command_generation = self
+            .engine_generations
+            .get(&role)
+            .copied()
+            .unwrap_or_default();
+        let weak = cx.entity().downgrade();
+        self.engine_command_tasks.insert(
+            role,
+            cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let (session, result) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut session = session;
+                                let result = session.send_command(&name, arguments);
+                                if result.is_err() {
+                                    let _ = session.stop();
+                                }
+                                (session, result)
+                            })
+                            .await;
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            shell.engine_command_tasks.remove(&role);
+                            if shell
+                                .engine_generations
+                                .get(&role)
+                                .copied()
+                                .unwrap_or_default()
+                                != command_generation
+                            {
+                                shell.engine_controller.discard_command_lease(role);
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        let mut session = session;
+                                        let _ = session.stop();
+                                    })
+                                    .detach();
+                                return;
+                            }
+                            match result {
+                                Ok(response) => {
+                                    shell.engine_controller.return_command_lease(role, session);
+                                    shell.record_engine_log(entry_for_response(
+                                        formatted.clone(),
+                                        &response,
+                                    ));
+                                    shell.status =
+                                        format!("{} engine: {formatted}", role.label()).into();
+                                }
+                                Err(error) => {
+                                    shell.engine_controller.discard_command_lease(role);
+                                    shell.record_engine_log(EngineLogEntry {
+                                        command: formatted.clone(),
+                                        success: false,
+                                        response: format!("protocol error: {error}"),
+                                    });
+                                    shell.status =
+                                        format!("{} engine failed: {error}", role.label()).into();
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+            ),
+        );
         cx.notify();
     }
 
@@ -842,10 +1037,16 @@ impl ShellApp {
         None
     }
 
-    /// Starts a role-specific engine session: spawns the process,
-    /// runs the host handshake/probe/startup/board-setup sequence, and replays
-    /// the current position into the engine so it tracks the board.
+    /// Begins a role-specific engine connection without blocking GPUI's event
+    /// loop. Process spawn, cold-model handshake and full board replay run on
+    /// the background executor; the foreground callback only installs the
+    /// already-prepared session.
     fn on_engine_connect(&mut self, role: EngineRole, cx: &mut Context<Self>) {
+        if self.engine_connect_tasks.contains_key(&role) {
+            self.status = "an engine connection is already in progress".into();
+            cx.notify();
+            return;
+        }
         if role == EngineRole::Analysis && self.analysis_task.is_some() {
             self.status = "stop the active analysis before reattaching its engine".into();
             cx.notify();
@@ -857,73 +1058,172 @@ impl ShellApp {
             return;
         }
         let Some(record) = self.ensure_engine_role_configured(role) else {
-            self.status = format!(
+            let message = format!(
                 "未找到可用的 {} 引擎，请先在设置中配置 KataGo",
                 role.label()
-            )
-            .into();
-            self.show_toast(
-                format!(
-                    "未找到可用的 {} 引擎，请先在设置中配置 KataGo",
-                    role.label()
-                ),
-                cx,
             );
+            self.status = message.clone().into();
+            self.show_toast(message, cx);
             cx.notify();
             return;
         };
-        let name = record.name.clone();
+
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let board_size = self.host.snapshot().board.width;
-        // KataGo's config writes a relative `logDir`; a non-writable cwd (e.g.
-        // a packaged .app) makes the engine abort during startup. Spawn in the
-        // writable engine runtime directory instead.
-        let runtime_dir = self.engine_runtime_directory();
-        let transport = match sabaki_host::ProcessGtpTransport::start_in(
-            &record.path,
-            &arguments,
-            Some(&runtime_dir),
-        ) {
-            Ok(transport) => transport,
-            Err(error) => {
-                self.status = format!("engine process failed: {error}").into();
-                self.show_toast(format!("引擎进程启动失败: {error}"), cx);
-                cx.notify();
-                return;
-            }
-        };
         let moves = self.host.snapshot().moves.clone();
-        if let Err(error) = self
-            .engine_controller
-            .attach(role, transport, &record, board_size, &moves)
-        {
-            self.status = format!("engine attach failed: {error}").into();
-            self.show_toast(
-                format!(
-                    "引擎连接握手失败: {error}\n（引擎: {}，参数: {}）",
-                    record.path, record.args
-                ),
-                cx,
-            );
-            cx.notify();
-            return;
-        }
-        self.active_console_role = Some(role);
-        self.status = format!("{} engine {name} attached", role.label()).into();
-        self.show_toast(format!("🔌 已连接 {} 引擎: {name}", role.label()), cx);
-        if role == EngineRole::Analysis {
-            self.start_analysis(cx);
-        } else {
-            cx.notify();
-        }
+        let runtime_dir = self.engine_runtime_directory();
+        let display_name = record.name.clone();
+        let connection_generation = {
+            let generation = self.engine_generations.entry(role).or_default();
+            *generation = generation.wrapping_add(1);
+            *generation
+        };
+        let diagnostic = format!("引擎: {}，参数: {}", record.path, record.args);
+        self.status = format!("正在连接 {} 引擎（加载模型并同步棋局）…", role.label()).into();
+        self.show_toast(format!("🔌 正在连接 {} 引擎…", role.label()), cx);
+
+        let weak = cx.entity().downgrade();
+        self.engine_connect_tasks.insert(role, cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result: Result<
+                        sabaki_host::EngineSession<sabaki_host::ProcessGtpTransport>,
+                        String,
+                    > = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let transport = sabaki_host::ProcessGtpTransport::start_in(
+                                &record.path,
+                                &arguments,
+                                Some(&runtime_dir),
+                            )
+                            .map_err(|error| format!("引擎进程启动失败: {error}"))?;
+                            sabaki_host::EngineController::<
+                                EngineRole,
+                                sabaki_host::ProcessGtpTransport,
+                            >::prepare_session(transport, &record, board_size, &moves)
+                            .map_err(|error| format!("引擎连接握手失败: {error}"))
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        let is_stale = shell
+                            .engine_generations
+                            .get(&role)
+                            .copied()
+                            .unwrap_or_default()
+                            != connection_generation;
+                        match result {
+                            Ok(session) if is_stale => {
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        let mut session = session;
+                                        let _ = session.stop();
+                                    })
+                                    .detach();
+                            }
+                            Err(_) if is_stale => {}
+                            result => {
+                                shell.engine_connect_tasks.remove(&role);
+                                match result {
+                                    Ok(session) => {
+                                        match shell.engine_controller.attach_prepared(role, session) {
+                                            Ok(()) => {
+                                                shell.active_console_role = Some(role);
+                                                shell.status = format!(
+                                                    "{} engine {display_name} ready",
+                                                    role.label()
+                                                )
+                                                .into();
+                                                shell.show_toast(
+                                                    format!(
+                                                        "🔌 已连接 {} 引擎: {display_name}（就绪，未自动开始分析）",
+                                                        role.label()
+                                                    ),
+                                                    cx,
+                                                );
+                                                let current_node_id = shell
+                                                    .host
+                                                    .snapshot()
+                                                    .current_node_id;
+                                                let request_matches = shell
+                                                    .pending_analysis_request
+                                                    .as_ref()
+                                                    .is_some_and(|request| {
+                                                        request.matches(
+                                                            role,
+                                                            connection_generation,
+                                                            &current_node_id,
+                                                        )
+                                                    });
+                                                if request_matches {
+                                                    shell.pending_analysis_request = None;
+                                                    if let Some(target) = shell
+                                                        .batch_review_state
+                                                        .as_ref()
+                                                        .and_then(BatchReviewState::current_node_id)
+                                                        .cloned()
+                                                        && shell.host.snapshot().current_node_id
+                                                            != target
+                                                    {
+                                                        shell.navigate_to_node_with_batch_policy(
+                                                            target, false, cx,
+                                                        );
+                                                    }
+                                                    shell.start_analysis(cx);
+                                                }
+                                            }
+                                            Err(error) => {
+                                                shell.status =
+                                                    format!("engine attach failed: {error}").into();
+                                                shell.show_toast(
+                                                    format!("引擎连接失败: {error}"),
+                                                    cx,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        if shell
+                                            .pending_analysis_request
+                                            .as_ref()
+                                            .is_some_and(|request| {
+                                                request.role == role
+                                                    && request.role_generation
+                                                        == connection_generation
+                                            })
+                                        {
+                                            shell.pending_analysis_request = None;
+                                        }
+                                        shell.status = error.clone().into();
+                                        shell.show_toast(
+                                            format!("{error}\n（{diagnostic}）"),
+                                            cx,
+                                        );
+                                    }
+                                }
+                                cx.notify();
+                            }
+                        }
+                    });
+                }
+            },
+        ));
     }
 
     fn disconnect_engine_role(&mut self, role: EngineRole) {
+        let generation = self.engine_generations.entry(role).or_default();
+        *generation = generation.wrapping_add(1);
+        self.engine_connect_tasks.remove(&role);
+        if self
+            .pending_analysis_request
+            .as_ref()
+            .is_some_and(|request| request.role == role)
+        {
+            self.pending_analysis_request = None;
+        }
         if role == EngineRole::Analysis && self.analysis_task.is_some() {
             self.analysis_run.cancel_and_dispose();
-            if let Some(task) = self.analysis_task.take() {
-                task.detach();
-            }
         }
         self.engine_controller.detach(role);
         if self.active_console_role == Some(role) {
@@ -942,6 +1242,8 @@ impl ShellApp {
             || (role == EngineRole::Analysis && self.analysis_task.is_some());
         self.disconnect_engine_role(role);
         if role == EngineRole::Analysis {
+            self.analysis_enabled = false;
+            self.restart_analysis_after_position_change = false;
             self.analysis.clear();
             self.analysis_best_move = None;
             self.last_analysis_node = None;
@@ -956,6 +1258,7 @@ impl ShellApp {
     }
 
     fn on_analyze(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.analysis_enabled = true;
         self.start_analysis(cx);
     }
 
@@ -968,6 +1271,7 @@ impl ShellApp {
             return;
         }
         let analysis_snapshot = self.host.snapshot();
+        let trial_move = self.trial_move.clone();
         let (command, command_arguments) = analysis_command_from_settings(&self.settings);
         // KataGo limits search depth via `maxVisits`; 0 means unlimited.
         // Applied through `kata-set-param` right before the stream starts.
@@ -982,39 +1286,155 @@ impl ShellApp {
                 .get(EngineRole::Analysis)
                 .unwrap_or_default();
             if !name.is_empty() {
+                let role_generation = self
+                    .engine_generations
+                    .get(&EngineRole::Analysis)
+                    .copied()
+                    .unwrap_or_default()
+                    .wrapping_add(1);
+                self.pending_analysis_request = Some(PendingAnalysisRequest {
+                    role: EngineRole::Analysis,
+                    role_generation,
+                    node_id: analysis_snapshot.current_node_id.clone(),
+                });
                 self.on_engine_connect(EngineRole::Analysis, cx);
-                if !self.engine_controller.is_attached(EngineRole::Analysis) {
-                    return;
-                }
+                return;
             } else {
                 self.status = "select an analysis engine first (e.g. KataGo in Settings)".into();
                 cx.notify();
                 return;
             }
         }
+        if self.engine_controller.is_streaming(EngineRole::Analysis) {
+            self.status =
+                "analysis engine is already streaming; stop it before starting another run".into();
+            cx.notify();
+            return;
+        }
 
-        let run = self.analysis_run.begin(
-            analysis_snapshot.current_node_id.clone(),
-            analysis_snapshot.board.next_player,
-        );
+        let analysis_player = trial_move
+            .as_ref()
+            .map_or(analysis_snapshot.board.next_player, |move_dto| {
+                move_dto.color.opponent()
+            });
+        let run = self
+            .analysis_run
+            .begin(analysis_snapshot.current_node_id.clone(), analysis_player);
+        self.active_analysis_trial_move = trial_move.clone();
+        let analysis_board_size = analysis_snapshot.board.width;
+        let mut analysis_moves = analysis_snapshot.moves.clone();
+        if let Some(trial_move) = trial_move.clone() {
+            analysis_moves.push(trial_move);
+        }
+        let bounded_arguments = command_arguments.clone();
 
-        // Bounded `analyze` responses go through the attached Analysis session.
+        // Bounded `analyze` responses also own a session worker. The GTP
+        // request can wait for the engine's search deadline, so it must not
+        // run inside this foreground event handler.
         if command == "analyze" && self.engine_controller.is_attached(EngineRole::Analysis) {
-            match self.engine_controller.analyze(
-                EngineRole::Analysis,
-                &command,
-                vec!["".to_owned()],
-            ) {
-                Ok(entries) => {
-                    self.set_analysis(entries, cx);
-                    self.analysis_run.finish(&run);
-                }
+            let session = match self
+                .engine_controller
+                .lease_for_command(EngineRole::Analysis)
+            {
+                Ok(session) => session,
                 Err(error) => {
-                    self.status = format!("analysis failed: {error}").into();
+                    self.status = format!("analysis session unavailable: {error}").into();
                     cx.notify();
                     return;
                 }
-            }
+            };
+            let task_run = run.clone();
+            let task_command = command.clone();
+            let task_arguments = bounded_arguments;
+            let task_board_size = analysis_board_size;
+            let task_moves = analysis_moves;
+            let task_trial = trial_move.clone();
+            self.status = "analysis: waiting for bounded engine response…".into();
+            let weak = cx.entity().downgrade();
+            self.analysis_task = Some(cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let (session, result) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut session = session;
+                                let result = if task_trial.is_some() {
+                                    sabaki_host::EngineController::<
+                                        EngineRole,
+                                        sabaki_host::ProcessGtpTransport,
+                                    >::replay_leased(
+                                        &mut session, task_board_size, &task_moves
+                                    )
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|()| {
+                                        session
+                                            .analyze(&task_command, task_arguments)
+                                            .map_err(|error| error.to_string())
+                                    })
+                                } else {
+                                    session
+                                        .analyze(&task_command, task_arguments)
+                                        .map_err(|error| error.to_string())
+                                };
+                                if result.is_err() {
+                                    let _ = session.stop();
+                                }
+                                (session, result)
+                            })
+                            .await;
+                        if task_run.should_dispose() {
+                            let _ = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let mut session = session;
+                                    let _ = session.stop();
+                                })
+                                .await;
+                            let _ = weak.update(&mut cx, |shell, cx| {
+                                shell.analysis_task = None;
+                                shell
+                                    .engine_controller
+                                    .discard_command_lease(EngineRole::Analysis);
+                                cx.notify();
+                            });
+                            return;
+                        }
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            shell.analysis_task = None;
+                            match result {
+                                Ok(entries) if task_run.is_current() => {
+                                    shell
+                                        .engine_controller
+                                        .return_command_lease(EngineRole::Analysis, session);
+                                    shell.set_analysis(entries, cx);
+                                    shell.analysis_finished(
+                                        &task_run,
+                                        sabaki_host::AnalysisRunOutcome::Completed,
+                                        cx,
+                                    );
+                                }
+                                Ok(_) => {
+                                    shell
+                                        .engine_controller
+                                        .discard_command_lease(EngineRole::Analysis);
+                                }
+                                Err(error) => {
+                                    shell
+                                        .engine_controller
+                                        .discard_command_lease(EngineRole::Analysis);
+                                    shell.analysis_finished(
+                                        &task_run,
+                                        sabaki_host::AnalysisRunOutcome::Failed(error.to_string()),
+                                        cx,
+                                    );
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+            ));
             cx.notify();
             return;
         }
@@ -1024,58 +1444,46 @@ impl ShellApp {
         // process), otherwise fall back to a fresh analysis process with the
         // current position replayed into it.
         let board_size = self.host.snapshot().board.width;
-        let moves = self.host.snapshot().moves.clone();
+        let mut moves = self.host.snapshot().moves.clone();
+        if let Some(trial_move) = trial_move.clone() {
+            moves.push(trial_move);
+        }
 
-        // Session mode: reuse the connected session's current position and
-        // search tree when the node is unchanged; only replay when the board
-        // moved. This lets a deeper `maxVisits` pass build on a shallow one.
-        let position_changed =
-            self.last_analysis_node.as_ref() != Some(&analysis_snapshot.current_node_id);
-        let mut session_mode = false;
-        if self.engine_controller.is_attached(EngineRole::Analysis) {
-            if position_changed
-                && let Err(error) =
-                    self.engine_controller
-                        .replay(EngineRole::Analysis, board_size, &moves)
+        // Session mode reuses a connected ready session, but all replay and
+        // stream-start GTP I/O is performed by the worker below.
+        let session_mode = self.engine_controller.is_ready(EngineRole::Analysis);
+        if self.engine_controller.is_attached(EngineRole::Analysis) && !session_mode {
+            self.status = "analysis engine is busy; wait for it to become ready".into();
+            self.analysis_run.finish(&run);
+            cx.notify();
+            return;
+        }
+        let task_run = run.clone();
+        let task_command = command.clone();
+        let task_arguments = command_arguments.clone();
+        let preparation_command = task_command.clone();
+        let task_board_size = board_size;
+        let task_moves = moves.clone();
+        let task_max_visits = max_visits;
+        let task_position_changed = self.last_analysis_node.as_ref()
+            != Some(&analysis_snapshot.current_node_id)
+            || self.last_analysis_trial_move != trial_move;
+        self.last_analysis_node = Some(analysis_snapshot.current_node_id.clone());
+        self.last_analysis_trial_move = trial_move.clone();
+
+        if session_mode {
+            let session = match self
+                .engine_controller
+                .lease_for_analysis(EngineRole::Analysis)
             {
-                self.status = format!("analysis session setup failed: {error}").into();
-                cx.notify();
-                return;
-            }
-            // Apply the requested search-depth limit before streaming.
-            let _ = self.engine_controller.send(
-                EngineRole::Analysis,
-                "kata-set-param",
-                vec!["maxVisits".to_owned(), max_visits.to_string()],
-            );
-            match self.engine_controller.start_analysis(
-                EngineRole::Analysis,
-                &command,
-                command_arguments.clone(),
-            ) {
-                Ok(()) => session_mode = true,
-                Err(sabaki_host::EngineControllerError::Transport(
-                    sabaki_domain_core::gtp::GtpError::UnsupportedStreaming,
-                )) => {
-                    // Connected engine cannot stream; fall through.
-                }
+                Ok(session) => session,
                 Err(error) => {
-                    self.status = format!("analysis command failed: {error}").into();
+                    self.status = format!("analysis session unavailable: {error}").into();
+                    self.analysis_run.finish(&run);
                     cx.notify();
                     return;
                 }
-            }
-        }
-        self.last_analysis_node = Some(analysis_snapshot.current_node_id.clone());
-
-        let task_run = run.clone();
-        let task_command = command.clone();
-
-        if session_mode {
-            let mut session = self
-                .engine_controller
-                .lease_for_analysis(EngineRole::Analysis)
-                .expect("session mode implies an attached Analysis session");
+            };
             self.status =
                 format!("analysis: streaming {command} on attached Analysis engine").into();
             let session_run = task_run.clone();
@@ -1083,17 +1491,98 @@ impl ShellApp {
                 move |shell_weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
-                        let mut pending: Vec<sabaki_host::AnalysisEntry> = Vec::new();
-                        let mut last_flush = Instant::now();
-                        loop {
-                            if session_run.should_stop() {
-                                if session_run.is_current() {
-                                    let _ = sabaki_host::EngineController::<
+                        let (mut session, preparation) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut session = session;
+                                let result: Result<(), String> = if task_position_changed {
+                                    sabaki_host::EngineController::<
                                         EngineRole,
                                         sabaki_host::ProcessGtpTransport,
-                                    >::stop_leased_analysis(
-                                        &mut session
-                                    );
+                                    >::replay_leased(
+                                        &mut session, task_board_size, &task_moves
+                                    )
+                                    .map_err(|error| error.to_string())
+                                } else {
+                                    Ok(())
+                                };
+                                let result = result.and_then(|()| {
+                                    if preparation_command == "kata-analyze" {
+                                        session
+                                            .send_command(
+                                                "kata-set-param",
+                                                vec![
+                                                    "maxVisits".to_owned(),
+                                                    task_max_visits.to_string(),
+                                                ],
+                                            )
+                                            .map(|response| {
+                                                if response.success {
+                                                    Ok(())
+                                                } else {
+                                                    Err(format!(
+                                                        "engine rejected kata-set-param: {}",
+                                                        response.content
+                                                    ))
+                                                }
+                                            })
+                                            .map_err(|error| error.to_string())??;
+                                    }
+                                    Ok(())
+                                });
+                                let result = result.and_then(|()| {
+                                    session
+                                        .stream_analyze(&preparation_command, task_arguments)
+                                        .map_err(|error| error.to_string())
+                                });
+                                (session, result)
+                            })
+                            .await;
+                        if let Err(error) = preparation {
+                            let _ = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let _ = session.stop();
+                                })
+                                .await;
+                            let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                shell.analysis_task = None;
+                                shell
+                                    .engine_controller
+                                    .discard_analysis_lease(EngineRole::Analysis);
+                                shell.analysis_finished(
+                                    &session_run,
+                                    sabaki_host::AnalysisRunOutcome::Failed(format!(
+                                        "analysis preparation failed: {error}"
+                                    )),
+                                    cx,
+                                );
+                            });
+                            return;
+                        }
+                        let mut pending: Vec<sabaki_host::AnalysisEntry> = Vec::new();
+                        let mut last_flush = Instant::now();
+                        let mut target_reached = false;
+                        let mut outcome = sabaki_host::AnalysisRunOutcome::Failed(
+                            "analysis stream ended without a completed result".to_owned(),
+                        );
+                        loop {
+                            if target_reached || session_run.should_stop() {
+                                if session_run.is_current() {
+                                    let (next_session, _) = cx
+                                        .background_executor()
+                                        .spawn(async move {
+                                            let mut session = session;
+                                            let result = sabaki_host::EngineController::<
+                                                EngineRole,
+                                                sabaki_host::ProcessGtpTransport,
+                                            >::stop_leased_analysis(
+                                                &mut session
+                                            );
+                                            (session, result)
+                                        })
+                                        .await;
+                                    session = next_session;
                                 }
                                 // Drain the stream tail so the engine's final
                                 // search results land in the analysis set
@@ -1101,12 +1590,22 @@ impl ShellApp {
                                 let drain_deadline = Instant::now() + Duration::from_secs(3);
                                 let mut saw_header = false;
                                 while Instant::now() < drain_deadline {
-                                    match sabaki_host::EngineController::<
-                                        EngineRole,
-                                        sabaki_host::ProcessGtpTransport,
-                                    >::recv_analysis_line(
-                                        &mut session, Duration::from_millis(50)
-                                    ) {
+                                    let (next_session, next_line) = cx
+                                        .background_executor()
+                                        .spawn(async move {
+                                            let mut session = session;
+                                            let line = sabaki_host::EngineController::<
+                                                EngineRole,
+                                                sabaki_host::ProcessGtpTransport,
+                                            >::recv_analysis_line(
+                                                &mut session,
+                                                Duration::from_millis(50),
+                                            );
+                                            (session, line)
+                                        })
+                                        .await;
+                                    session = next_session;
+                                    match next_line {
                                         Some(line) => {
                                             let trimmed = line.trim();
                                             if trimmed.starts_with('=') || trimmed.starts_with('?')
@@ -1120,11 +1619,10 @@ impl ShellApp {
                                                 }
                                                 continue;
                                             }
-                                            if let Some(entry) =
-                                                parse_stream_line(&task_command, trimmed)
-                                            {
-                                                pending.push(entry);
-                                            }
+                                            pending.extend(parse_stream_entries(
+                                                &task_command,
+                                                trimmed,
+                                            ));
                                         }
                                         None => {
                                             if sabaki_host::EngineController::<
@@ -1138,14 +1636,28 @@ impl ShellApp {
                                         }
                                     }
                                 }
+                                outcome = if session_run.should_dispose() {
+                                    sabaki_host::AnalysisRunOutcome::Cancelled
+                                } else {
+                                    sabaki_host::AnalysisRunOutcome::Completed
+                                };
                                 break;
                             }
-                            if let Some(line) = sabaki_host::EngineController::<
-                                EngineRole,
-                                sabaki_host::ProcessGtpTransport,
-                            >::recv_analysis_line(
-                                &mut session, Duration::from_millis(50)
-                            ) {
+                            let (next_session, next_line) = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let mut session = session;
+                                    let line = sabaki_host::EngineController::<
+                                        EngineRole,
+                                        sabaki_host::ProcessGtpTransport,
+                                    >::recv_analysis_line(
+                                        &mut session, Duration::from_millis(50)
+                                    );
+                                    (session, line)
+                                })
+                                .await;
+                            session = next_session;
+                            if let Some(line) = next_line {
                                 let trimmed = line.trim();
                                 // GTP responses begin with `=` / `?` and are
                                 // followed by an empty line before the streamed
@@ -1157,18 +1669,26 @@ impl ShellApp {
                                 {
                                     continue;
                                 }
-                                if let Some(entry) = parse_stream_line(&task_command, trimmed) {
-                                    let proxy_completion = task_command == "kata-analyze"
-                                        && !entry.is_during_search
-                                        && trimmed.starts_with('{');
-                                    pending.push(entry);
-                                    // Official KataGo GTP `kata-analyze` emits
-                                    // continuous `info move` records without a
-                                    // completion sentinel. JSON proxy adapters
-                                    // retain their explicit completion record.
-                                    if proxy_completion {
-                                        break;
-                                    }
+                                let entries = parse_stream_entries(&task_command, trimmed);
+                                let proxy_completion = task_command == "kata-analyze"
+                                    && trimmed.starts_with('{')
+                                    && entries.iter().any(|entry| !entry.is_during_search);
+                                target_reached = proxy_completion
+                                    || (task_max_visits > 0
+                                        && entries
+                                            .iter()
+                                            .map(|entry| entry.visits)
+                                            .max()
+                                            .unwrap_or_default()
+                                            >= task_max_visits);
+                                pending.extend(entries);
+                                // Official KataGo GTP `kata-analyze` emits
+                                // continuous `info move` records without a
+                                // completion sentinel. JSON proxy adapters
+                                // retain their explicit completion record.
+                                if proxy_completion {
+                                    outcome = sabaki_host::AnalysisRunOutcome::Completed;
+                                    break;
                                 }
                             } else if sabaki_host::EngineController::<
                                 EngineRole,
@@ -1212,11 +1732,35 @@ impl ShellApp {
                                 shell.push_analysis_batch(&session_run, batch, cx)
                             });
                         }
-                        // Return the leased Analysis session only when this is
-                        // still the active run; detached or stale sessions stop.
-                        let _ = shell_weak.update(&mut cx, |shell, cx| {
-                            shell.finish_streaming_analysis(&session_run, session, cx);
-                        });
+                        // A stale/cancelled run owns cleanup in this worker. A
+                        // live run may return its session to the foreground
+                        // controller after all blocking I/O is finished.
+                        if session_run.should_dispose()
+                            || matches!(outcome, sabaki_host::AnalysisRunOutcome::Failed(_))
+                        {
+                            let final_outcome = if session_run.should_dispose() {
+                                sabaki_host::AnalysisRunOutcome::Cancelled
+                            } else {
+                                outcome
+                            };
+                            let _ = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let mut session = session;
+                                    let _ = session.stop();
+                                })
+                                .await;
+                            let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                shell
+                                    .engine_controller
+                                    .discard_analysis_lease(EngineRole::Analysis);
+                                shell.analysis_finished(&session_run, final_outcome, cx);
+                            });
+                        } else {
+                            let _ = shell_weak.update(&mut cx, |shell, cx| {
+                                shell.finish_streaming_analysis(&session_run, session, outcome, cx);
+                            });
+                        }
                     }
                 },
             ));
@@ -1241,52 +1785,119 @@ impl ShellApp {
             return;
         };
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
+        let executable = record.path.clone();
         let runtime_dir = self.engine_runtime_directory();
-        let mut stream =
-            match AnalysisStream::start_in(&record.path, &arguments, Some(&runtime_dir)) {
-                Ok(stream) => stream,
-                Err(error) => {
-                    self.status = format!("analysis process failed: {error}").into();
-                    cx.notify();
-                    return;
-                }
-            };
-        if let Err(error) = replay_position_stream(&mut stream, board_size, &moves) {
-            self.status = format!("analysis setup failed: {error}").into();
-            cx.notify();
-            return;
-        }
-        // Apply the requested search-depth limit before starting the stream.
-        let _ = stream.send_command(&format!("kata-set-param maxVisits {max_visits}"));
         let full_command = if command_arguments.is_empty() {
             command.clone()
         } else {
             format!("{} {}", command, command_arguments.join(" "))
         };
-        if let Err(error) = stream.send_command(&full_command) {
-            self.status = format!("analysis command failed: {error}").into();
-            cx.notify();
-            return;
-        }
-        self.status = format!("analysis: streaming {command}").into();
+        self.status = format!("analysis: preparing {command}").into();
         let stream_run = task_run.clone();
+        let preparation_command = task_command.clone();
         self.analysis_task = Some(cx.spawn(
             move |shell_weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
+                    let preparation = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let result = AnalysisStream::start_in(
+                                &executable,
+                                &arguments,
+                                Some(&runtime_dir),
+                            )
+                            .map_err(|error| error.to_string())
+                            .and_then(|mut stream| {
+                                let setup_timeout =
+                                    sabaki_domain_core::gtp::DEFAULT_COMMAND_TIMEOUT;
+                                let replay = |stream: &mut AnalysisStream| -> Result<(), String> {
+                                    let commands =
+                                        replay_position_stream_commands(board_size, &moves);
+                                    for command in commands {
+                                        let response = stream
+                                            .send_request(&command, setup_timeout)
+                                            .map_err(|error| error.to_string())?;
+                                        if !response.success {
+                                            return Err(format!(
+                                                "engine rejected setup command `{command}`: {}",
+                                                response.content
+                                            ));
+                                        }
+                                    }
+                                    Ok(())
+                                };
+                                replay(&mut stream)?;
+                                if preparation_command == "kata-analyze" {
+                                    let command = format!("kata-set-param maxVisits {max_visits}");
+                                    let response = stream
+                                        .send_request(&command, setup_timeout)
+                                        .map_err(|error| error.to_string())?;
+                                    if !response.success {
+                                        return Err(format!(
+                                            "engine rejected setup command `{command}`: {}",
+                                            response.content
+                                        ));
+                                    }
+                                }
+                                stream
+                                    .send_command(&full_command)
+                                    .map_err(|error| error.to_string())?;
+                                Ok(stream)
+                            });
+                            result
+                        })
+                        .await;
+                    let Ok(mut stream) = preparation else {
+                        let error = preparation
+                            .err()
+                            .unwrap_or_else(|| "unknown analysis preparation failure".to_owned());
+                        let _ = shell_weak.update(&mut cx, |shell, cx| {
+                            shell.analysis_finished(
+                                &stream_run,
+                                sabaki_host::AnalysisRunOutcome::Failed(format!(
+                                    "analysis preparation failed: {error}"
+                                )),
+                                cx,
+                            );
+                        });
+                        return;
+                    };
                     let mut pending: Vec<sabaki_host::AnalysisEntry> = Vec::new();
                     let mut last_flush = Instant::now();
+                    let mut target_reached = false;
+                    let mut outcome = sabaki_host::AnalysisRunOutcome::Failed(
+                        "analysis process ended without a completed result".to_owned(),
+                    );
                     loop {
-                        if stream_run.should_stop() {
+                        if target_reached || stream_run.should_stop() {
                             if stream_run.is_current() {
-                                let _ = stream.send_command("stop");
+                                let (next_stream, _) = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        let mut stream = stream;
+                                        let result = stream.send_command("stop");
+                                        (stream, result)
+                                    })
+                                    .await;
+                                stream = next_stream;
                             }
                             // Drain the stream tail so the final search
                             // results land in the analysis set.
                             let drain_deadline = Instant::now() + Duration::from_secs(3);
                             let mut saw_header = false;
                             while Instant::now() < drain_deadline {
-                                match stream.recv_line_timeout(Duration::from_millis(50)) {
+                                let (next_stream, next_line) = cx
+                                    .background_executor()
+                                    .spawn(async move {
+                                        let mut stream = stream;
+                                        let line =
+                                            stream.recv_line_timeout(Duration::from_millis(50));
+                                        (stream, line)
+                                    })
+                                    .await;
+                                stream = next_stream;
+                                match next_line {
                                     Some(line) => {
                                         let trimmed = line.trim();
                                         if trimmed.starts_with('=') || trimmed.starts_with('?') {
@@ -1299,11 +1910,8 @@ impl ShellApp {
                                             }
                                             continue;
                                         }
-                                        if let Some(entry) =
-                                            parse_stream_line(&task_command, trimmed)
-                                        {
-                                            pending.push(entry);
-                                        }
+                                        pending
+                                            .extend(parse_stream_entries(&task_command, trimmed));
                                     }
                                     None => {
                                         if stream.is_stream_closed() {
@@ -1312,9 +1920,23 @@ impl ShellApp {
                                     }
                                 }
                             }
+                            outcome = if stream_run.should_dispose() {
+                                sabaki_host::AnalysisRunOutcome::Cancelled
+                            } else {
+                                sabaki_host::AnalysisRunOutcome::Completed
+                            };
                             break;
                         }
-                        if let Some(line) = stream.recv_line_timeout(Duration::from_millis(50)) {
+                        let (next_stream, next_line) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut stream = stream;
+                                let line = stream.recv_line_timeout(Duration::from_millis(50));
+                                (stream, line)
+                            })
+                            .await;
+                        stream = next_stream;
+                        if let Some(line) = next_line {
                             let trimmed = line.trim();
                             // Skip GTP response headers and blank terminators;
                             // only `info` records feed the analysis set.
@@ -1324,18 +1946,26 @@ impl ShellApp {
                             {
                                 continue;
                             }
-                            if let Some(entry) = parse_stream_line(&task_command, trimmed) {
-                                let proxy_completion = task_command == "kata-analyze"
-                                    && !entry.is_during_search
-                                    && trimmed.starts_with('{');
-                                pending.push(entry);
-                                // Official KataGo GTP `kata-analyze` emits
-                                // continuous `info move` records without a
-                                // completion sentinel. JSON proxy adapters
-                                // retain their explicit completion record.
-                                if proxy_completion {
-                                    break;
-                                }
+                            let entries = parse_stream_entries(&task_command, trimmed);
+                            let proxy_completion = task_command == "kata-analyze"
+                                && trimmed.starts_with('{')
+                                && entries.iter().any(|entry| !entry.is_during_search);
+                            target_reached = proxy_completion
+                                || (max_visits > 0
+                                    && entries
+                                        .iter()
+                                        .map(|entry| entry.visits)
+                                        .max()
+                                        .unwrap_or_default()
+                                        >= max_visits);
+                            pending.extend(entries);
+                            // Official KataGo GTP `kata-analyze` emits
+                            // continuous `info move` records without a
+                            // completion sentinel. JSON proxy adapters
+                            // retain their explicit completion record.
+                            if proxy_completion {
+                                outcome = sabaki_host::AnalysisRunOutcome::Completed;
+                                break;
                             }
                         } else if stream.is_stream_closed() {
                             let _ = shell_weak.update(&mut cx, |shell, cx| {
@@ -1361,8 +1991,14 @@ impl ShellApp {
                             shell.push_analysis_batch(&stream_run, batch, cx)
                         });
                     }
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move {
+                            drop(stream);
+                        })
+                        .await;
                     let _ = shell_weak.update(&mut cx, |shell, cx| {
-                        shell.analysis_finished(&stream_run, cx)
+                        shell.analysis_finished(&stream_run, outcome, cx)
                     });
                 }
             },
@@ -1389,18 +2025,19 @@ impl ShellApp {
     /// compatible `SBKV` (Black percent) and finite `SBKS` (Black score lead).
     /// The tracked node/player gate prevents a late streaming batch from
     /// annotating a node reached after the analysis request started.
-    fn persist_analysis_snapshot(&mut self) {
+    fn persist_analysis_snapshot(&mut self) -> bool {
         let snapshot = self.host.snapshot();
         let Some(player) = self.analysis_run.player_for_node(&snapshot.current_node_id) else {
-            return;
+            return false;
         };
-        let Some(entry) = self
+        let completed_entries = self
             .analysis
             .iter()
             .filter(|entry| !entry.is_during_search)
-            .max_by_key(|entry| entry.visits)
-        else {
-            return;
+            .cloned()
+            .collect::<Vec<_>>();
+        let Some(entry) = best_analysis_entry(&completed_entries) else {
+            return false;
         };
         let mut events = RecordingSink;
         for (property, value) in analysis_sgf_properties(entry, player) {
@@ -1416,10 +2053,11 @@ impl ShellApp {
                 )
                 .is_err()
             {
-                return;
+                return false;
             }
         }
         self.synchronize_recovery();
+        true
     }
 
     /// Stores an analysis set and refreshes the best-move marker and status.
@@ -1428,7 +2066,6 @@ impl ShellApp {
         let board_size = self.host.snapshot().board.width;
         self.analysis_best_move = best_analysis_move(&self.analysis, board_size)
             .map(|(column, row)| Vertex { column, row });
-        self.persist_analysis_snapshot();
         self.status = format!(
             "analysis: {} candidates{}",
             self.analysis.len(),
@@ -1444,45 +2081,147 @@ impl ShellApp {
     fn finish_streaming_analysis(
         &mut self,
         run: &sabaki_host::AnalysisRunTicket,
-        mut session: sabaki_host::EngineSession<sabaki_host::ProcessGtpTransport>,
+        session: sabaki_host::EngineSession<sabaki_host::ProcessGtpTransport>,
+        outcome: sabaki_host::AnalysisRunOutcome,
         cx: &mut Context<Self>,
     ) {
         if self.analysis_run.should_dispose(run) {
-            let _ = session.stop();
-            self.analysis_finished(run, cx);
+            self.engine_controller
+                .discard_analysis_lease(EngineRole::Analysis);
+            self.analysis_finished(run, sabaki_host::AnalysisRunOutcome::Cancelled, cx);
             return;
         }
         if self.analysis_run.replay_required(run) {
-            let board_size = self.host.snapshot().board.width;
-            let moves = self.host.snapshot().moves.clone();
-            if let Err(error) = sabaki_host::EngineController::<
-                EngineRole,
-                sabaki_host::ProcessGtpTransport,
-            >::replay_leased(&mut session, board_size, &moves)
-            {
-                let _ = session.stop();
-                self.analysis_run.clear_replay(run);
-                self.analysis_finished(run, cx);
-                self.status = format!("analysis engine replay failed: {error}").into();
-                return;
+            // A stale worker must never replay on the foreground thread. The
+            // next analysis request captures the current position and performs
+            // replay in its background preparation phase.
+            self.engine_controller
+                .return_analysis_lease(EngineRole::Analysis, session);
+            self.analysis_run.clear_replay(run);
+            self.analysis_finished(run, sabaki_host::AnalysisRunOutcome::Cancelled, cx);
+            let restart = self.restart_analysis_after_position_change;
+            self.restart_analysis_after_position_change = false;
+            if restart {
+                self.status = "analysis stopped; replaying the new position…".into();
+                self.start_analysis(cx);
+            } else {
+                self.status = "analysis stopped; next run will replay the new position".into();
             }
-            // The leased session was replayed to the newest position; keep the
-            // reuse tracking in sync so the next run skips a redundant replay.
-            self.last_analysis_node = Some(self.host.snapshot().current_node_id.clone());
+            return;
         }
         self.analysis_run.clear_replay(run);
         self.engine_controller
             .return_analysis_lease(EngineRole::Analysis, session);
-        self.analysis_finished(run, cx);
+        self.analysis_finished(run, outcome, cx);
     }
 
     /// Clears the running-analysis state once the matching streaming task ends.
-    fn analysis_finished(&mut self, run: &sabaki_host::AnalysisRunTicket, cx: &mut Context<Self>) {
+    fn analysis_finished(
+        &mut self,
+        run: &sabaki_host::AnalysisRunTicket,
+        mut outcome: sabaki_host::AnalysisRunOutcome,
+        cx: &mut Context<Self>,
+    ) {
         if !self.analysis_run.finish(run) {
+            // No newer analysis can start until this worker has completed, so
+            // clearing the task here releases the reconnect guard as well.
+            self.analysis_task = None;
             return;
         }
         self.analysis_task = None;
-        self.status = "analysis finished".into();
+        let analysis_was_trial = self.active_analysis_trial_move.take().is_some();
+        if matches!(outcome, sabaki_host::AnalysisRunOutcome::Completed)
+            && !analysis_was_trial
+            && !self.persist_analysis_snapshot()
+        {
+            outcome = sabaki_host::AnalysisRunOutcome::Failed(
+                "analysis completed without a persistable candidate".to_owned(),
+            );
+        }
+
+        if self.batch_review_state.is_some()
+            && matches!(outcome, sabaki_host::AnalysisRunOutcome::Completed)
+        {
+            let next_target = self
+                .batch_review_state
+                .as_mut()
+                .and_then(|state| state.advance().cloned());
+            if let Some(next_target) = next_target {
+                if let Some(progress) = self.batch_review_progress.as_mut() {
+                    progress.current_move = self
+                        .batch_review_state
+                        .as_ref()
+                        .map_or(progress.current_move, |state| state.next_index + 1);
+                }
+                self.navigate_to_node_with_batch_policy(next_target, false, cx);
+                self.status = format!(
+                    "全盘复盘：正在分析第 {}/{} 手",
+                    self.batch_review_progress
+                        .map_or(0, |progress| progress.current_move),
+                    self.batch_review_progress
+                        .map_or(0, |progress| progress.total_moves),
+                )
+                .into();
+                cx.notify();
+                self.start_analysis(cx);
+                return;
+            }
+
+            let original_node = self
+                .batch_review_state
+                .as_ref()
+                .map(|state| state.original_node_id.clone());
+            self.batch_review_state = None;
+            self.batch_review_progress = None;
+            if let Some(original_node) = original_node
+                && self.host.snapshot().current_node_id != original_node
+            {
+                self.navigate_to_node_with_batch_policy(original_node, false, cx);
+            }
+            self.status = "全盘复盘完成".into();
+            self.show_toast("✅ 全盘复盘完成".to_owned(), cx);
+            cx.notify();
+            return;
+        }
+
+        if self.batch_review_state.is_some() {
+            let original_node = self
+                .batch_review_state
+                .as_ref()
+                .map(|state| state.original_node_id.clone());
+            self.batch_review_state = None;
+            self.batch_review_progress = None;
+            if let Some(original_node) = original_node
+                && self.host.snapshot().current_node_id != original_node
+            {
+                self.navigate_to_node_with_batch_policy(original_node, false, cx);
+            }
+            let message = match &outcome {
+                sabaki_host::AnalysisRunOutcome::Cancelled => "全盘复盘已取消".to_owned(),
+                sabaki_host::AnalysisRunOutcome::Failed(error) => {
+                    format!("全盘复盘失败: {error}")
+                }
+                sabaki_host::AnalysisRunOutcome::Completed => unreachable!(),
+            };
+            self.status = message.clone().into();
+            self.show_toast(message, cx);
+            cx.notify();
+            return;
+        }
+
+        if analysis_was_trial && matches!(outcome, sabaki_host::AnalysisRunOutcome::Completed) {
+            self.last_analysis_trial_move = self.trial_move.clone();
+        }
+        self.status = match &outcome {
+            sabaki_host::AnalysisRunOutcome::Completed if analysis_was_trial => {
+                "试下分析完成：已更新 AI 应对".into()
+            }
+            sabaki_host::AnalysisRunOutcome::Completed => "analysis finished".into(),
+            sabaki_host::AnalysisRunOutcome::Cancelled => "analysis cancelled".into(),
+            sabaki_host::AnalysisRunOutcome::Failed(error) => {
+                format!("analysis failed: {error}").into()
+            }
+        };
         cx.notify();
 
         // A maxVisits quick-switch landed while analysis was streaming; the
@@ -1490,6 +2229,9 @@ impl ShellApp {
         // the new limit on the same node (reusing KataGo's search tree).
         if self.restart_analysis_after_stop {
             self.restart_analysis_after_stop = false;
+            self.start_analysis(cx);
+        } else if self.restart_analysis_after_position_change {
+            self.restart_analysis_after_position_change = false;
             self.start_analysis(cx);
         }
     }
@@ -1501,6 +2243,8 @@ impl ShellApp {
     /// Requests the streaming analysis task to stop and emit its final
     /// candidates.
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
+        self.analysis_enabled = false;
+        self.restart_analysis_after_position_change = false;
         if self.analysis_task.is_some() {
             self.analysis_run.request_stop();
             self.status = "stopping analysis".into();
@@ -1539,38 +2283,98 @@ impl ShellApp {
     }
 
     fn start_whole_game_review(&mut self, cx: &mut Context<Self>) {
-        if self.batch_review_progress.is_some_and(|p| p.is_running) {
+        if self
+            .batch_review_progress
+            .is_some_and(|progress| progress.is_running)
+        {
             self.stop_whole_game_review(cx);
             return;
         }
-
-        if !self.engine_controller.is_attached(EngineRole::Analysis) {
-            self.on_engine_connect(EngineRole::Analysis, cx);
-            if !self.engine_controller.is_attached(EngineRole::Analysis) {
-                self.show_toast("请先连接 KataGo 分析引擎".to_owned(), cx);
-                return;
-            }
+        if self.analysis_task.is_some()
+            || self
+                .engine_connect_tasks
+                .contains_key(&EngineRole::Analysis)
+            || self
+                .engine_command_tasks
+                .contains_key(&EngineRole::Analysis)
+            || self.engine_controller.is_streaming(EngineRole::Analysis)
+        {
+            self.show_toast("请先停止当前引擎操作，再开始全盘复盘".to_owned(), cx);
+            return;
         }
 
         let snapshot = self.host.snapshot();
-        let total_moves = snapshot.moves.len();
+        let lineage = sabaki_host::active_lineage_moves(&snapshot);
+        if lineage.is_empty() {
+            self.status = "当前棋谱没有可复盘的落子".into();
+            self.show_toast("当前棋谱没有可复盘的落子".to_owned(), cx);
+            cx.notify();
+            return;
+        }
+        let node_ids = sabaki_host::active_lineage_review_nodes(&snapshot);
+        self.batch_review_state = BatchReviewState::new(snapshot.current_node_id.clone(), node_ids);
         self.batch_review_progress = Some(sabaki_host::BatchReviewProgress {
             current_move: 1,
-            total_moves: total_moves.max(1),
+            total_moves: lineage.len() + 1,
             is_running: true,
         });
-
         self.show_toast(
-            format!("⏩ 开启全盘 AI 复盘分析 (共 {} 手)...", total_moves),
+            format!("⏩ 开启全盘 AI 复盘分析 (共 {} 手)...", lineage.len()),
             cx,
         );
+
+        if !self.engine_controller.is_attached(EngineRole::Analysis) {
+            let role_generation = self
+                .engine_generations
+                .get(&EngineRole::Analysis)
+                .copied()
+                .unwrap_or_default()
+                .wrapping_add(1);
+            self.pending_analysis_request = Some(PendingAnalysisRequest {
+                role: EngineRole::Analysis,
+                role_generation,
+                node_id: snapshot.current_node_id.clone(),
+            });
+            self.on_engine_connect(EngineRole::Analysis, cx);
+            self.show_toast("正在连接 KataGo；连接完成后将开始全盘复盘".to_owned(), cx);
+            return;
+        }
+
+        let first_node = self
+            .batch_review_state
+            .as_ref()
+            .and_then(|state| state.node_ids.first())
+            .cloned();
+        if let Some(first_node) = first_node
+            && snapshot.current_node_id != first_node
+        {
+            self.navigate_to_node_with_batch_policy(first_node, false, cx);
+        }
         self.start_analysis(cx);
         cx.notify();
     }
 
     fn stop_whole_game_review(&mut self, cx: &mut Context<Self>) {
-        self.stop_analysis(cx);
+        self.cancel_whole_game_review(true, cx);
+    }
+
+    fn cancel_whole_game_review(&mut self, restore_original: bool, cx: &mut Context<Self>) {
+        let original_node = restore_original.then(|| {
+            self.batch_review_state
+                .as_ref()
+                .map(|state| state.original_node_id.clone())
+        });
+        if self.analysis_task.is_some() {
+            self.analysis_run.cancel_and_dispose();
+        }
+        self.pending_analysis_request = None;
+        self.batch_review_state = None;
         self.batch_review_progress = None;
+        if let Some(Some(original_node)) = original_node
+            && self.host.snapshot().current_node_id != original_node
+        {
+            self.navigate_to_node_with_batch_policy(original_node, false, cx);
+        }
         self.show_toast("全盘复盘已停止".to_owned(), cx);
         cx.notify();
     }
@@ -1593,16 +2397,19 @@ impl ShellApp {
         self.trigger_engine_genmove(target_role, color, cx);
     }
 
-    /// Asks the engine attached to the specified role for a move, places it,
-    /// and synchronizes all sessions.
+    /// Asks the engine attached to the specified role for a move without
+    /// blocking GPUI while KataGo searches.
     fn trigger_engine_genmove(&mut self, role: EngineRole, color: Color, cx: &mut Context<Self>) {
-        let color_str = match color {
-            Color::Black => "B",
-            Color::White => "W",
-        };
-        let response = match self.engine_controller.request_move(role, color) {
-            Ok(response) => Ok(response),
-            Err(sabaki_host::EngineControllerError::Detached) => {
+        if self.engine_command_tasks.contains_key(&role)
+            || self.engine_controller.is_streaming(role)
+        {
+            self.status = format!("{} engine is busy", role.label()).into();
+            cx.notify();
+            return;
+        }
+        let session = match self.engine_controller.lease_for_command(role) {
+            Ok(session) => session,
+            Err(_) => {
                 let name = self.engine_roles.get(role).unwrap_or_default();
                 self.status = format!(
                     "attach selected {} engine {name} before generating a move",
@@ -1612,49 +2419,117 @@ impl ShellApp {
                 cx.notify();
                 return;
             }
-            Err(error) => Err(error.to_string()),
         };
-        match response {
-            Ok(response) => {
-                self.record_engine_log(entry_for_response(
-                    format!("{}: genmove {color_str}", role.label()),
-                    &response,
-                ));
-                if !response.success {
-                    self.status = format!(
-                        "{} engine genmove failed: {}",
-                        role.label(),
-                        response.content
-                    )
-                    .into();
-                    cx.notify();
-                    return;
-                }
-                let board_size = self.host.snapshot().board.width;
-                let vertex = parse_gtp_vertex(board_size, response.content.trim())
-                    .map(|(column, row)| Vertex { column, row });
-                let mut events = RecordingSink;
-                match self.host.play_move(color, vertex, &mut events) {
-                    Ok(_) => {
-                        self.last_vertex = vertex;
-                        self.status =
-                            format!("{} AI played {}", role.label(), response.content.trim())
-                                .into();
-                        self.synchronize_recovery();
-                        self.play_sound_if_enabled(if vertex.is_some() {
-                            SoundCue::StonePlaced
-                        } else {
-                            SoundCue::Pass
-                        });
-                        self.sync_engine_position(Some(role), color, vertex);
-                    }
-                    Err(error) => self.status = format!("engine move rejected: {error}").into(),
-                }
-            }
-            Err(error) => {
-                self.status = format!("{} engine genmove failed: {error}", role.label()).into();
-            }
+        let color_str = match color {
+            Color::Black => "B",
+            Color::White => "W",
         }
+        .to_owned();
+        self.status = format!("{} engine is thinking…", role.label()).into();
+        let command_generation = self
+            .engine_generations
+            .get(&role)
+            .copied()
+            .unwrap_or_default();
+        let weak = cx.entity().downgrade();
+        let engine_color = color_str.clone();
+        self.engine_command_tasks.insert(
+            role,
+            cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let (session, result) = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut session = session;
+                                let result = session.generate_move(&engine_color);
+                                (session, result)
+                            })
+                            .await;
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            shell.engine_command_tasks.remove(&role);
+                            if shell
+                                .engine_generations
+                                .get(&role)
+                                .copied()
+                                .unwrap_or_default()
+                                != command_generation
+                            {
+                                shell.engine_controller.discard_command_lease(role);
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        let mut session = session;
+                                        let _ = session.stop();
+                                    })
+                                    .detach();
+                                return;
+                            }
+                            match result {
+                                Ok(response) if response.success => {
+                                    let response_text = response.content.trim().to_owned();
+                                    shell.engine_controller.return_command_lease(role, session);
+                                    shell.record_engine_log(entry_for_response(
+                                        format!("{}: genmove {}", role.label(), color_str),
+                                        &response,
+                                    ));
+                                    let board_size = shell.host.snapshot().board.width;
+                                    let vertex = parse_gtp_vertex(board_size, &response_text)
+                                        .map(|(column, row)| Vertex { column, row });
+                                    let mut events = RecordingSink;
+                                    match shell.host.play_move(color, vertex, &mut events) {
+                                        Ok(_) => {
+                                            shell.last_vertex = vertex;
+                                            shell.status = format!(
+                                                "{} AI played {response_text}",
+                                                role.label()
+                                            )
+                                            .into();
+                                            shell.synchronize_recovery();
+                                            shell.play_sound_if_enabled(if vertex.is_some() {
+                                                SoundCue::StonePlaced
+                                            } else {
+                                                SoundCue::Pass
+                                            });
+                                            shell.sync_engine_position(
+                                                Some(role),
+                                                color,
+                                                vertex,
+                                                cx,
+                                            );
+                                        }
+                                        Err(error) => {
+                                            shell.status =
+                                                format!("engine move rejected: {error}").into()
+                                        }
+                                    }
+                                }
+                                Ok(response) => {
+                                    shell.engine_controller.return_command_lease(role, session);
+                                    shell.record_engine_log(entry_for_response(
+                                        format!("{}: genmove {}", role.label(), color_str),
+                                        &response,
+                                    ));
+                                    shell.status = format!(
+                                        "{} engine genmove failed: {}",
+                                        role.label(),
+                                        response.content
+                                    )
+                                    .into();
+                                }
+                                Err(error) => {
+                                    shell.engine_controller.discard_command_lease(role);
+                                    shell.status =
+                                        format!("{} engine genmove failed: {error}", role.label())
+                                            .into();
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+            ),
+        );
         cx.notify();
     }
 
@@ -2038,7 +2913,7 @@ impl ShellApp {
         base_dir: &Path,
         tier: sabaki_host::KataGoModelTier,
         starting_message: &'static str,
-        success_message: &'static str,
+        _success_message: &'static str,
         cx: &mut Context<Self>,
     ) {
         self.show_toast(starting_message, cx);
@@ -2058,11 +2933,13 @@ impl ShellApp {
                         .await;
                     weak.update(&mut cx, |shell, cx| match result {
                         Ok(path) => {
+                            let mut executable_exists = false;
                             if let Ok(env) = sabaki_host::ensure_katago_environment(
                                 &base_dir_for_task,
                                 tier,
                                 Some(&path),
                             ) {
+                                executable_exists = env.executable_exists;
                                 let engine_name = env.engine_record.name.clone();
                                 shell.engine_store.upsert(env.engine_record.clone());
                                 shell
@@ -2079,10 +2956,16 @@ impl ShellApp {
                                     shell.on_engine_connect(EngineRole::Analysis, cx);
                                 }
                             }
-                            shell.status =
+                            let ready_message = if executable_exists {
                                 format!("KataGo model installed and ready: {}", path.display())
-                                    .into();
-                            shell.show_toast(success_message, cx);
+                            } else {
+                                format!(
+                                    "KataGo model downloaded: {}. Install/configure the KataGo executable before analysis.",
+                                    path.display()
+                                )
+                            };
+                            shell.status = ready_message.clone().into();
+                            shell.show_toast(ready_message, cx);
                         }
                         Err(error) => {
                             let message = format!("⚠️ 权重模型下载失败: {error}");
@@ -2339,11 +3222,14 @@ impl ShellApp {
     /// Stops every role session and prevents a leased Analysis session from
     /// returning after its worker exits.
     fn disconnect_all_engine_sessions(&mut self) {
+        for generation in self.engine_generations.values_mut() {
+            *generation = generation.wrapping_add(1);
+        }
+        self.engine_connect_tasks.clear();
+        self.engine_command_tasks.clear();
+        self.pending_analysis_request = None;
         if self.analysis_task.is_some() {
             self.analysis_run.cancel_and_dispose();
-            if let Some(task) = self.analysis_task.take() {
-                task.detach();
-            }
         }
         self.engine_controller.detach_all();
         self.active_console_role = None;
@@ -2611,7 +3497,7 @@ impl ShellApp {
                 .into();
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::Pass);
-                self.sync_engine_position(None, color, None);
+                self.sync_engine_position(None, color, None, cx);
             }
             Err(error) => self.status = format!("pass rejected: {error}").into(),
         }
@@ -2763,6 +3649,20 @@ impl ShellApp {
         if event.button == MouseButton::Left {
             self.finish_split_drag(cx);
         }
+    }
+
+    fn toggle_view_setting(&mut self, key: &str, label: &str, cx: &mut Context<Self>) {
+        let current = self.settings.get_bool(key).unwrap_or(false);
+        if let Err(error) = self.settings.set(key, serde_json::json!(!current)) {
+            self.status = format!("{label} not accepted: {error}").into();
+        } else if let Err(error) =
+            sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+        {
+            self.status = format!("{label} not persisted: {error}").into();
+        } else {
+            self.status = format!("{label}: {}", if !current { "shown" } else { "hidden" }).into();
+        }
+        cx.notify();
     }
 
     fn toggle_sidebar_setting(&mut self, key: &str, label: &str, cx: &mut Context<Self>) {
@@ -3059,6 +3959,22 @@ impl ShellApp {
     }
 
     fn navigate_to_node(&mut self, target: sabaki_domain_core::NodeId, cx: &mut Context<Self>) {
+        self.navigate_to_node_with_batch_policy(target, true, cx);
+    }
+
+    fn navigate_to_node_with_batch_policy(
+        &mut self,
+        target: sabaki_domain_core::NodeId,
+        stop_batch: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if stop_batch
+            && self
+                .batch_review_progress
+                .is_some_and(|progress| progress.is_running)
+        {
+            self.cancel_whole_game_review(false, cx);
+        }
         let transaction = sabaki_domain_core::GameTransaction {
             schema_version: sabaki_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
             transaction_type: sabaki_domain_core::GameTransactionType::Navigate,
@@ -3135,7 +4051,7 @@ impl ShellApp {
                 self.status = format!("move at {},{}", vertex.column, vertex.row).into();
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::StonePlaced);
-                self.sync_engine_position(None, color, Some(vertex));
+                self.sync_engine_position(None, color, Some(vertex), cx);
 
                 // Auto-reply if next player has an attached engine session in Play mode (Play vs AI)
                 if self.mode == GameMode::Play {
@@ -3162,9 +4078,19 @@ impl ShellApp {
         source: Option<EngineRole>,
         color: Color,
         vertex: Option<Vertex>,
+        cx: &mut Context<Self>,
     ) {
+        self.hovered_candidate_vertex = None;
+        self.trial_move = None;
+        self.active_analysis_trial_move = None;
+        self.analysis.clear();
+        self.analysis_best_move = None;
+        let start_idle_analysis = self.analysis_task.is_none() && self.analysis_enabled;
         if self.analysis_task.is_some() {
+            self.restart_analysis_after_position_change = self.analysis_enabled;
             self.analysis_run.request_replay_and_stop();
+        } else {
+            self.restart_analysis_after_position_change = false;
         }
         let errors = self.engine_controller.synchronize_move(
             source,
@@ -3173,6 +4099,9 @@ impl ShellApp {
         );
         for (role, error) in errors {
             self.status = format!("{} engine sync failed: {error}", role.label()).into();
+        }
+        if start_idle_analysis {
+            self.start_analysis(cx);
         }
     }
 
@@ -3303,8 +4232,20 @@ impl ShellApp {
     }
 
     fn on_board_hover(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
-        if self.hovered_vertex != Some(vertex) {
-            self.hovered_vertex = Some(vertex);
+        let candidate_vertex = self.analysis.iter().find_map(|entry| {
+            let parsed = entry
+                .vertex
+                .as_deref()
+                .and_then(|value| parse_gtp_vertex(self.host.snapshot().board.width, value))?;
+            (parsed == (vertex.column, vertex.row))
+                .then(|| entry.vertex.clone())
+                .flatten()
+        });
+        let changed = self.hovered_vertex != Some(vertex)
+            || self.hovered_candidate_vertex != candidate_vertex;
+        self.hovered_vertex = Some(vertex);
+        self.hovered_candidate_vertex = candidate_vertex;
+        if changed {
             cx.notify();
         }
     }
@@ -3677,6 +4618,52 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn set_hovered_candidate(&mut self, vertex: Option<String>, cx: &mut Context<Self>) {
+        if self.hovered_candidate_vertex != vertex {
+            self.hovered_candidate_vertex = vertex;
+            cx.notify();
+        }
+    }
+
+    fn on_trial_candidate(&mut self, vertex: &str, cx: &mut Context<Self>) {
+        let snapshot = self.host.snapshot();
+        let Some((column, row)) = parse_gtp_vertex(snapshot.board.width, vertex) else {
+            self.status = format!("cannot trial invalid candidate {vertex}").into();
+            cx.notify();
+            return;
+        };
+        let trial_move = MoveDto {
+            color: snapshot.board.next_player,
+            vertex: Some(Vertex { column, row }),
+        };
+        self.trial_move = Some(trial_move);
+        self.hovered_candidate_vertex = None;
+        self.analysis.clear();
+        self.analysis_best_move = None;
+        self.analysis_enabled = true;
+        self.status = format!("试下 {vertex}：正在分析 AI 应对…").into();
+        if self.analysis_task.is_some() {
+            // The existing worker owns the engine. Stop it first, then replay
+            // this ephemeral move once the lease has returned.
+            self.restart_analysis_after_position_change = true;
+            self.analysis_run.request_replay_and_stop();
+        } else {
+            self.start_analysis(cx);
+        }
+    }
+
+    fn clear_trial_move(&mut self, cx: &mut Context<Self>) {
+        if self.trial_move.take().is_some() {
+            self.active_analysis_trial_move = None;
+            self.last_analysis_trial_move = None;
+            self.restart_analysis_after_position_change = false;
+            self.analysis.clear();
+            self.analysis_best_move = None;
+            self.status = "已退出试下局面".into();
+            cx.notify();
+        }
+    }
+
     fn on_branch_candidate_pv(&mut self, pv: &[String], cx: &mut Context<Self>) {
         if pv.is_empty() {
             return;
@@ -3922,9 +4909,21 @@ impl Render for ShellApp {
         let _availability = navigation_availability(&snapshot);
         let _position = position_label(&snapshot);
         let variation_layout = build_variation_tree_layout(&snapshot);
-        let live_winrate = (!self.analysis.is_empty())
-            .then(|| best_analysis_winrate(&self.analysis, snapshot.board.next_player));
-        let winrate_points = winrate_history(&snapshot, live_winrate, snapshot.board.next_player);
+        // `best_analysis_winrate` already returns Black perspective; the graph
+        // history builder performs the same conversion for White-to-play data,
+        // so feed it the engine's raw player-to-move fraction to avoid a double
+        // conversion.
+        let live_player_winrate =
+            best_analysis_entry(&self.analysis).map(|entry| entry.winrate.clamp(0.0, 1.0));
+        let live_score_lead = best_analysis_entry(&self.analysis)
+            .and_then(|entry| entry.score_lead)
+            .filter(|lead| lead.is_finite());
+        let winrate_points = winrate_history(
+            &snapshot,
+            live_player_winrate,
+            live_score_lead,
+            snapshot.board.next_player,
+        );
         let winrate_metric =
             WinrateGraphMetric::from_setting(self.settings.get_str("board.analysis_type"));
         let winrate_plot_points = graph_plot_points(
@@ -4108,6 +5107,12 @@ impl Render for ShellApp {
                             .border_l_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.panel))
+                            .child(panels::render_analysis_preview_panel(
+                                &snapshot,
+                                &self.theme,
+                                self,
+                                cx,
+                            ))
                             .child(
                                 if self
                                     .settings
@@ -4801,13 +5806,13 @@ fn main() {
         let shell_toggle_coords = shell.clone();
         cx.on_action(move |_: &ToggleCoordinates, cx| {
             shell_toggle_coords.update(cx, |shell, cx| {
-                shell.toggle_sidebar_setting("view.show_coordinates", "board coordinates", cx)
+                shell.toggle_view_setting("view.show_coordinates", "board coordinates", cx)
             });
         });
         let shell_toggle_move_nums = shell.clone();
         cx.on_action(move |_: &ToggleMoveNumbers, cx| {
             shell_toggle_move_nums.update(cx, |shell, cx| {
-                shell.toggle_sidebar_setting("view.show_move_numbers", "move numbers", cx)
+                shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx)
             });
         });
         let shell_play_mode = shell.clone();
@@ -5319,6 +6324,51 @@ mod frontend_smoke {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp config dir is created");
         dir
+    }
+
+    #[derive(Default)]
+    struct BackgroundResponsivenessProbe {
+        foreground_steps: usize,
+        background_finished: bool,
+        task: Option<gpui::Task<()>>,
+    }
+
+    impl BackgroundResponsivenessProbe {
+        fn start(&mut self, cx: &mut gpui::Context<Self>) {
+            self.foreground_steps += 1;
+            let weak = cx.entity().downgrade();
+            self.task = Some(cx.spawn(
+                move |_: gpui::WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        cx.background_executor()
+                            .spawn(async {
+                                std::thread::sleep(std::time::Duration::from_millis(25));
+                            })
+                            .await;
+                        let _ = weak.update(&mut cx, |probe, _| {
+                            probe.background_finished = true;
+                        });
+                    }
+                },
+            ));
+        }
+    }
+
+    #[test]
+    fn delayed_analysis_like_background_work_does_not_block_foreground_updates() {
+        let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(17));
+        let mut cx = TestAppContext::build(dispatcher, None);
+        let probe = cx.new(|_| BackgroundResponsivenessProbe::default());
+        probe.update(&mut cx, |probe, cx| probe.start(cx));
+        probe.update(&mut cx, |probe, _| probe.foreground_steps += 1);
+        probe.update(&mut cx, |probe, _| {
+            assert_eq!(probe.foreground_steps, 2);
+        });
+        cx.run_until_parked();
+        probe.update(&mut cx, |probe, _| {
+            assert!(probe.background_finished);
+        });
     }
 
     #[test]

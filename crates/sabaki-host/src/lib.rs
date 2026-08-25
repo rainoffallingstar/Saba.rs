@@ -33,18 +33,20 @@ use thiserror::Error;
 
 pub use analysis::{
     AnalysisCommandSink, AnalysisEntry, parse_analysis_response, parse_kata_analysis_line,
-    parse_lz_analysis_line, replay_position_stream,
+    parse_lz_analysis_entries, parse_lz_analysis_line, replay_position_stream,
+    replay_position_stream_commands,
 };
-pub use analysis_controller::{AnalysisRunController, AnalysisRunTicket};
+pub use analysis_controller::{AnalysisRunController, AnalysisRunOutcome, AnalysisRunTicket};
 pub use autosave::{AutosaveCandidate, AutosaveInfo, AutosaveStore};
 pub use close_flow::{CloseRequestAction, decide_close_request};
 pub use engine_controller::{EngineController, EngineControllerError};
 pub use engine_session::{
-    EngineSession, EngineSessionError, EngineSessionState, GtpTransport, ProcessGtpTransport,
+    EngineCommandTimeouts, EngineSession, EngineSessionError, EngineSessionState, GtpTransport,
+    ProcessGtpTransport,
 };
 pub use engine_workflow::{
     EngineRecord, EngineStore, engine_list_from_value, engine_list_to_value,
-    validate_engine_list_value, validate_engine_record,
+    parse_engine_arguments, validate_engine_list_value, validate_engine_record,
 };
 pub use external_file::{
     ExternalFileDecision, ExternalFileObservation, ExternalFileReadError, ExternalFileReader,
@@ -103,7 +105,8 @@ pub use theme_workflow::{
     parse_hex_color, scan_theme_root, uninstall_theme,
 };
 pub use whole_game_review::{
-    BatchReviewProgress, BlunderEntry, BlunderGrade, ReviewedPosition, find_blunders,
+    BatchReviewProgress, BlunderEntry, BlunderGrade, LineageMove, ReviewedPosition,
+    active_lineage_moves, active_lineage_review_nodes, find_blunders,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

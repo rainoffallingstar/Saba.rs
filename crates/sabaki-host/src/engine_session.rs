@@ -1,6 +1,8 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
-use sabaki_domain_core::gtp::{GtpError, GtpProcessSupervisor, GtpResponse};
+use sabaki_domain_core::gtp::{
+    DEFAULT_COMMAND_TIMEOUT, GtpError, GtpProcessSupervisor, GtpResponse, SEARCH_COMMAND_TIMEOUT,
+};
 use thiserror::Error;
 
 use crate::engine_workflow::EngineRecord;
@@ -9,7 +11,16 @@ use crate::engine_workflow::EngineRecord;
 /// `GtpProcessSupervisor`; tests inject an in-memory responder so the session
 /// lifecycle can be exercised without a bundled engine binary.
 pub trait GtpTransport {
-    fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError>;
+    fn send_with_timeout(
+        &mut self,
+        name: &str,
+        arguments: Vec<String>,
+        timeout: Duration,
+    ) -> Result<GtpResponse, GtpError>;
+
+    fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
+        self.send_with_timeout(name, arguments, DEFAULT_COMMAND_TIMEOUT)
+    }
 
     /// Writes a streaming command without waiting for a complete response
     /// (e.g. `kata-analyze`); output is read with `recv_line_timeout` until
@@ -70,8 +81,13 @@ impl ProcessGtpTransport {
 }
 
 impl GtpTransport for ProcessGtpTransport {
-    fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
-        self.supervisor.send(name, arguments)
+    fn send_with_timeout(
+        &mut self,
+        name: &str,
+        arguments: Vec<String>,
+        timeout: Duration,
+    ) -> Result<GtpResponse, GtpError> {
+        self.supervisor.send_with_timeout(name, arguments, timeout)
     }
 
     fn send_streaming(&mut self, name: &str, arguments: Vec<String>) -> Result<(), GtpError> {
@@ -96,6 +112,23 @@ impl GtpTransport for ProcessGtpTransport {
 
     fn stop(&mut self) -> Result<(), std::io::Error> {
         self.supervisor.stop()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineCommandTimeouts {
+    pub ordinary: Duration,
+    pub search: Duration,
+    pub stop: Duration,
+}
+
+impl Default for EngineCommandTimeouts {
+    fn default() -> Self {
+        Self {
+            ordinary: DEFAULT_COMMAND_TIMEOUT,
+            search: SEARCH_COMMAND_TIMEOUT,
+            stop: DEFAULT_COMMAND_TIMEOUT,
+        }
     }
 }
 
@@ -126,6 +159,7 @@ pub struct EngineSession<T: GtpTransport> {
     state: EngineSessionState,
     board_size: usize,
     capabilities: BTreeSet<String>,
+    timeouts: EngineCommandTimeouts,
 }
 
 impl<T: GtpTransport> EngineSession<T> {
@@ -137,11 +171,26 @@ impl<T: GtpTransport> EngineSession<T> {
         record: &EngineRecord,
         board_size: usize,
     ) -> Result<Self, EngineSessionError> {
+        Self::start_with_timeouts(
+            transport,
+            record,
+            board_size,
+            EngineCommandTimeouts::default(),
+        )
+    }
+
+    pub fn start_with_timeouts(
+        transport: T,
+        record: &EngineRecord,
+        board_size: usize,
+        timeouts: EngineCommandTimeouts,
+    ) -> Result<Self, EngineSessionError> {
         let mut session = Self {
             transport,
             state: EngineSessionState::Stopped,
             board_size,
             capabilities: BTreeSet::new(),
+            timeouts,
         };
         let name = session.handshake_name()?;
         let version = session.handshake_version()?;
@@ -152,8 +201,17 @@ impl<T: GtpTransport> EngineSession<T> {
         Ok(session)
     }
 
+    fn send_ordinary(
+        &mut self,
+        name: &str,
+        arguments: Vec<String>,
+    ) -> Result<GtpResponse, GtpError> {
+        self.transport
+            .send_with_timeout(name, arguments, self.timeouts.ordinary)
+    }
+
     fn handshake_name(&mut self) -> Result<String, EngineSessionError> {
-        let response = self.transport.send("name", Vec::new())?;
+        let response = self.send_ordinary("name", Vec::new())?;
         if response.success {
             Ok(response.content)
         } else {
@@ -165,7 +223,7 @@ impl<T: GtpTransport> EngineSession<T> {
     }
 
     fn handshake_version(&mut self) -> Result<String, EngineSessionError> {
-        let response = self.transport.send("version", Vec::new())?;
+        let response = self.send_ordinary("version", Vec::new())?;
         if !response.success {
             return Err(EngineSessionError::Handshake(
                 "version".to_owned(),
@@ -182,7 +240,7 @@ impl<T: GtpTransport> EngineSession<T> {
     /// Engines that reject or omit the probe simply keep an empty set; the
     /// probe never fails session startup.
     fn probe_capabilities(&mut self) {
-        if let Ok(response) = self.transport.send("list_commands", Vec::new())
+        if let Ok(response) = self.send_ordinary("list_commands", Vec::new())
             && response.success
         {
             self.capabilities = response
@@ -201,7 +259,7 @@ impl<T: GtpTransport> EngineSession<T> {
             let mut tokens = line.split_whitespace();
             let command_name = tokens.next().unwrap_or_default();
             let arguments: Vec<String> = tokens.map(ToOwned::to_owned).collect();
-            let response = self.transport.send(command_name, arguments)?;
+            let response = self.send_ordinary(command_name, arguments)?;
             if !response.success {
                 return Err(EngineSessionError::Handshake(
                     command_name.to_owned(),
@@ -213,16 +271,14 @@ impl<T: GtpTransport> EngineSession<T> {
     }
 
     fn configure_board(&mut self) -> Result<(), EngineSessionError> {
-        let boardsize = self
-            .transport
-            .send("boardsize", vec![self.board_size.to_string()])?;
+        let boardsize = self.send_ordinary("boardsize", vec![self.board_size.to_string()])?;
         if !boardsize.success {
             return Err(EngineSessionError::Handshake(
                 "boardsize".to_owned(),
                 boardsize.content,
             ));
         }
-        let clear = self.transport.send("clear_board", Vec::new())?;
+        let clear = self.send_ordinary("clear_board", Vec::new())?;
         if !clear.success {
             return Err(EngineSessionError::Handshake(
                 "clear_board".to_owned(),
@@ -257,16 +313,16 @@ impl<T: GtpTransport> EngineSession<T> {
         name: &str,
         arguments: Vec<String>,
     ) -> Result<GtpResponse, GtpError> {
-        self.transport.send(name, arguments)
+        self.send_ordinary(name, arguments)
     }
 
     pub fn play(&mut self, color: &str, vertex: &str) -> Result<GtpResponse, GtpError> {
-        self.transport
-            .send("play", vec![color.to_owned(), vertex.to_owned()])
+        self.send_ordinary("play", vec![color.to_owned(), vertex.to_owned()])
     }
 
     pub fn generate_move(&mut self, color: &str) -> Result<GtpResponse, GtpError> {
-        self.transport.send("genmove", vec![color.to_owned()])
+        self.transport
+            .send_with_timeout("genmove", vec![color.to_owned()], self.timeouts.search)
     }
 
     /// Sends an analysis command (`analyze`, `lz-analyze`, `kata-analyze`,
@@ -278,7 +334,9 @@ impl<T: GtpTransport> EngineSession<T> {
         command: &str,
         arguments: Vec<String>,
     ) -> Result<Vec<crate::AnalysisEntry>, GtpError> {
-        let response = self.transport.send(command, arguments)?;
+        let response =
+            self.transport
+                .send_with_timeout(command, arguments, self.timeouts.search)?;
         if response.success {
             Ok(crate::parse_analysis_response(command, &response.content))
         } else {
@@ -290,7 +348,8 @@ impl<T: GtpTransport> EngineSession<T> {
     /// Bounded GTP `stop`; safe to run mid-stream because the supervisor now
     /// skips in-flight streaming records when collecting the response.
     pub fn stop_analysis(&mut self) -> Result<GtpResponse, GtpError> {
-        self.transport.send("stop", Vec::new())
+        self.transport
+            .send_with_timeout("stop", Vec::new(), self.timeouts.stop)
     }
 
     /// Asks a streaming search to stop without consuming its tail records.
@@ -326,15 +385,16 @@ impl<T: GtpTransport> EngineSession<T> {
     }
 
     pub fn stop(&mut self) -> Result<(), std::io::Error> {
-        self.transport.stop()?;
         self.state = EngineSessionState::Stopped;
-        Ok(())
+        self.transport.stop()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EngineSession, EngineSessionError, EngineSessionState, GtpTransport};
+    use super::{
+        EngineCommandTimeouts, EngineSession, EngineSessionError, EngineSessionState, GtpTransport,
+    };
     use crate::engine_workflow::EngineRecord;
     use sabaki_domain_core::gtp::{GtpError, GtpResponse};
     use std::{cell::RefCell, collections::BTreeMap, time::Duration};
@@ -343,10 +403,12 @@ mod tests {
     struct MockTransport {
         responses: RefCell<BTreeMap<String, GtpResponse>>,
         calls: RefCell<Vec<String>>,
+        timed_calls: RefCell<Vec<(String, Duration)>>,
         /// Streaming lines consumed by `recv_line_timeout`.
         stream_lines: RefCell<std::collections::VecDeque<String>>,
         /// When true, `send_streaming` fails with `UnsupportedStreaming`.
         streaming_unsupported: bool,
+        stop_fails: bool,
     }
 
     impl MockTransport {
@@ -376,8 +438,16 @@ mod tests {
     }
 
     impl GtpTransport for MockTransport {
-        fn send(&mut self, name: &str, _arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
+        fn send_with_timeout(
+            &mut self,
+            name: &str,
+            _arguments: Vec<String>,
+            timeout: Duration,
+        ) -> Result<GtpResponse, GtpError> {
             self.calls.borrow_mut().push(name.to_owned());
+            self.timed_calls
+                .borrow_mut()
+                .push((name.to_owned(), timeout));
             Ok(self
                 .responses
                 .borrow()
@@ -403,7 +473,11 @@ mod tests {
         }
 
         fn stop(&mut self) -> Result<(), std::io::Error> {
-            Ok(())
+            if self.stop_fails {
+                Err(std::io::Error::other("fixture cleanup failed"))
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -544,6 +618,63 @@ mod tests {
     }
 
     #[test]
+    fn command_classes_use_the_configured_timeout_policy() {
+        let transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+            ("genmove", true, "D4"),
+            (
+                "kata-analyze",
+                true,
+                "info move D4 visits 1 winrate 0.5 pv D4",
+            ),
+            ("stop", true, ""),
+        ]);
+        let timeouts = EngineCommandTimeouts {
+            ordinary: Duration::from_millis(11),
+            search: Duration::from_millis(22),
+            stop: Duration::from_millis(33),
+        };
+        let mut session = EngineSession::start_with_timeouts(
+            transport,
+            &record_with_commands(None),
+            19,
+            timeouts,
+        )
+        .expect("session starts");
+
+        session.generate_move("B").expect("search succeeds");
+        session
+            .analyze("kata-analyze", Vec::new())
+            .expect("bounded analysis succeeds");
+        session.stop_analysis().expect("analysis stops");
+
+        let calls = session.transport().timed_calls.borrow();
+        assert!(
+            calls
+                .iter()
+                .any(|(name, timeout)| name == "name" && *timeout == timeouts.ordinary)
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, timeout)| name == "genmove" && *timeout == timeouts.search)
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, timeout)| name == "kata-analyze" && *timeout == timeouts.search)
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, timeout)| name == "stop" && *timeout == timeouts.stop)
+        );
+    }
+
+    #[test]
     fn play_and_generate_move_forward_to_the_transport() {
         let transport = MockTransport::responding(&[
             ("name", true, "KataGo"),
@@ -585,6 +716,22 @@ mod tests {
                 .calls()
                 .contains(&"time_settings".to_owned())
         );
+    }
+
+    #[test]
+    fn failed_cleanup_still_makes_the_session_terminal() {
+        let mut transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+        ]);
+        transport.stop_fails = true;
+        let mut session = EngineSession::start(transport, &record_with_commands(None), 19)
+            .expect("session starts");
+
+        assert!(session.stop().is_err());
+        assert_eq!(session.state(), &EngineSessionState::Stopped);
     }
 
     #[test]

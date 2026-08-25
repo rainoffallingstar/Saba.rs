@@ -50,6 +50,7 @@ pub struct GraphPlotPoint {
 
 /// Maps a local plot X coordinate to the closest history index, matching the
 /// original graph's rounded and clamped scrub semantics.
+#[allow(dead_code)]
 pub fn graph_index_from_x(x: f32, width: f32, point_count: usize) -> Option<usize> {
     (point_count > 0).then(|| {
         if point_count == 1 || width <= 0.0 {
@@ -157,10 +158,13 @@ fn black_winrate_from_node(snapshot: &GameSnapshot, node_id: &str) -> Option<f64
 }
 
 /// Builds root-to-current history. A live candidate augments the current point
-/// only when the SGF does not already carry a persisted `SBKV` value.
+/// only when the SGF does not already carry a persisted value. `live_winrate`
+/// and `live_score_lead` are both from the engine's player-to-move perspective;
+/// this function converts them to Black perspective for the graph.
 pub fn winrate_history(
     snapshot: &GameSnapshot,
     live_winrate: Option<f64>,
+    live_score_lead: Option<f64>,
     live_player: Color,
 ) -> Vec<WinratePoint> {
     let mut path = Vec::new();
@@ -186,7 +190,14 @@ pub fn winrate_history(
                     })
                     .flatten()
             });
-            let black_score_lead = finite_property(snapshot, &node_id, "SBKS");
+            let black_score_lead = finite_property(snapshot, &node_id, "SBKS").or_else(|| {
+                is_current
+                    .then(|| match live_player {
+                        Color::Black => live_score_lead,
+                        Color::White => live_score_lead.map(|value| -value),
+                    })
+                    .flatten()
+            });
             WinratePoint {
                 node_id,
                 move_number,
@@ -211,10 +222,11 @@ mod tests {
         let snapshot = GameDocument::from_sgf("(;SZ[5];B[aa]SBKV[0.6];W[bb])")
             .unwrap()
             .snapshot();
-        let points = winrate_history(&snapshot, Some(0.3), Color::White);
+        let points = winrate_history(&snapshot, Some(0.3), Some(1.5), Color::White);
         assert_eq!(points.len(), 3);
         assert_eq!(points[1].black_winrate, Some(0.6));
         assert_eq!(points[2].black_winrate, Some(0.7));
+        assert_eq!(points[2].black_score_lead, Some(-1.5));
         assert!(points[2].is_current);
     }
 
@@ -223,7 +235,7 @@ mod tests {
         let snapshot = GameDocument::from_sgf("(;SZ[5];B[aa]SBKV[60];W[bb])")
             .unwrap()
             .snapshot();
-        let points = winrate_history(&snapshot, None, Color::Black);
+        let points = winrate_history(&snapshot, None, None, Color::Black);
         assert_eq!(points[0].black_winrate, None);
         assert_eq!(points[1].black_winrate, Some(0.6));
         assert_eq!(points[2].black_winrate, None);
@@ -272,7 +284,7 @@ mod tests {
             GameDocument::from_sgf("(;SZ[5];B[aa]SBKV[60]SBKS[2];W[bb]SBKV[40]SBKS[-3])")
                 .unwrap()
                 .snapshot();
-        let points = winrate_history(&snapshot, None, Color::Black);
+        let points = winrate_history(&snapshot, None, None, Color::Black);
         let winrate = graph_plot_points(&points, WinrateGraphMetric::Winrate, false, 15.0, 2.0);
         assert_eq!(winrate[1].y, Some(0.4));
         assert!(winrate[2].is_blunder);
@@ -289,7 +301,7 @@ mod tests {
         let snapshot = GameDocument::from_sgf("(;SZ[5];B[aa]SBKV[NaN];W[bb]SBKV[400])")
             .unwrap()
             .snapshot();
-        let points = winrate_history(&snapshot, None, Color::Black);
+        let points = winrate_history(&snapshot, None, None, Color::Black);
         assert_eq!(points[1].black_winrate, None);
         assert_eq!(points[2].black_winrate, Some(1.0));
     }

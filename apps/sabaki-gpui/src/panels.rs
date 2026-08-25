@@ -7,13 +7,14 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, Div, FocusHandle, FontWeight, InteractiveElement, MouseButton, MouseDownEvent,
-    Stateful, StatefulInteractiveElement, Window, div, hsla, prelude::*, px, rgb,
+    PathBuilder, Stateful, StatefulInteractiveElement, Window, canvas, div, hsla, point,
+    prelude::*, px, rgb,
 };
 
-use sabaki_domain_core::{GameMode, GameSnapshot};
+use sabaki_domain_core::{GameMode, GameSnapshot, Vertex};
 
 use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
-use crate::goban_view::{render_goban, render_goban_click_layer};
+use crate::goban_view::{pv_preview_points, render_goban, render_goban_click_layer};
 use crate::layout::SplitPane;
 use crate::native_text_input::NativeInputBinding;
 use crate::navigation::NavigationAvailability;
@@ -23,7 +24,7 @@ use crate::plugin_panel::PluginPanelEntry;
 use crate::settings_form::{SettingRow, display_setting_value};
 use crate::theme::UiPalette;
 use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
-use crate::winrate_graph::{GraphPlotPoint, WinrateGraphMetric, graph_index_from_x};
+use crate::winrate_graph::{GraphPlotPoint, WinrateGraphMetric};
 use crate::{BOARD_PIXEL_SIZE, ShellApp};
 
 /// Renders a native macOS sidebar toggle icon (matching SF Symbol `sidebar.left` / `sidebar.right`).
@@ -390,6 +391,14 @@ pub fn render_player_bar(
     };
     let white_rank = property("WR");
     let is_black_turn = snapshot.board.next_player == sabaki_domain_core::Color::Black;
+    let show_coordinates = shell
+        .settings
+        .get_bool("view.show_coordinates")
+        .unwrap_or(false);
+    let show_move_numbers = shell
+        .settings
+        .get_bool("view.show_move_numbers")
+        .unwrap_or(false);
 
     div()
         .id("player-bar")
@@ -553,6 +562,76 @@ pub fn render_player_bar(
                 }))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(white_name))
                 .child(div().child("○"))
+                .child(
+                    div()
+                        .id("toggle-coordinates-button")
+                        .px_2()
+                        .py_0p5()
+                        .cursor_pointer()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(if show_coordinates {
+                            shell.palette.accent
+                        } else {
+                            0x3a3a3a
+                        }))
+                        .bg(rgb(if show_coordinates {
+                            shell.palette.button_active
+                        } else {
+                            0x1e1e1e
+                        }))
+                        .text_color(rgb(if show_coordinates {
+                            shell.palette.accent
+                        } else {
+                            0xe8e8e8
+                        }))
+                        .child("坐标")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|shell, _, _, cx| {
+                                shell.toggle_view_setting(
+                                    "view.show_coordinates",
+                                    "board coordinates",
+                                    cx,
+                                )
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("toggle-move-numbers-button")
+                        .px_2()
+                        .py_0p5()
+                        .cursor_pointer()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(if show_move_numbers {
+                            shell.palette.accent
+                        } else {
+                            0x3a3a3a
+                        }))
+                        .bg(rgb(if show_move_numbers {
+                            shell.palette.button_active
+                        } else {
+                            0x1e1e1e
+                        }))
+                        .text_color(rgb(if show_move_numbers {
+                            shell.palette.accent
+                        } else {
+                            0xe8e8e8
+                        }))
+                        .child("手数")
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|shell, _, _, cx| {
+                                shell.toggle_view_setting(
+                                    "view.show_move_numbers",
+                                    "move numbers",
+                                    cx,
+                                )
+                            }),
+                        ),
+                )
                 // Pinned plugin quick buttons directly on the bar
                 .children(
                     shell
@@ -1518,8 +1597,8 @@ pub fn render_winrate_graph_panel(
 ) -> Stateful<Div> {
     let on_node_clicked = Rc::new(on_node_clicked);
     let has_values = points.iter().any(|point| point.y.is_some());
-    let width = 236.0_f32;
-    let graph_height = (height - 44.0).max(32.0);
+    // The plot is fluid with the right sidebar. The previous fixed 236px
+    // coordinate placed the live endpoint outside the default ~200px pane.
     let last_index = points.len().saturating_sub(1).max(1) as f32;
     div()
         .id("winrate-graph-panel")
@@ -1551,6 +1630,9 @@ pub fn render_winrate_graph_panel(
                 })),
         )
         .child(if has_values {
+            let graph_points = points.to_vec();
+            let graph_accent = palette.accent;
+            let graph_danger = palette.danger_text;
             div()
                 .id("winrate-graph-plot")
                 .relative()
@@ -1560,27 +1642,83 @@ pub fn render_winrate_graph_panel(
                 .rounded_md()
                 .bg(rgb(palette.input))
                 .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, (), window, _cx| {
+                            let valid: Vec<(f32, f32, u32)> = graph_points
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, point)| {
+                                    let y = point.y? as f32;
+                                    let x = if graph_points.len() <= 1 {
+                                        0.5
+                                    } else {
+                                        index as f32 / last_index
+                                    };
+                                    let color = if point.is_current || point.is_blunder {
+                                        graph_danger
+                                    } else {
+                                        graph_accent
+                                    };
+                                    Some((x, y, color))
+                                })
+                                .collect();
+                            if valid.len() >= 2 {
+                                let mut path = PathBuilder::stroke(px(1.5));
+                                for (index, (x, y, _)) in valid.iter().enumerate() {
+                                    let position = point(
+                                        bounds.origin.x + bounds.size.width * *x,
+                                        bounds.origin.y + bounds.size.height * *y,
+                                    );
+                                    if index == 0 {
+                                        path.move_to(position);
+                                    } else {
+                                        path.line_to(position);
+                                    }
+                                }
+                                if let Ok(path) = path.build() {
+                                    window.paint_path(path, rgb(graph_accent));
+                                }
+                            }
+                            for (x, y, color) in valid {
+                                let center = point(
+                                    bounds.origin.x + bounds.size.width * x,
+                                    bounds.origin.y + bounds.size.height * y,
+                                );
+                                window.paint_quad(gpui::quad(
+                                    gpui::Bounds {
+                                        origin: point(center.x - px(3.0), center.y - px(3.0)),
+                                        size: gpui::size(px(6.0), px(6.0)),
+                                    },
+                                    px(3.0),
+                                    rgb(color),
+                                    px(0.0),
+                                    gpui::transparent_black(),
+                                    gpui::BorderStyle::default(),
+                                ));
+                            }
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .h_full(),
+                )
+                .child(
                     div()
                         .absolute()
                         .top_0()
                         .left_0()
                         .w_full()
                         .h_full()
+                        .flex()
                         .children(points.iter().enumerate().map(|(index, _)| {
-                            let target_index = graph_index_from_x(
-                                (index as f32 + 0.5) * width / points.len().max(1) as f32,
-                                width,
-                                points.len(),
-                            )
-                            .expect("plot has at least one point");
                             let handler = on_node_clicked.clone();
-                            let node_id = points[target_index].node_id.clone();
+                            let node_id = points[index].node_id.clone();
                             div()
                                 .id(("winrate-scrub-cell", index))
-                                .absolute()
-                                .left(px(width * index as f32 / points.len().max(1) as f32))
-                                .top_0()
-                                .w(px(width / points.len().max(1) as f32))
+                                .flex_1()
                                 .h_full()
                                 .cursor_pointer()
                                 .on_mouse_down(
@@ -1591,35 +1729,6 @@ pub fn render_winrate_graph_panel(
                                 )
                         })),
                 )
-                .children(points.iter().enumerate().filter_map(|(index, point)| {
-                    let y = graph_height * point.y? as f32;
-                    let x = width * index as f32 / last_index;
-                    let color = if point.is_current || point.is_blunder {
-                        palette.danger_text
-                    } else {
-                        palette.accent
-                    };
-                    let handler = on_node_clicked.clone();
-                    let node_id = point.node_id.clone();
-                    Some(
-                        div()
-                            .id(("winrate-point", index))
-                            .debug_selector(move || format!("winrate-point-{index}"))
-                            .absolute()
-                            .left(px(x.max(0.0)))
-                            .top(px(y.max(0.0)))
-                            .size(px(if point.is_current { 8.0 } else { 6.0 }))
-                            .rounded_full()
-                            .bg(rgb(color))
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                                    handler(&node_id, window, cx);
-                                },
-                            ),
-                    )
-                }))
         } else {
             div()
                 .id("winrate-graph-empty")
@@ -3382,6 +3491,8 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         candidates.iter().take(6).enumerate().map(|(idx, entry)| {
                             let vtx = entry.vertex.as_deref().unwrap_or("pass");
                             let is_best = idx == 0;
+                            let hover_vertex = entry.vertex.clone();
+                            let trial_vertex = entry.vertex.clone();
                             let wr_pct = entry.winrate * 100.0;
                             let score_str = entry
                                 .score_lead
@@ -3473,12 +3584,58 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                                 );
                                                             }),
                                                         )
-                                                })),
+                                                }))
+                                                .child(trial_vertex.map_or_else(
+                                                    || div(),
+                                                    |vertex| {
+                                                        let vertex_for_handler = vertex.clone();
+                                                        div()
+                                                            .cursor_pointer()
+                                                            .px_1()
+                                                            .py_0p5()
+                                                            .rounded_sm()
+                                                            .border_1()
+                                                            .border_color(rgb(shell.palette.accent))
+                                                            .bg(rgb(shell.palette.button))
+                                                            .text_xs()
+                                                            .text_color(rgb(shell.palette.accent))
+                                                            .hover(|style| {
+                                                                style.bg(rgb(shell
+                                                                    .palette
+                                                                    .button_active))
+                                                            })
+                                                            .child("试下")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(
+                                                                    move |shell, _, _, cx| {
+                                                                        shell.on_trial_candidate(
+                                                                            &vertex_for_handler,
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                ),
+                                                            )
+                                                    },
+                                                )),
                                         ),
                                 )
                                 .children((!pv_str.is_empty()).then(|| {
                                     div().text_color(rgb(shell.palette.subtle)).child(pv_str)
                                 }))
+                                .id(("candidate-row", idx))
+                                .on_hover(cx.listener(
+                                    move |shell, is_hovering: &bool, _window, cx| {
+                                        shell.set_hovered_candidate(
+                                            if *is_hovering {
+                                                hover_vertex.clone()
+                                            } else {
+                                                None
+                                            },
+                                            cx,
+                                        );
+                                    },
+                                ))
                         }),
                     )
                 }),
@@ -4782,6 +4939,169 @@ pub fn render_settings_panel(
         )
 }
 
+fn vertex_label(vertex: Option<Vertex>, board_width: usize) -> String {
+    vertex.map_or_else(
+        || "pass".to_owned(),
+        |vertex| {
+            let column =
+                (b'A' + vertex.column as u8 + usize::from(vertex.column >= 8) as u8) as char;
+            format!("{column}{}", board_width.saturating_sub(vertex.row))
+        },
+    )
+}
+
+/// Compact right-sidebar board for the currently hovered engine candidate.
+/// It is intentionally read-only: the real SGF document and host revision are
+/// never changed by hovering. The PV is resolved from the live candidate list,
+/// so streaming analysis updates the numbered ghost sequence in place.
+pub fn render_analysis_preview_panel(
+    snapshot: &GameSnapshot,
+    theme: &crate::theme::ThemeTokens,
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Stateful<Div> {
+    let selected = shell
+        .hovered_candidate_vertex
+        .as_deref()
+        .and_then(|vertex| {
+            shell
+                .analysis
+                .iter()
+                .find(|entry| entry.vertex.as_deref() == Some(vertex))
+        });
+    let response_entry = selected.or_else(|| {
+        shell
+            .trial_move
+            .as_ref()
+            .and_then(|_| crate::engine_console::best_analysis_entry(&shell.analysis))
+    });
+    let preview = response_entry.map(|entry| {
+        let mut pv_preview = if let Some(trial_move) = shell.trial_move.as_ref() {
+            trial_move
+                .vertex
+                .map(|vertex| vec![(vertex, trial_move.color, 1)])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let response = pv_preview_points(
+            snapshot.board.width,
+            shell
+                .trial_move
+                .as_ref()
+                .map_or(snapshot.board.next_player, |trial| trial.color.opponent()),
+            &entry.pv,
+            8,
+        );
+        let offset = pv_preview.len();
+        pv_preview.extend(
+            response
+                .into_iter()
+                .enumerate()
+                .map(|(index, (vertex, color, _))| (vertex, color, offset + index + 1)),
+        );
+        (
+            if let Some(trial_move) = shell.trial_move.as_ref() {
+                format!(
+                    "试下 {}",
+                    vertex_label(trial_move.vertex, snapshot.board.width)
+                )
+            } else {
+                entry.vertex.clone().unwrap_or_else(|| "pass".to_owned())
+            },
+            pv_preview,
+        )
+    });
+    let board = preview.as_ref().map(|(_, pv_preview)| {
+        let options = crate::goban_view::GobanRenderOptions {
+            show_coordinates: true,
+            coordinates_type: "A1".to_owned(),
+            pv_preview: pv_preview.clone(),
+            ..Default::default()
+        };
+        render_goban(&snapshot.board, 164.0, theme, &options)
+    });
+
+    div()
+        .id("analysis-preview-panel")
+        .debug_selector(|| "analysis-preview-panel".to_owned())
+        .flex_none()
+        .h(px(220.0))
+        .p_2p5()
+        .border_b_1()
+        .border_color(rgb(shell.palette.border))
+        .flex()
+        .flex_col()
+        .gap_1p5()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("AI 变化预览"),
+                )
+                .child(if shell.trial_move.is_some() {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div().text_xs().text_color(rgb(shell.palette.accent)).child(
+                                preview
+                                    .as_ref()
+                                    .map(|(vertex, _)| vertex.clone())
+                                    .unwrap_or_else(|| "试下".to_owned()),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .cursor_pointer()
+                                .px_1()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                .child("退出")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, _, cx| shell.clear_trial_move(cx)),
+                                ),
+                        )
+                } else if let Some((vertex, _)) = preview.as_ref() {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.accent))
+                        .child(vertex.clone())
+                } else {
+                    div()
+                }),
+        )
+        .child(if let Some(board) = board {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(board)
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .text_color(rgb(shell.palette.subtle))
+                .child("将鼠标移到候选点以预览 AI 后续着法")
+        })
+}
+
 /// The goban plus the analysis best-move ring overlay. Rendering options come
 /// from the shell settings (`view.show_coordinates`, `view.show_move_numbers`)
 /// and the document state (move numbers, scoring overrides).
@@ -4794,6 +5114,7 @@ pub fn render_goban_area(
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
     let board = &snapshot.board;
+    let best_move = shell.trial_move.is_none().then_some(best_move).flatten();
     let line_preview = shell
         .line_start
         .zip(shell.hovered_vertex)
@@ -4808,10 +5129,11 @@ pub fn render_goban_area(
                 "line".to_owned()
             },
         });
-    let analysis_candidates = if shell
-        .settings
-        .get_bool("board.show_analysis")
-        .unwrap_or(true)
+    let analysis_candidates = if shell.trial_move.is_none()
+        && shell
+            .settings
+            .get_bool("board.show_analysis")
+            .unwrap_or(true)
     {
         shell
             .analysis
@@ -4857,29 +5179,33 @@ pub fn render_goban_area(
         }
     }
 
-    let mut pv_preview = Vec::new();
-    let pv_source = shell
-        .hovered_candidate_pv
+    let mut pv_preview = shell
+        .hovered_candidate_vertex
         .as_deref()
-        .or_else(|| shell.analysis.first().map(|e| e.pv.as_slice()));
-    if let Some(pv) = pv_source {
-        let mut color = board.next_player;
-        for (step_idx, move_str) in pv.iter().enumerate().take(6) {
-            if let Some(coords) = parse_gtp_vertex(board.width, move_str) {
-                pv_preview.push((
-                    sabaki_domain_core::Vertex {
-                        column: coords.0,
-                        row: coords.1,
-                    },
-                    color,
-                    step_idx + 1,
-                ));
-                color = match color {
-                    sabaki_domain_core::Color::Black => sabaki_domain_core::Color::White,
-                    sabaki_domain_core::Color::White => sabaki_domain_core::Color::Black,
-                };
-            }
-        }
+        .and_then(|vertex| {
+            shell
+                .analysis
+                .iter()
+                .find(|entry| entry.vertex.as_deref() == Some(vertex))
+                .map(|entry| pv_preview_points(board.width, board.next_player, &entry.pv, 6))
+        })
+        .unwrap_or_default();
+    if let Some(trial_move) = shell.trial_move.as_ref() {
+        let mut trial_preview = trial_move
+            .vertex
+            .map_or_else(Vec::new, |vertex| vec![(vertex, trial_move.color, 1)]);
+        let response = shell
+            .analysis
+            .first()
+            .map(|entry| pv_preview_points(board.width, trial_move.color.opponent(), &entry.pv, 6))
+            .unwrap_or_default();
+        trial_preview.extend(
+            response
+                .into_iter()
+                .enumerate()
+                .map(|(index, (vertex, color, _))| (vertex, color, index + 2)),
+        );
+        pv_preview = trial_preview;
     }
 
     let options = crate::goban_view::GobanRenderOptions {

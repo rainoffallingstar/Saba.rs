@@ -3,7 +3,7 @@
 //! Provides batch whole-game analysis planning, move-by-move winrate drop
 //! calculation, blunder classification, and structured inspection records.
 
-use sabaki_domain_core::Color;
+use sabaki_domain_core::{Color, GameSnapshot, NodeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -85,6 +85,82 @@ impl BatchReviewProgress {
     }
 }
 
+/// One move on the selected root-to-current lineage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LineageMove {
+    pub move_number: usize,
+    pub node_id: NodeId,
+    pub player: Color,
+    pub played_vertex: Option<String>,
+}
+
+/// Returns the selected root-to-current node path, including the root baseline.
+/// Whole-game review needs this pre-move position to evaluate the first move.
+pub fn active_lineage_review_nodes(snapshot: &GameSnapshot) -> Vec<NodeId> {
+    let mut reverse_path = Vec::new();
+    let mut cursor = Some(snapshot.current_node_id.clone());
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(node_id) = cursor {
+        if !visited.insert(node_id.clone()) {
+            break;
+        }
+        let Some(node) = snapshot.nodes.iter().find(|node| node.id == node_id) else {
+            break;
+        };
+        reverse_path.push(node.id.clone());
+        cursor = node.parent_id.clone();
+    }
+    reverse_path.reverse();
+    reverse_path
+}
+
+/// Extracts move nodes from the active root-to-current lineage.
+///
+/// The parent chain, rather than `snapshot.moves.len()` or move parity, is the
+/// source of truth. This keeps batch review correct for variations, handicap
+/// setup, and documents whose selected node is not the last node in the file.
+pub fn active_lineage_moves(snapshot: &GameSnapshot) -> Vec<LineageMove> {
+    let mut reverse_path = Vec::new();
+    let mut cursor = Some(snapshot.current_node_id.clone());
+    let mut visited = std::collections::BTreeSet::new();
+
+    while let Some(node_id) = cursor {
+        if !visited.insert(node_id.clone()) {
+            break;
+        }
+        let Some(node) = snapshot.nodes.iter().find(|node| node.id == node_id) else {
+            break;
+        };
+        reverse_path.push(node);
+        cursor = node.parent_id.clone();
+    }
+    reverse_path.reverse();
+
+    reverse_path
+        .into_iter()
+        .filter_map(|node| {
+            let (player, property) = if let Some(value) = node.properties.get("B") {
+                (Color::Black, value.first().cloned())
+            } else if let Some(value) = node.properties.get("W") {
+                (Color::White, value.first().cloned())
+            } else {
+                return None;
+            };
+            Some(LineageMove {
+                move_number: 0,
+                node_id: node.id.clone(),
+                player,
+                played_vertex: property,
+            })
+        })
+        .enumerate()
+        .map(|(index, mut move_info)| {
+            move_info.move_number = index + 1;
+            move_info
+        })
+        .collect()
+}
+
 /// Computes the blunder list from a sequence of evaluated game positions.
 pub fn find_blunders(
     evaluations: &[ReviewedPosition],
@@ -159,6 +235,139 @@ pub fn find_blunders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_nodes_include_the_root_baseline() {
+        use sabaki_domain_core::{
+            BoardSnapshot, FileStateSnapshot, GameMode, GameSnapshot, HistorySnapshot, NodeSnapshot,
+        };
+        use std::collections::BTreeMap;
+        let snapshot = GameSnapshot {
+            schema_version: 1,
+            revision: 0,
+            root_properties: BTreeMap::new(),
+            nodes: vec![
+                NodeSnapshot {
+                    id: "root".to_owned(),
+                    parent_id: None,
+                    child_ids: vec!["b1".to_owned()],
+                    properties: BTreeMap::new(),
+                },
+                NodeSnapshot {
+                    id: "b1".to_owned(),
+                    parent_id: Some("root".to_owned()),
+                    child_ids: Vec::new(),
+                    properties: BTreeMap::new(),
+                },
+            ],
+            root_node_id: "root".to_owned(),
+            current_node_id: "b1".to_owned(),
+            preferred_child_by_node: BTreeMap::new(),
+            moves: Vec::new(),
+            board: BoardSnapshot {
+                width: 19,
+                height: 19,
+                sign_map: vec![vec![0; 19]; 19],
+                current_vertex: None,
+                next_player: Color::Black,
+                move_number: 0,
+                markers: vec![vec![None; 19]; 19],
+                lines: Vec::new(),
+                children_info: Vec::new(),
+                siblings_info: Vec::new(),
+            },
+            history: HistorySnapshot {
+                can_undo: false,
+                can_redo: false,
+                undo_depth: 0,
+                redo_depth: 0,
+            },
+            file_state: FileStateSnapshot {
+                path: None,
+                format: None,
+                is_dirty: false,
+            },
+            mode: GameMode::Play,
+            can_undo: false,
+            can_redo: false,
+            source_path: None,
+            score_overrides: BTreeMap::new(),
+        };
+        assert_eq!(active_lineage_review_nodes(&snapshot), vec!["root", "b1"]);
+    }
+
+    #[test]
+    fn active_lineage_moves_follow_parent_chain_and_ignore_siblings() {
+        use sabaki_domain_core::{
+            BoardSnapshot, FileStateSnapshot, GameMode, GameSnapshot, HistorySnapshot,
+            NodeSnapshot, Properties,
+        };
+        use std::collections::BTreeMap;
+
+        let node = |id: &str, parent_id: Option<&str>, properties: &[(&str, &str)]| NodeSnapshot {
+            id: id.to_owned(),
+            parent_id: parent_id.map(str::to_owned),
+            child_ids: Vec::new(),
+            properties: properties
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), vec![(*value).to_owned()]))
+                .collect::<Properties>(),
+        };
+        let snapshot = GameSnapshot {
+            schema_version: 1,
+            revision: 0,
+            root_properties: BTreeMap::new(),
+            nodes: vec![
+                node("root", None, &[]),
+                node("b1", Some("root"), &[("B", "pd")]),
+                node("w1", Some("b1"), &[("W", "dp")]),
+                node("sibling", Some("b1"), &[("W", "qq")]),
+            ],
+            root_node_id: "root".to_owned(),
+            current_node_id: "w1".to_owned(),
+            preferred_child_by_node: BTreeMap::new(),
+            moves: Vec::new(),
+            board: BoardSnapshot {
+                width: 19,
+                height: 19,
+                sign_map: vec![vec![0; 19]; 19],
+                current_vertex: None,
+                next_player: Color::Black,
+                move_number: 0,
+                markers: vec![vec![None; 19]; 19],
+                lines: Vec::new(),
+                children_info: Vec::new(),
+                siblings_info: Vec::new(),
+            },
+            history: HistorySnapshot {
+                can_undo: false,
+                can_redo: false,
+                undo_depth: 0,
+                redo_depth: 0,
+            },
+            file_state: FileStateSnapshot {
+                path: None,
+                format: None,
+                is_dirty: false,
+            },
+            mode: GameMode::Play,
+            can_undo: false,
+            can_redo: false,
+            source_path: None,
+            score_overrides: BTreeMap::new(),
+        };
+        let lineage = active_lineage_moves(&snapshot);
+        assert_eq!(
+            lineage
+                .iter()
+                .map(|entry| entry.node_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b1", "w1"]
+        );
+        assert_eq!(lineage[0].move_number, 1);
+        assert_eq!(lineage[0].player, Color::Black);
+        assert_eq!(lineage[1].player, Color::White);
+    }
 
     #[test]
     fn detects_blunders_and_mistakes_from_evaluations() {

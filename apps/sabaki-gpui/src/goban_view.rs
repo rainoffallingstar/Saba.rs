@@ -10,8 +10,29 @@ use gpui::{Pixels, Point};
 use sabaki_domain_core::MoveDto;
 use sabaki_domain_core::{BoardSnapshot, Color, GameSnapshot, NodeSnapshot, Vertex};
 
+use crate::engine_console::parse_gtp_vertex;
 use crate::markup::markup_symbol;
 use crate::theme::{ThemeColor, ThemeTokens};
+
+/// Projects a GTP principal variation into numbered ghost stones without
+/// mutating the document or applying moves to the host. Invalid/pass tokens are
+/// ignored, matching the tolerant streaming preview behavior.
+pub fn pv_preview_points(
+    board_width: usize,
+    next_player: Color,
+    pv: &[String],
+    limit: usize,
+) -> Vec<(Vertex, Color, usize)> {
+    let mut color = next_player;
+    let mut points = Vec::new();
+    for move_str in pv.iter().take(limit) {
+        if let Some((column, row)) = parse_gtp_vertex(board_width, move_str) {
+            points.push((Vertex { column, row }, color, points.len() + 1));
+            color = color.opponent();
+        }
+    }
+    points
+}
 
 const BOARD_MARGIN_PX: f32 = 28.0;
 
@@ -1052,6 +1073,25 @@ mod tests {
         assert_eq!(column_letter(7), 'H');
         assert_eq!(column_letter(8), 'J');
         assert_eq!(column_letter(18), 'T');
+    }
+
+    #[test]
+    fn pv_preview_points_are_numbered_and_alternate_colors() {
+        let pv = vec![
+            "D4".to_owned(),
+            "Q16".to_owned(),
+            "pass".to_owned(),
+            "J10".to_owned(),
+        ];
+        let points = super::pv_preview_points(19, Color::Black, &pv, 8);
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0].0, Vertex { column: 3, row: 15 });
+        assert_eq!(points[0].1, Color::Black);
+        assert_eq!(points[0].2, 1);
+        assert_eq!(points[1].1, Color::White);
+        assert_eq!(points[1].2, 2);
+        assert_eq!(points[2].1, Color::Black);
+        assert_eq!(points[2].2, 3);
     }
 
     #[test]

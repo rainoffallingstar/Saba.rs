@@ -2,6 +2,47 @@ use crate::settings::{SettingValidationError, SettingsStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+/// Parses an engine argument string into argv tokens while respecting single
+/// and double quotes. Configuration repair and process startup must share this
+/// parser: splitting on whitespace corrupts valid macOS/Windows paths such as
+/// `Application Support` and `Program Files`.
+pub fn parse_engine_arguments(args: &str) -> Vec<String> {
+    let mut parsed = Vec::new();
+    let mut chars = args.chars().peekable();
+    while let Some(&character) = chars.peek() {
+        if character.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut token = String::new();
+        let mut quote = None;
+        while let Some(&next) = chars.peek() {
+            if let Some(delimiter) = quote {
+                chars.next();
+                if next == delimiter {
+                    quote = None;
+                } else {
+                    token.push(next);
+                }
+                continue;
+            }
+            if next.is_whitespace() {
+                break;
+            }
+            chars.next();
+            if next == '\'' || next == '"' {
+                quote = Some(next);
+            } else {
+                token.push(next);
+            }
+        }
+        if !token.is_empty() {
+            parsed.push(token);
+        }
+    }
+    parsed
+}
+
 /// A configured GTP engine, matching one entry of the `engines.list` setting.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,5 +271,22 @@ mod tests {
     fn a_missing_engine_list_yields_an_empty_store() {
         let store = EngineStore::from_settings(&SettingsStore::default()).expect("empty store");
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn parses_quoted_paths_without_truncating_spaces() {
+        let parsed = super::parse_engine_arguments(
+            r#"gtp -model "/Users/test/Library/Application Support/model.bin.gz" -config '/path with spaces/default.cfg'"#,
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                "gtp",
+                "-model",
+                "/Users/test/Library/Application Support/model.bin.gz",
+                "-config",
+                "/path with spaces/default.cfg",
+            ]
+        );
     }
 }

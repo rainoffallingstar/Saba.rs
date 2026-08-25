@@ -5,7 +5,10 @@
 //! synchronize, and lease a streaming session); handshake, board replay, GTP
 //! vertex formatting and shutdown remain implementation detail.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use sabaki_domain_core::gtp::{GtpError, GtpResponse};
 use sabaki_domain_core::{Color, MoveDto};
@@ -16,12 +19,25 @@ use crate::{EngineRecord, EngineSession, EngineSessionError, GtpTransport};
 /// presentation/domain policy; the controller only needs stable ordering.
 pub struct EngineController<R, T: GtpTransport> {
     sessions: BTreeMap<R, EngineSession<T>>,
+    /// A role remains connected while a worker temporarily owns its session.
+    /// Keeping this separate from `sessions` prevents the UI from displaying a
+    /// live streaming engine as detached merely because it is leased.
+    leased_roles: BTreeSet<R>,
+    /// A ready session temporarily owned by a bounded command worker.
+    command_roles: BTreeSet<R>,
+    /// User detach intent recorded while a worker owns the session. A late
+    /// return consumes this marker and disposes the session instead of silently
+    /// reconnecting the role.
+    detach_requested_roles: BTreeSet<R>,
 }
 
 impl<R, T: GtpTransport> Default for EngineController<R, T> {
     fn default() -> Self {
         Self {
             sessions: BTreeMap::new(),
+            leased_roles: BTreeSet::new(),
+            command_roles: BTreeSet::new(),
+            detach_requested_roles: BTreeSet::new(),
         }
     }
 }
@@ -38,37 +54,90 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
         board_size: usize,
         moves: &[MoveDto],
     ) -> Result<(), EngineControllerError> {
-        if self.sessions.contains_key(&role) {
+        if self.is_attached(role) {
             return Err(EngineControllerError::AlreadyAttached);
         }
+        let session = Self::prepare_session(transport, record, board_size, moves)?;
+        self.attach_prepared(role, session)
+    }
+
+    /// Performs blocking engine handshake and position replay without mutating
+    /// the role map. The GPUI shell runs this on its background executor so
+    /// KataGo cold starts and long game replays cannot freeze the window.
+    pub fn prepare_session(
+        transport: T,
+        record: &EngineRecord,
+        board_size: usize,
+        moves: &[MoveDto],
+    ) -> Result<EngineSession<T>, EngineControllerError> {
         let mut session = EngineSession::start(transport, record, board_size)?;
         if let Err(error) = replay_position(&mut session, board_size, moves) {
             session.stop().ok();
             return Err(EngineControllerError::Transport(error));
         }
+        Ok(session)
+    }
+
+    /// Registers a session already prepared off the UI thread.
+    pub fn attach_prepared(
+        &mut self,
+        role: R,
+        session: EngineSession<T>,
+    ) -> Result<(), EngineControllerError> {
+        if self.is_attached(role) {
+            return Err(EngineControllerError::AlreadyAttached);
+        }
         self.sessions.insert(role, session);
         Ok(())
     }
 
+    /// Whether an engine process is connected for the role, including one
+    /// currently leased to a streaming worker.
     pub fn is_attached(&self, role: R) -> bool {
+        !self.detach_requested_roles.contains(&role)
+            && (self.sessions.contains_key(&role)
+                || self.leased_roles.contains(&role)
+                || self.command_roles.contains(&role))
+    }
+
+    /// Whether the role is connected and idle in this controller.
+    pub fn is_ready(&self, role: R) -> bool {
         self.sessions.contains_key(&role)
     }
 
-    pub fn any_attached(&self) -> bool {
-        !self.sessions.is_empty()
+    /// Whether a connected role is executing a bounded command worker.
+    pub fn is_command_pending(&self, role: R) -> bool {
+        self.command_roles.contains(&role)
     }
 
-    /// Detaches one role and best-effort stops its transport.
+    /// Whether a connected role is currently leased for streaming analysis.
+    pub fn is_streaming(&self, role: R) -> bool {
+        self.leased_roles.contains(&role)
+    }
+
+    pub fn any_attached(&self) -> bool {
+        !self.sessions.is_empty() || !self.leased_roles.is_empty() || !self.command_roles.is_empty()
+    }
+
+    /// Detaches one idle role and best-effort stops its transport. A leased
+    /// role is still reported as connected; its worker owns shutdown and will
+    /// dispose it after observing cancellation.
     pub fn detach(&mut self, role: R) -> bool {
         if let Some(mut session) = self.sessions.remove(&role) {
             session.stop().ok();
+            self.detach_requested_roles.remove(&role);
+            true
+        } else if self.leased_roles.contains(&role) || self.command_roles.contains(&role) {
+            self.detach_requested_roles.insert(role);
             true
         } else {
             false
         }
     }
 
-    /// Stops and clears every attached transport.
+    /// Stops and clears every idle attached transport. Leased sessions are
+    /// deliberately left to their cancellation owner to avoid double-killing a
+    /// process from two threads.
     pub fn detach_all(&mut self) {
         for (_, mut session) in std::mem::take(&mut self.sessions) {
             session.stop().ok();
@@ -125,6 +194,38 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
         replay_position(self.session_mut(role)?, board_size, moves).map_err(Into::into)
     }
 
+    /// Temporarily removes a ready session for a blocking bounded command.
+    /// The role remains logically connected while the background worker owns it.
+    pub fn lease_for_command(
+        &mut self,
+        role: R,
+    ) -> Result<EngineSession<T>, EngineControllerError> {
+        let session = self
+            .sessions
+            .remove(&role)
+            .ok_or(EngineControllerError::Detached)?;
+        self.command_roles.insert(role);
+        Ok(session)
+    }
+
+    /// Returns a bounded-command session to its role.
+    pub fn return_command_lease(&mut self, role: R, mut session: EngineSession<T>) {
+        self.command_roles.remove(&role);
+        if self.detach_requested_roles.remove(&role) {
+            session.stop().ok();
+            return;
+        }
+        if let Some(mut previous) = self.sessions.insert(role, session) {
+            previous.stop().ok();
+        }
+    }
+
+    /// Drops a bounded-command session after an unrecoverable transport error.
+    pub fn discard_command_lease(&mut self, role: R) {
+        self.command_roles.remove(&role);
+        self.detach_requested_roles.remove(&role);
+    }
+
     /// Starts streaming analysis on an attached role.
     pub fn start_analysis(
         &mut self,
@@ -171,17 +272,32 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
         &mut self,
         role: R,
     ) -> Result<EngineSession<T>, EngineControllerError> {
-        self.sessions
+        let session = self
+            .sessions
             .remove(&role)
-            .ok_or(EngineControllerError::Detached)
+            .ok_or(EngineControllerError::Detached)?;
+        self.leased_roles.insert(role);
+        Ok(session)
     }
 
     /// Returns a previously leased session to its role. An existing session is
     /// replaced and stopped first, preserving one-session-per-role invariant.
-    pub fn return_analysis_lease(&mut self, role: R, session: EngineSession<T>) {
+    pub fn return_analysis_lease(&mut self, role: R, mut session: EngineSession<T>) {
+        self.leased_roles.remove(&role);
+        if self.detach_requested_roles.remove(&role) {
+            session.stop().ok();
+            return;
+        }
         if let Some(mut previous) = self.sessions.insert(role, session) {
             previous.stop().ok();
         }
+    }
+
+    /// Marks a leased role disconnected after its worker has stopped the owned
+    /// session instead of returning it to the controller.
+    pub fn discard_analysis_lease(&mut self, role: R) {
+        self.leased_roles.remove(&role);
+        self.detach_requested_roles.remove(&role);
     }
 
     /// Replays an attached stream lease without exposing the entire session map.
@@ -297,7 +413,12 @@ mod tests {
     }
 
     impl GtpTransport for FixtureTransport {
-        fn send(&mut self, name: &str, arguments: Vec<String>) -> Result<GtpResponse, GtpError> {
+        fn send_with_timeout(
+            &mut self,
+            name: &str,
+            arguments: Vec<String>,
+            _timeout: std::time::Duration,
+        ) -> Result<GtpResponse, GtpError> {
             self.commands.push((name.to_owned(), arguments));
             Ok(self.replies.pop_front().unwrap_or_else(|| ok("")))
         }
@@ -338,6 +459,83 @@ mod tests {
         assert_eq!(response.content, "D4");
         assert!(controller.detach(1));
         assert!(!controller.is_attached(1));
+    }
+
+    #[test]
+    fn leased_command_remains_connected_but_not_ready() {
+        let mut controller = EngineController::<u8, FixtureTransport>::default();
+        let record = EngineRecord::new("Fixture", "fixture", "");
+        controller
+            .attach(1, FixtureTransport::ready(), &record, 19, &[])
+            .expect("session attaches");
+        let session = controller
+            .lease_for_command(1)
+            .expect("session leases for a bounded command");
+        assert!(controller.is_attached(1));
+        assert!(controller.is_command_pending(1));
+        assert!(!controller.is_ready(1));
+        controller.return_command_lease(1, session);
+        assert!(controller.is_ready(1));
+        assert!(!controller.is_command_pending(1));
+    }
+
+    #[test]
+    fn detach_intent_prevents_a_command_lease_from_reconnecting() {
+        let mut controller = EngineController::<u8, FixtureTransport>::default();
+        let record = EngineRecord::new("Fixture", "fixture", "");
+        controller
+            .attach(1, FixtureTransport::ready(), &record, 19, &[])
+            .expect("session attaches");
+        let session = controller
+            .lease_for_command(1)
+            .expect("command session leases");
+
+        assert!(controller.detach(1));
+        assert!(!controller.is_attached(1));
+        controller.return_command_lease(1, session);
+        assert!(!controller.is_attached(1));
+        assert!(!controller.is_ready(1));
+    }
+
+    #[test]
+    fn leased_analysis_remains_connected_but_not_ready() {
+        let mut controller = EngineController::<u8, FixtureTransport>::default();
+        let record = EngineRecord::new("Fixture", "fixture", "");
+        controller
+            .attach(1, FixtureTransport::ready(), &record, 19, &[])
+            .expect("session attaches");
+        let session = controller
+            .lease_for_analysis(1)
+            .expect("session leases for analysis");
+        assert!(controller.is_attached(1));
+        assert!(controller.is_streaming(1));
+        assert!(!controller.is_ready(1));
+        assert!(matches!(
+            controller.attach(1, FixtureTransport::ready(), &record, 19, &[]),
+            Err(EngineControllerError::AlreadyAttached)
+        ));
+        controller.return_analysis_lease(1, session);
+        assert!(controller.is_attached(1));
+        assert!(controller.is_ready(1));
+        assert!(!controller.is_streaming(1));
+    }
+
+    #[test]
+    fn detach_intent_prevents_an_analysis_lease_from_reconnecting() {
+        let mut controller = EngineController::<u8, FixtureTransport>::default();
+        let record = EngineRecord::new("Fixture", "fixture", "");
+        controller
+            .attach(1, FixtureTransport::ready(), &record, 19, &[])
+            .expect("session attaches");
+        let session = controller
+            .lease_for_analysis(1)
+            .expect("analysis session leases");
+
+        assert!(controller.detach(1));
+        assert!(!controller.is_attached(1));
+        controller.return_analysis_lease(1, session);
+        assert!(!controller.is_attached(1));
+        assert!(!controller.is_ready(1));
     }
 
     #[test]
