@@ -13,6 +13,10 @@ use gpui::{
 
 use sabaki_domain_core::{GameMode, GameSnapshot, Vertex};
 
+use gpui_component::badge::Badge;
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::{Selectable, Sizable};
+
 use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
 use crate::goban_view::{
     pv_preview_points, render_goban, render_goban_click_layer, render_goban_with_id,
@@ -98,22 +102,11 @@ pub fn render_titlebar(
                 .gap_1()
                 .child(div().w(px(72.0)))
                 .child(
-                    div()
-                        .id("left-sidebar-toggle")
-                        .debug_selector(|| "left-sidebar-toggle".to_owned())
-                        .w(px(30.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .bg(if show_left_sidebar {
-                            rgb(palette.button_active)
-                        } else {
-                            rgb(palette.panel)
-                        })
-                        .hover(|style| style.bg(rgb(palette.button)))
+                    Button::new("left-sidebar-toggle")
+                        .small()
+                        .ghost()
+                        .selected(show_left_sidebar)
+                        .tooltip("切换引擎侧栏 (Cmd+Shift+B)")
                         .child(mac_sidebar_icon(
                             true,
                             show_left_sidebar,
@@ -124,45 +117,29 @@ pub fn render_titlebar(
                             },
                             fill_color,
                         ))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_toggle_left_sidebar),
-                        ),
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_toggle_left_sidebar(&MouseDownEvent::default(), window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .w(px(26.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .text_base()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette.muted))
-                        .hover(|style| style.bg(rgb(palette.button)).text_color(rgb(palette.text)))
-                        .child("‹")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_navigate_previous),
-                        ),
+                    Button::new("titlebar-navigate-prev")
+                        .small()
+                        .ghost()
+                        .label("‹")
+                        .tooltip("上一手 (Left)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_navigate_previous(&MouseDownEvent::default(), window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .w(px(26.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .text_base()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(palette.muted))
-                        .hover(|style| style.bg(rgb(palette.button)).text_color(rgb(palette.text)))
-                        .child("›")
-                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_navigate_next)),
+                    Button::new("titlebar-navigate-next")
+                        .small()
+                        .ghost()
+                        .label("›")
+                        .tooltip("下一手 (Right)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_navigate_next(&MouseDownEvent::default(), window, cx);
+                        })),
                 ),
         )
         // Center: clean native title
@@ -180,38 +157,19 @@ pub fn render_titlebar(
                 .items_center()
                 .gap_1()
                 .child(
-                    div()
-                        .w(px(26.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(palette.button)))
+                    Button::new("titlebar-game-info")
+                        .small()
+                        .ghost()
+                        .tooltip("对局信息 (Cmd+I)")
                         .child(mac_info_icon(palette.muted))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| shell.open_game_info(cx)),
-                        ),
+                        .on_click(cx.listener(|shell, _, _, cx| shell.open_game_info(cx))),
                 )
                 .child(
-                    div()
-                        .id("right-sidebar-toggle")
-                        .debug_selector(|| "right-sidebar-toggle".to_owned())
-                        .w(px(30.0))
-                        .h(px(26.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .bg(if show_right_sidebar {
-                            rgb(palette.button_active)
-                        } else {
-                            rgb(palette.panel)
-                        })
-                        .hover(|style| style.bg(rgb(palette.button)))
+                    Button::new("right-sidebar-toggle")
+                        .small()
+                        .ghost()
+                        .selected(show_right_sidebar)
+                        .tooltip("切换侧栏变化与分析面板")
                         .child(mac_sidebar_icon(
                             false,
                             show_right_sidebar,
@@ -222,10 +180,9 @@ pub fn render_titlebar(
                             },
                             fill_color,
                         ))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_toggle_right_sidebar),
-                        ),
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_toggle_right_sidebar(&MouseDownEvent::default(), window, cx);
+                        })),
                 ),
         )
 }
@@ -482,46 +439,37 @@ pub fn render_player_bar(
                             div()
                                 .id("pass-button")
                                 .debug_selector(|| "pass-button".to_owned())
-                                .px_3()
-                                .py_0p5()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_color(rgb(0xe8e8e8))
-                                .hover(|style| style.bg(rgb(0x2a2a2a)))
-                                .child("Pass")
-                                .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_pass)),
+                                .child(
+                                    Button::new("pass-btn")
+                                        .small()
+                                        .ghost()
+                                        .label("Pass")
+                                        .tooltip("停一手 (Pass)")
+                                        .on_click(cx.listener(|shell, _, window, cx| {
+                                            shell.on_pass(&MouseDownEvent::default(), window, cx);
+                                        })),
+                                ),
                         )
                         .child(
-                            div()
-                                .px_3()
-                                .py_0p5()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_color(rgb(0xe8b3b3))
-                                .hover(|style| style.bg(rgb(0x3a2222)))
-                                .child("Resign")
-                                .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_resign)),
+                            Button::new("resign-button")
+                                .small()
+                                .ghost()
+                                .danger()
+                                .label("Resign")
+                                .tooltip("认输 (Resign)")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.on_resign(&MouseDownEvent::default(), window, cx);
+                                })),
                         ),
                 )
                 .children(
                     (shell.mode == GameMode::Scoring || shell.mode == GameMode::Estimator).then(
                         || {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .px_2p5()
-                                .py_0p5()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(rgb(0x3a2210))
-                                .border_1()
-                                .border_color(rgb(0x8a5520))
-                                .text_color(rgb(0xf2a860))
-                                .hover(|style| style.bg(rgb(0x4a2a14)))
-                                .child("🏁 退出点目 (返回落子)")
-                                .on_mouse_down(
-                                    MouseButton::Left,
+                            Button::new("exit-scoring-button")
+                                .small()
+                                .warning()
+                                .label("🏁 退出点目 (返回落子)")
+                                .on_click(
                                     cx.listener(|shell, _, _, cx| {
                                         shell.set_mode(GameMode::Play, cx)
                                     }),
@@ -530,25 +478,14 @@ pub fn render_player_bar(
                     ),
                 )
                 .children(shell.autosave.info().is_available.then(|| {
-                    div()
-                        .id("player-bar-restore-recovery")
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_0p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .bg(rgb(0x352810))
-                        .border_1()
-                        .border_color(rgb(0x7a5818))
-                        .text_color(rgb(0xf2cf78))
-                        .hover(|style| style.bg(rgb(0x4a3a18)))
-                        .child("⚡ Restore")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_restore_recovery),
-                        )
+                    Button::new("player-bar-restore-recovery")
+                        .small()
+                        .warning()
+                        .label("⚡ Restore")
+                        .tooltip("恢复未保存的崩溃局面")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_restore_recovery(&MouseDownEvent::default(), window, cx);
+                        }))
                 })),
         )
         // Right: White player + rank + pinned plugin buttons + 🧩 plugin menu + hamburger menu
@@ -565,74 +502,30 @@ pub fn render_player_bar(
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(white_name))
                 .child(div().child("○"))
                 .child(
-                    div()
-                        .id("toggle-coordinates-button")
-                        .px_2()
-                        .py_0p5()
-                        .cursor_pointer()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(rgb(if show_coordinates {
-                            shell.palette.accent
-                        } else {
-                            0x3a3a3a
-                        }))
-                        .bg(rgb(if show_coordinates {
-                            shell.palette.button_active
-                        } else {
-                            0x1e1e1e
-                        }))
-                        .text_color(rgb(if show_coordinates {
-                            shell.palette.accent
-                        } else {
-                            0xe8e8e8
-                        }))
-                        .child("坐标")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| {
-                                shell.toggle_view_setting(
-                                    "view.show_coordinates",
-                                    "board coordinates",
-                                    cx,
-                                )
-                            }),
-                        ),
+                    Button::new("toggle-coordinates-button")
+                        .small()
+                        .ghost()
+                        .selected(show_coordinates)
+                        .label("坐标")
+                        .tooltip("显示/隐藏棋盘坐标 (Cmd+Shift+C)")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.toggle_view_setting(
+                                "view.show_coordinates",
+                                "board coordinates",
+                                cx,
+                            )
+                        })),
                 )
                 .child(
-                    div()
-                        .id("toggle-move-numbers-button")
-                        .px_2()
-                        .py_0p5()
-                        .cursor_pointer()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(rgb(if show_move_numbers {
-                            shell.palette.accent
-                        } else {
-                            0x3a3a3a
-                        }))
-                        .bg(rgb(if show_move_numbers {
-                            shell.palette.button_active
-                        } else {
-                            0x1e1e1e
-                        }))
-                        .text_color(rgb(if show_move_numbers {
-                            shell.palette.accent
-                        } else {
-                            0xe8e8e8
-                        }))
-                        .child("手数")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| {
-                                shell.toggle_view_setting(
-                                    "view.show_move_numbers",
-                                    "move numbers",
-                                    cx,
-                                )
-                            }),
-                        ),
+                    Button::new("toggle-move-numbers-button")
+                        .small()
+                        .ghost()
+                        .selected(show_move_numbers)
+                        .label("手数")
+                        .tooltip("显示/隐藏落子手数 (Cmd+Shift+M)")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx)
+                        })),
                 )
                 // Pinned plugin quick buttons directly on the bar
                 .children(
@@ -659,122 +552,48 @@ pub fn render_player_bar(
                             } else {
                                 plugin.name.as_str()
                             };
-                            div()
-                                .id(("pinned-plugin", plugin_idx))
-                                .px_2()
-                                .py_0p5()
-                                .cursor_pointer()
-                                .rounded_md()
-                                .bg(if is_active {
-                                    rgb(0x2a2a3a)
-                                } else {
-                                    rgb(0x1e1e1e)
-                                })
-                                .border_1()
-                                .border_color(if is_active {
-                                    rgb(shell.palette.accent)
-                                } else {
-                                    rgb(0x3a3a3a)
-                                })
-                                .text_color(if is_active {
-                                    rgb(0x8ec5ff)
-                                } else {
-                                    rgb(0xe8e8e8)
-                                })
-                                .hover(|style| {
-                                    style
-                                        .bg(rgb(0x2e2e2e))
-                                        .border_color(rgb(shell.palette.accent))
-                                })
-                                .child(format!("{icon} {label}"))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell, _, _, cx| {
-                                        shell.toggle_plugin_popover(&plugin_id, cx);
-                                    }),
-                                )
+                            let pid = plugin_id.clone();
+                            Button::new(("pinned-plugin", plugin_idx))
+                                .small()
+                                .ghost()
+                                .selected(is_active)
+                                .label(format!("{icon} {label}"))
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    shell.toggle_plugin_popover(&pid, cx);
+                                }))
                         }),
                 )
                 .child(
-                    div()
-                        .id("gtp-terminal-button")
-                        .debug_selector(|| "gtp-terminal-button".to_owned())
-                        .px_2()
-                        .py_0p5()
-                        .cursor_pointer()
-                        .rounded_md()
-                        .bg(if shell.gtp_terminal_open {
-                            rgb(0x2a2a3a)
-                        } else {
-                            rgb(0x1e1e1e)
-                        })
-                        .border_1()
-                        .border_color(if shell.gtp_terminal_open {
-                            rgb(shell.palette.accent)
-                        } else {
-                            rgb(0x3a3a3a)
-                        })
-                        .text_color(rgb(if shell.gtp_terminal_open {
-                            0x8ec5ff
-                        } else {
-                            0xe8e8e8
-                        }))
-                        .hover(|style| {
-                            style
-                                .bg(rgb(0x2e2e2e))
-                                .border_color(rgb(shell.palette.accent))
-                        })
-                        .child("💻 GTP 终端")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::toggle_gtp_terminal),
-                        ),
+                    Button::new("gtp-terminal-button")
+                        .small()
+                        .ghost()
+                        .selected(shell.gtp_terminal_open)
+                        .label("💻 GTP 终端")
+                        .tooltip("切换 KataGo / GTP 控制台 (Cmd+T)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .id("plugin-menu-button")
-                        .debug_selector(|| "plugin-menu-button".to_owned())
-                        .px_2()
-                        .py_0p5()
-                        .cursor_pointer()
-                        .rounded_md()
-                        .bg(if shell.active_plugin_popover.as_deref() == Some("all") {
-                            rgb(0x2a2a3a)
-                        } else {
-                            rgb(0x1e1e1e)
-                        })
-                        .border_1()
-                        .border_color(if shell.active_plugin_popover.as_deref() == Some("all") {
-                            rgb(shell.palette.accent)
-                        } else {
-                            rgb(0x3a3a3a)
-                        })
-                        .text_color(rgb(
-                            if shell.active_plugin_popover.as_deref() == Some("all") {
-                                0x8ec5ff
-                            } else {
-                                0xe8e8e8
-                            },
-                        ))
-                        .hover(|style| style.bg(rgb(0x2a2a2a)))
-                        .child("🧩 插件")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|shell, _, _, cx| shell.toggle_plugin_popover("all", cx)),
-                        ),
+                    Button::new("plugin-menu-button")
+                        .small()
+                        .ghost()
+                        .selected(shell.active_plugin_popover.as_deref() == Some("all"))
+                        .label("🧩 插件")
+                        .tooltip("已安装插件与市场")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.toggle_plugin_popover("all", cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .id("drawer-menu-button")
-                        .debug_selector(|| "drawer-menu-button".to_owned())
-                        .px_2()
-                        .py_0p5()
-                        .cursor_pointer()
-                        .rounded_md()
-                        .text_color(rgb(0xe8e8e8))
-                        .hover(|style| style.bg(rgb(0x2a2a2a)))
-                        .child("☰")
-                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::open_side_menu)),
+                    Button::new("drawer-menu-button")
+                        .small()
+                        .ghost()
+                        .label("☰")
+                        .tooltip("主菜单 (Cmd+, 首选项)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.open_side_menu(&MouseDownEvent::default(), window, cx);
+                        })),
                 ),
         )
 }
@@ -1619,16 +1438,22 @@ pub fn render_winrate_graph_panel(
                 .justify_between()
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(palette.subtle))
-                        .child(metric.label().to_uppercase()),
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(palette.subtle))
+                                .child("胜率走势"),
+                        )
+                        .child(Badge::new().small().child(metric.label().to_uppercase())),
                 )
                 .children(has_values.then(|| {
-                    div()
-                        .text_xs()
-                        .text_color(rgb(palette.accent))
-                        .child(format!("{} points", points.len()))
+                    Badge::new()
+                        .small()
+                        .child(format!("{} 手记录", points.len()))
                 })),
         )
         .child(if has_values {
@@ -2027,21 +1852,18 @@ pub fn render_preferences_drawer(
                             div()
                                 .id("preferences-close")
                                 .debug_selector(|| "preferences-close".to_owned())
-                                .px_3()
-                                .py_1()
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .rounded_md()
-                                .bg(rgb(shell.palette.input))
-                                .cursor_pointer()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(shell.palette.text))
-                                .hover(|style| style.bg(rgb(shell.palette.button)))
-                                .child("✕ Close")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(ShellApp::close_drawer),
+                                .child(
+                                    Button::new("preferences-close-btn")
+                                        .small()
+                                        .ghost()
+                                        .label("✕ Close")
+                                        .on_click(cx.listener(|shell, _, window, cx| {
+                                            shell.close_drawer(
+                                                &MouseDownEvent::default(),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
                                 ),
                         ),
                 )
@@ -2104,21 +1926,18 @@ fn render_readonly_drawer(
                             div()
                                 .id(("drawer-close", drawer_index))
                                 .debug_selector(move || format!("{drawer_id}-drawer-close"))
-                                .px_3()
-                                .py_1()
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .rounded_md()
-                                .bg(rgb(shell.palette.input))
-                                .cursor_pointer()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(shell.palette.text))
-                                .hover(|style| style.bg(rgb(shell.palette.button)))
-                                .child("✕ Close")
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(ShellApp::close_drawer),
+                                .child(
+                                    Button::new(("drawer-close-btn", drawer_index))
+                                        .small()
+                                        .ghost()
+                                        .label("✕ Close")
+                                        .on_click(cx.listener(|shell, _, window, cx| {
+                                            shell.close_drawer(
+                                                &MouseDownEvent::default(),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
                                 ),
                         ),
                 )
@@ -3341,17 +3160,10 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .items_center()
                                 .gap_1p5()
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .border_1()
-                                        .border_color(rgb(shell.palette.accent))
-                                        .bg(rgb(shell.palette.button))
-                                        .text_color(rgb(shell.palette.accent))
-                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                        .child(
+                                    Button::new("whole-game-review-button")
+                                        .xsmall()
+                                        .outline()
+                                        .label(
                                             if shell
                                                 .batch_review_progress
                                                 .is_some_and(|p| p.is_running)
@@ -3361,28 +3173,19 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 "⏩ 全盘 AI 复盘"
                                             },
                                         )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|shell, _, _, cx| {
-                                                shell.start_whole_game_review(cx)
-                                            }),
-                                        ),
+                                        .on_click(cx.listener(|shell, _, _, cx| {
+                                            shell.start_whole_game_review(cx);
+                                        })),
                                 )
-                                .child(
-                                    div()
-                                        .text_color(rgb(if shell.analysis_task.is_some() {
-                                            shell.palette.success
-                                        } else {
-                                            shell.palette.muted
-                                        }))
-                                        .child(if shell.analysis_task.is_some() {
-                                            "● 分析中"
-                                        } else if shell.analysis_enabled {
-                                            "○ 自动分析"
-                                        } else {
-                                            "○ 已暂停"
-                                        }),
-                                ),
+                                .child(Badge::new().small().child(
+                                    if shell.analysis_task.is_some() {
+                                        "● 分析中"
+                                    } else if shell.analysis_enabled {
+                                        "○ 自动分析"
+                                    } else {
+                                        "○ 已暂停"
+                                    },
+                                )),
                         ),
                 )
                 .child(
@@ -3565,64 +3368,39 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 )
                                                 .children((!entry.pv.is_empty()).then(|| {
                                                     let pv_clone = entry.pv.clone();
-                                                    div()
-                                                        .cursor_pointer()
-                                                        .px_1()
-                                                        .py_0p5()
-                                                        .rounded_sm()
-                                                        .border_1()
-                                                        .border_color(rgb(shell.palette.accent))
-                                                        .bg(rgb(shell.palette.button))
-                                                        .text_xs()
-                                                        .text_color(rgb(shell.palette.accent))
-                                                        .hover(|style| {
-                                                            style.bg(rgb(shell
-                                                                .palette
-                                                                .button_active))
-                                                        })
-                                                        .child("+ 分支")
-                                                        .on_mouse_down(
-                                                            MouseButton::Left,
-                                                            cx.listener(move |shell, _, _, cx| {
+                                                    Button::new(("branch-btn", idx))
+                                                        .xsmall()
+                                                        .outline()
+                                                        .label("+ 分支")
+                                                        .tooltip(
+                                                            "将此 AI 推荐变化图作为新分支加入棋谱",
+                                                        )
+                                                        .on_click(cx.listener(
+                                                            move |shell, _, _, cx| {
                                                                 shell.on_branch_candidate_pv(
                                                                     &pv_clone, cx,
                                                                 );
-                                                            }),
-                                                        )
+                                                            },
+                                                        ))
                                                 }))
-                                                .child(trial_vertex.map_or_else(
-                                                    || div(),
-                                                    |vertex| {
-                                                        let vertex_for_handler = vertex.clone();
-                                                        div()
-                                                            .cursor_pointer()
-                                                            .px_1()
-                                                            .py_0p5()
-                                                            .rounded_sm()
-                                                            .border_1()
-                                                            .border_color(rgb(shell.palette.accent))
-                                                            .bg(rgb(shell.palette.button))
-                                                            .text_xs()
-                                                            .text_color(rgb(shell.palette.accent))
-                                                            .hover(|style| {
-                                                                style.bg(rgb(shell
-                                                                    .palette
-                                                                    .button_active))
-                                                            })
-                                                            .child("试下")
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(
-                                                                    move |shell, _, _, cx| {
-                                                                        shell.on_trial_candidate(
-                                                                            &vertex_for_handler,
-                                                                            cx,
-                                                                        );
-                                                                    },
-                                                                ),
-                                                            )
-                                                    },
-                                                )),
+                                                .children(trial_vertex.map(|vertex| {
+                                                    let vertex_for_handler = vertex.clone();
+                                                    Button::new(("trial-btn", idx))
+                                                        .xsmall()
+                                                        .primary()
+                                                        .label("试下")
+                                                        .tooltip(
+                                                            "在棋盘上试下此点并让 AI 给出即时应对",
+                                                        )
+                                                        .on_click(cx.listener(
+                                                            move |shell, _, _, cx| {
+                                                                shell.on_trial_candidate(
+                                                                    &vertex_for_handler,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        ))
+                                                })),
                                         ),
                                 )
                                 .children((!pv_str.is_empty()).then(|| {
@@ -3803,23 +3581,13 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                 }))
                 // Export GIF Button
                 .child(
-                    div()
-                        .mt_1p5()
-                        .px_2()
-                        .py_1p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(shell.palette.accent))
-                        .bg(rgb(shell.palette.button))
-                        .text_color(rgb(shell.palette.accent))
-                        .font_weight(FontWeight::MEDIUM)
-                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                        .child("🎬 导出动画 GIF 棋谱 (sgf2gif)...")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_export_gif_action),
-                        ),
+                    Button::new("export-gif-button")
+                        .small()
+                        .outline()
+                        .label("🎬 导出动画 GIF 棋谱 (sgf2gif)...")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                        })),
                 ),
         )
 }
@@ -5079,27 +4847,19 @@ pub fn render_analysis_preview_panel(
                             ),
                         )
                         .child(
-                            div()
-                                .cursor_pointer()
-                                .px_1()
-                                .py_0p5()
-                                .rounded_sm()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.muted))
-                                .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                .child("退出")
-                                .on_mouse_down(
-                                    MouseButton::Left,
+                            Button::new("exit-trial-button")
+                                .xsmall()
+                                .danger()
+                                .label("退出")
+                                .tooltip("退出试下局面并恢复当前对局分析")
+                                .on_click(
                                     cx.listener(|shell, _, _, cx| shell.clear_trial_move(cx)),
                                 ),
                         )
                 } else if let Some((vertex, _)) = preview.as_ref() {
-                    div()
-                        .text_xs()
-                        .text_color(rgb(shell.palette.accent))
-                        .child(vertex.clone())
+                    div().child(Badge::new().small().child(vertex.clone()))
                 } else {
-                    div()
+                    div().child(Badge::new().small().child("待机"))
                 }),
         )
         .child(

@@ -5666,10 +5666,10 @@ const EXTERNAL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// checks shortly after the window regains focus (the platform activation
 /// handler schedules a refresh frame); the interval throttles repeated checks
 /// during active use. Idle or inactive windows produce no frames and no reads.
-fn schedule_external_check(
+fn schedule_external_check<V: gpui::Render + 'static>(
     window: &mut Window,
     _cx: &mut App,
-    window_handle: gpui::WindowHandle<ShellApp>,
+    window_handle: gpui::WindowHandle<V>,
     shell: Entity<ShellApp>,
     last_check: Rc<Cell<Option<Instant>>>,
 ) {
@@ -5689,6 +5689,8 @@ fn schedule_external_check(
 fn main() {
     let startup_file = std::env::args().nth(1).map(PathBuf::from);
     Application::new().run(move |cx: &mut App| {
+        gpui_component::init(cx);
+
         let settings_persistence = match NativeSettingsPersistence::for_current_user() {
             Ok(persistence) => persistence,
             Err(error) => {
@@ -5732,6 +5734,8 @@ fn main() {
         } else {
             WindowBounds::Windowed(bounds)
         };
+        let mut shell_slot: Option<Entity<ShellApp>> = None;
+        let shell_slot_ref = &mut shell_slot as *mut Option<Entity<ShellApp>>;
         let window = cx
             .open_window(
                 WindowOptions {
@@ -5744,7 +5748,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                move |_, cx| {
+                move |window, cx| {
                     let startup_file = startup_file.clone();
                     let initial_status = initial_status.clone();
                     let settings = settings.clone();
@@ -5761,7 +5765,7 @@ fn main() {
                                 std::env::temp_dir().join("sabaki-gpui-config"),
                             )
                         });
-                    cx.new(move |cx| {
+                    let shell = cx.new(move |cx| {
                         ShellApp::new(
                             settings,
                             settings_persistence,
@@ -5772,11 +5776,15 @@ fn main() {
                             Box::new(RfdDialogService),
                             cx,
                         )
-                    })
+                    });
+                    unsafe {
+                        *shell_slot_ref = Some(shell.clone());
+                    }
+                    cx.new(move |cx| gpui_component::Root::new(shell, window, cx))
                 },
             )
             .unwrap();
-        let shell: Entity<ShellApp> = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+        let shell: Entity<ShellApp> = shell_slot.unwrap();
         shell.update(cx, |shell, cx| {
             if shell.analysis_enabled {
                 shell.start_analysis(cx);
@@ -6464,18 +6472,30 @@ mod frontend_smoke {
         let config = temp_config("fresh-defaults");
         let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(11));
         let mut cx = TestAppContext::build(dispatcher, None);
-        let window_handle = cx.add_window(|_, cx| {
-            ShellApp::new(
-                SettingsStore::default(),
-                NativeSettingsPersistence::new(config.clone()),
-                NativeHostPersistence::new(config.clone()),
-                NativePluginPersistence::new(config.clone()),
-                "fresh defaults".to_owned(),
-                None,
-                Box::new(MockDialogService::default()),
-                cx,
-            )
+        cx.update(|cx| {
+            gpui_component::init(cx);
         });
+        let mut shell_slot: Option<Entity<ShellApp>> = None;
+        let shell_ptr = &mut shell_slot as *mut Option<Entity<ShellApp>>;
+        let window_handle = cx.add_window(|window, cx| {
+            let app = cx.new(|cx| {
+                ShellApp::new(
+                    SettingsStore::default(),
+                    NativeSettingsPersistence::new(config.clone()),
+                    NativeHostPersistence::new(config.clone()),
+                    NativePluginPersistence::new(config.clone()),
+                    "fresh defaults".to_owned(),
+                    None,
+                    Box::new(MockDialogService::default()),
+                    cx,
+                )
+            });
+            unsafe {
+                *shell_ptr = Some(app.clone());
+            }
+            gpui_component::Root::new(app, window, cx)
+        });
+        let shell = shell_slot.unwrap();
         let vcx = VisualTestContext::from_window(*window_handle.deref(), &cx).into_mut();
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -6486,34 +6506,26 @@ mod frontend_smoke {
         // than making a connected KataGo process look inert.
         assert!(vcx.debug_bounds("left-sidebar").is_some());
         assert!(vcx.debug_bounds("right-sidebar").is_some());
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| {
-                shell.toggle_sidebar_setting("view.show_leftsidebar", "engines sidebar", cx);
-            })
-            .expect("left-pane toggle persists through the same handler");
+        shell.update(&mut vcx.cx, |shell, cx| {
+            shell.toggle_sidebar_setting("view.show_leftsidebar", "engines sidebar", cx);
+        });
         assert_eq!(
-            window_handle
-                .read_with(&vcx.cx, |shell, _| {
-                    shell.settings.get_bool("view.show_leftsidebar")
-                })
-                .expect("shell remains alive"),
+            shell.read_with(&vcx.cx, |shell, _| {
+                shell.settings.get_bool("view.show_leftsidebar")
+            }),
             Some(false),
             "the visible first-launch left pane must persist hidden after toggling"
         );
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| {
-                shell.toggle_right_sidebar(cx)
-            })
-            .expect("right-pane toggle persists through its handler");
+        shell.update(&mut vcx.cx, |shell, cx| {
+            shell.toggle_right_sidebar(cx);
+        });
         assert_eq!(
-            window_handle
-                .read_with(&vcx.cx, |shell, _| {
-                    (
-                        shell.settings.get_bool("view.show_graph"),
-                        shell.settings.get_bool("view.show_comments"),
-                    )
-                })
-                .expect("shell remains alive"),
+            shell.read_with(&vcx.cx, |shell, _| {
+                (
+                    shell.settings.get_bool("view.show_graph"),
+                    shell.settings.get_bool("view.show_comments"),
+                )
+            }),
             (Some(false), Some(false)),
             "first-launch panels toggle must persist both inferred pane sources hidden"
         );
@@ -6561,18 +6573,30 @@ mod frontend_smoke {
         settings
             .set("view.sidebar_width", serde_json::json!(200.0))
             .unwrap();
-        let window_handle = cx.add_window(|_, cx| {
-            ShellApp::new(
-                settings.clone(),
-                NativeSettingsPersistence::new(config.clone()),
-                NativeHostPersistence::new(config.clone()),
-                NativePluginPersistence::new(config.clone()),
-                "frontend smoke".to_owned(),
-                None,
-                Box::new(MockDialogService::default()),
-                cx,
-            )
+        cx.update(|cx| {
+            gpui_component::init(cx);
         });
+        let mut shell_slot: Option<Entity<ShellApp>> = None;
+        let shell_ptr = &mut shell_slot as *mut Option<Entity<ShellApp>>;
+        let window_handle = cx.add_window(|window, cx| {
+            let app = cx.new(|cx| {
+                ShellApp::new(
+                    settings.clone(),
+                    NativeSettingsPersistence::new(config.clone()),
+                    NativeHostPersistence::new(config.clone()),
+                    NativePluginPersistence::new(config.clone()),
+                    "frontend smoke".to_owned(),
+                    None,
+                    Box::new(MockDialogService::default()),
+                    cx,
+                )
+            });
+            unsafe {
+                *shell_ptr = Some(app.clone());
+            }
+            gpui_component::Root::new(app, window, cx)
+        });
+        let shell = shell_slot.unwrap();
         let vcx = VisualTestContext::from_window(*window_handle.deref(), &cx).into_mut();
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
@@ -6660,19 +6684,15 @@ mod frontend_smoke {
             );
         }
         assert!(vcx.debug_bounds("plugin-menu").is_none());
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| {
-                shell.toggle_plugin_popover("all", cx);
-            })
-            .expect("plugin button opens compact overlay menu");
+        shell.update(&mut vcx.cx, |shell, cx| {
+            shell.toggle_plugin_popover("all", cx);
+        });
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
         vcx.run_until_parked();
         assert!(vcx.debug_bounds("plugin-menu").is_some());
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| shell.open_preferences(cx))
-            .expect("Preferences action must update the shell");
+        shell.update(&mut vcx.cx, |shell, cx| shell.open_preferences(cx));
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
@@ -6704,15 +6724,11 @@ mod frontend_smoke {
         });
         vcx.run_until_parked();
         assert_eq!(
-            window_handle
-                .read_with(&vcx.cx, |shell, _| shell.active_drawer)
-                .expect("shell remains available"),
+            shell.read_with(&vcx.cx, |shell, _| shell.active_drawer),
             None,
             "closing Preferences must clear drawer state"
         );
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| shell.open_game_info(cx))
-            .expect("Game Info action must update the shell");
+        shell.update(&mut vcx.cx, |shell, cx| shell.open_game_info(cx));
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
@@ -6724,9 +6740,7 @@ mod frontend_smoke {
             .debug_bounds("game-info-drawer-close")
             .expect("Game Info drawer must expose a close control");
         vcx.simulate_click(game_info_close.center(), gpui::Modifiers::none());
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| shell.open_score(cx))
-            .expect("Score action must update the shell");
+        shell.update(&mut vcx.cx, |shell, cx| shell.open_score(cx));
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
@@ -6742,9 +6756,7 @@ mod frontend_smoke {
             let _ = window.draw(cx);
         });
         assert_eq!(
-            window_handle
-                .read_with(&vcx.cx, |shell, _| shell.active_drawer)
-                .expect("shell remains available"),
+            shell.read_with(&vcx.cx, |shell, _| shell.active_drawer),
             None,
             "closing read-only drawers must clear drawer state"
         );
@@ -6807,25 +6819,19 @@ mod frontend_smoke {
             properties_region
         );
 
-        let board = window_handle
-            .read_with(&vcx.cx, |shell, _| shell.host.snapshot().board.clone())
-            .unwrap();
+        let board = shell.read_with(&vcx.cx, |shell, _| shell.host.snapshot().board.clone());
         let goban_size = f32::from(goban_bounds.size.width);
         let (x, y) = crate::goban_view::intersection_position(&board, goban_size, 16, 16);
         let click = gpui::point(
             px(f32::from(goban_bounds.origin.x) + x),
             px(f32::from(goban_bounds.origin.y) + y),
         );
-        let before = window_handle
-            .read_with(&vcx.cx, |shell, _| shell.host.snapshot().moves.len())
-            .unwrap();
+        let before = shell.read_with(&vcx.cx, |shell, _| shell.host.snapshot().moves.len());
         vcx.simulate_click(click, gpui::Modifiers::none());
-        let after = window_handle
-            .read_with(&vcx.cx, |shell, _| {
-                let snap = shell.host.snapshot();
-                (snap.moves.len(), snap.moves.last().and_then(|m| m.vertex))
-            })
-            .unwrap();
+        let after = shell.read_with(&vcx.cx, |shell, _| {
+            let snap = shell.host.snapshot();
+            (snap.moves.len(), snap.moves.last().and_then(|m| m.vertex))
+        });
         assert_eq!(
             after.0,
             before + 1,
@@ -6836,15 +6842,13 @@ mod frontend_smoke {
             .debug_bounds("pass-button")
             .expect("the pass button must have a debug selector");
         vcx.simulate_click(pass_bounds.center(), gpui::Modifiers::none());
-        let after_pass = window_handle
-            .read_with(&vcx.cx, |shell, _| {
-                let snapshot = shell.host.snapshot();
-                (
-                    snapshot.moves.len(),
-                    snapshot.moves.last().map(|m| m.vertex),
-                )
-            })
-            .unwrap();
+        let after_pass = shell.read_with(&vcx.cx, |shell, _| {
+            let snapshot = shell.host.snapshot();
+            (
+                snapshot.moves.len(),
+                snapshot.moves.last().map(|m| m.vertex),
+            )
+        });
         assert_eq!(after_pass.0, after.0 + 1);
         assert!(
             matches!(after_pass.1, Some(None)),
@@ -6858,31 +6862,28 @@ mod frontend_smoke {
             .debug_bounds("game-graph-node-0")
             .expect("GameGraph root must be rendered as an interactive node");
         vcx.simulate_click(root_graph_node.center(), gpui::Modifiers::none());
-        let current_node_after_graph_click = window_handle
-            .read_with(&vcx.cx, |shell, _| shell.host.snapshot().current_node_id)
-            .unwrap();
+        let current_node_after_graph_click =
+            shell.read_with(&vcx.cx, |shell, _| shell.host.snapshot().current_node_id);
         assert_eq!(
             current_node_after_graph_click, "root",
             "clicking the GameGraph root must navigate to the root node"
         );
-        window_handle
-            .update(&mut vcx.cx, |shell, _window, cx| {
+        vcx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
                 shell.open_game_graph_context_menu("root".to_owned(), cx);
-                shell.toggle_game_graph_context_hotspot(&MouseDownEvent::default(), _window, cx);
-            })
-            .expect("context-menu hotspot action must succeed");
+                shell.toggle_game_graph_context_hotspot(&MouseDownEvent::default(), window, cx);
+            });
+        });
         assert!(
-            window_handle
-                .read_with(&vcx.cx, |shell, _| {
-                    shell
-                        .host
-                        .snapshot()
-                        .nodes
-                        .iter()
-                        .find(|node| node.id == "root")
-                        .is_some_and(|node| node.properties.contains_key("HO"))
-                })
-                .unwrap(),
+            shell.read_with(&vcx.cx, |shell, _| {
+                shell
+                    .host
+                    .snapshot()
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == "root")
+                    .is_some_and(|node| node.properties.contains_key("HO"))
+            }),
             "context-menu hotspot action must write HO on the selected node"
         );
 
@@ -6920,14 +6921,12 @@ mod frontend_smoke {
             "dragging the left divider 60px should resize the left pane to 310px, got {:?}",
             resized_left.size
         );
-        let persisted_width = window_handle
-            .read_with(&vcx.cx, |shell, _| {
-                shell
-                    .settings
-                    .get("view.leftsidebar_width")
-                    .and_then(serde_json::Value::as_f64)
-            })
-            .unwrap();
+        let persisted_width = shell.read_with(&vcx.cx, |shell, _| {
+            shell
+                .settings
+                .get("view.leftsidebar_width")
+                .and_then(serde_json::Value::as_f64)
+        });
         assert!(
             persisted_width.is_some_and(|width| (width - 310.0).abs() < 0.75),
             "finishing the drag must persist the pane width, got {persisted_width:?}"
