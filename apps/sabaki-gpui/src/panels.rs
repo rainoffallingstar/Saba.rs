@@ -403,6 +403,9 @@ pub fn render_player_bar(
         .bg(rgb(0x141414))
         .text_xs()
         .text_color(rgb(0xf2f2f2))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
         // Left: Black player + rank
         .child(
             div()
@@ -2750,7 +2753,7 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
     let assigned_name = shell.engine_roles.get(selected_role);
     let selected_label = assigned_name
         .map(|name| format!("{} · {name}", selected_role.label()))
-        .unwrap_or_else(|| format!("{} (未配置引擎)", selected_role.label()));
+        .unwrap_or_else(|| format!("{} (点击连接自动探测)", selected_role.label()));
 
     div()
         .id("gtp-terminal-drawer")
@@ -2761,6 +2764,10 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .right(px(16.0))
         .flex()
         .justify_center()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            // Stop propagation to prevent accidental clicks under the drawer
+            cx.stop_propagation();
+        })
         .child(
             div()
                 .w_full()

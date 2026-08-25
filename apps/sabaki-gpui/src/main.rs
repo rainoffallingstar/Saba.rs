@@ -758,6 +758,66 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Ensures that a role has an assigned, configured engine record. If not
+    /// yet configured, it auto-discovers KataGo or existing engine records in the
+    /// store, assigns the role, and persists it.
+    fn ensure_engine_role_configured(
+        &mut self,
+        role: EngineRole,
+    ) -> Option<sabaki_host::EngineRecord> {
+        // 1. If role is explicitly assigned to a record in the store, return it.
+        if let Some(name) = self.engine_roles.get(role)
+            && let Some(record) = self
+                .engine_store
+                .list()
+                .iter()
+                .find(|r| r.name == name)
+                .cloned()
+        {
+            return Some(record);
+        }
+
+        // 2. Look for any existing KataGo / engine record in the store.
+        let candidate = self
+            .engine_store
+            .list()
+            .iter()
+            .find(|r| {
+                let n = r.name.to_lowercase();
+                let p = r.path.to_lowercase();
+                n.contains("katago") || n.contains("kata") || p.contains("katago")
+            })
+            .or_else(|| self.engine_store.list().first())
+            .cloned();
+
+        if let Some(record) = candidate {
+            let engine_name = record.name.clone();
+            self.engine_roles.assign(role, &engine_name);
+            let _ = self.persist_engine_roles();
+            return Some(record);
+        }
+
+        // 3. Auto-discover KataGo executable from system / local storage
+        let base_dir = crate::file_workflow::current_user_config_directory()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        if let Ok(env) = sabaki_host::ensure_katago_environment(
+            &base_dir,
+            sabaki_host::KataGoModelTier::Balanced,
+            None,
+        ) {
+            let engine_name = env.engine_record.name.clone();
+            self.engine_store.upsert(env.engine_record.clone());
+            self.engine_roles.assign(role, &engine_name);
+            let _ = self.engine_store.save(&mut self.settings);
+            let _ = self.persist_engine_roles();
+            let _ =
+                sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence);
+            return Some(env.engine_record);
+        }
+
+        None
+    }
+
     /// Starts a role-specific engine session: spawns the process,
     /// runs the host handshake/probe/startup/board-setup sequence, and replays
     /// the current position into the engine so it tracks the board.
@@ -772,29 +832,30 @@ impl ShellApp {
             cx.notify();
             return;
         }
-        let Some(name) = self.engine_roles.get(role) else {
-            self.status = format!("select a configured {} engine first", role.label()).into();
+        let Some(record) = self.ensure_engine_role_configured(role) else {
+            self.status = format!(
+                "未找到可用的 {} 引擎，请先在设置中配置 KataGo",
+                role.label()
+            )
+            .into();
+            self.show_toast(
+                format!(
+                    "未找到可用的 {} 引擎，请先在设置中配置 KataGo",
+                    role.label()
+                ),
+                cx,
+            );
             cx.notify();
             return;
         };
-        let Some(record) = self
-            .engine_store
-            .list()
-            .iter()
-            .find(|record| record.name == name)
-            .cloned()
-        else {
-            self.status =
-                format!("selected {} engine {name} is not configured", role.label()).into();
-            cx.notify();
-            return;
-        };
+        let name = record.name.clone();
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let board_size = self.host.snapshot().board.width;
         let transport = match sabaki_host::ProcessGtpTransport::start(&record.path, &arguments) {
             Ok(transport) => transport,
             Err(error) => {
                 self.status = format!("engine process failed: {error}").into();
+                self.show_toast(format!("引擎进程启动失败: {error}"), cx);
                 cx.notify();
                 return;
             }
@@ -805,11 +866,13 @@ impl ShellApp {
             .attach(role, transport, &record, board_size, &moves)
         {
             self.status = format!("engine attach failed: {error}").into();
+            self.show_toast(format!("引擎连接握手失败: {error}"), cx);
             cx.notify();
             return;
         }
         self.active_console_role = Some(role);
         self.status = format!("{} engine {name} attached", role.label()).into();
+        self.show_toast(format!("🔌 已连接 {} 引擎: {name}", role.label()), cx);
         if role == EngineRole::Analysis {
             self.start_analysis(cx);
         } else {
@@ -2821,6 +2884,9 @@ impl ShellApp {
     }
 
     fn on_board_vertex_mouse_down(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
+        if self.gtp_terminal_open {
+            return;
+        }
         self.on_board_hover(vertex, cx);
         if self.active_tool.is_line_tool() && self.mode == GameMode::Edit {
             self.line_start = Some(vertex);
