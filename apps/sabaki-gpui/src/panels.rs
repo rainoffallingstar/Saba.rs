@@ -1134,6 +1134,7 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
 }
 
 /// Compact overlay menu for managing pinned toolbar plugins and standalone plugin dialogs.
+#[allow(dead_code)]
 pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let active_target = shell.active_plugin_popover.as_deref().unwrap_or("all");
 
@@ -3093,8 +3094,139 @@ pub fn render_gtp_console_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Sta
         )
 }
 
-/// The pull-up bottom GTP terminal drawer, toggled from the bottom player bar.
-pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+/// The integrated bottom deck panel (second screen) revealed by clicking toolbar buttons.
+pub fn render_bottom_deck_panel(
+    _snapshot: &GameSnapshot,
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Stateful<Div> {
+    let active_tab = shell.active_bottom_tab();
+
+    div()
+        .id("bottom-deck-panel")
+        .debug_selector(|| "bottom-deck-panel".to_owned())
+        .h(px(280.0))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .border_t_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(0x18181c))
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            // Header Tab Switcher Bar inside the Deck
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_3()
+                .py_1p5()
+                .border_b_1()
+                .border_color(rgb(0x2a2a30))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            Button::new("deck-tab-gtp")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::GtpTerminal)
+                                .label("💻 GTP 终端")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::GtpTerminal, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("deck-tab-katago")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::KataGo)
+                                .label("⚡ KataGo 配置")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::KataGo, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("deck-tab-fox")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::FoxSync)
+                                .label("🦊 野狐对局")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::FoxSync, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("deck-tab-sgf")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::PositionSgf)
+                                .label("📋 局面转 SGF")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::PositionSgf, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("deck-tab-plugins")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::PluginManager)
+                                .label("🧩 插件管理")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell
+                                        .switch_bottom_tab(crate::BottomDeckTab::PluginManager, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕ 收起第二屏")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.close_bottom_deck(cx);
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .id("bottom-deck-body")
+                .flex_1()
+                .min_h_0()
+                .p_3()
+                .overflow_y_scroll()
+                .child(match active_tab {
+                    crate::BottomDeckTab::GtpTerminal => render_gtp_terminal_body(shell, cx),
+                    crate::BottomDeckTab::KataGo => render_katago_dialog(shell, cx),
+                    crate::BottomDeckTab::FoxSync => render_fox_sync_dialog(shell, cx),
+                    crate::BottomDeckTab::PositionSgf => render_position_to_sgf_dialog(shell, cx),
+                    crate::BottomDeckTab::PluginManager => render_pinned_plugins_manager(shell, cx),
+                    crate::BottomDeckTab::Generic(ref other_id) => {
+                        if let Some(plugin) = shell
+                            .installed_plugins
+                            .iter()
+                            .find(|p| &p.plugin_id == other_id)
+                        {
+                            render_generic_plugin_dialog(plugin, shell, cx)
+                        } else {
+                            render_pinned_plugins_manager(shell, cx)
+                        }
+                    }
+                }),
+        )
+}
+
+fn render_gtp_terminal_body(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     let selected_role = shell
         .active_console_role
         .unwrap_or(crate::engine_console::EngineRole::Analysis);
@@ -3105,120 +3237,99 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .unwrap_or_else(|| format!("{} (点击连接自动探测)", selected_role.label()));
 
     div()
-        .id("gtp-terminal-drawer")
-        .debug_selector(|| "gtp-terminal-drawer".to_owned())
-        .absolute()
-        .bottom(px(42.0))
-        .left(px(16.0))
-        .right(px(16.0))
+        .w_full()
+        .h_full()
         .flex()
-        .justify_center()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            // Stop propagation to prevent accidental clicks under the drawer
-            cx.stop_propagation();
-        })
+        .flex_col()
         .child(
+            // Header: Title + Role selection tabs + Connect/Disconnect + Clear + Close
             div()
-                .w_full()
-                .max_w(px(780.0))
-                .h(px(320.0))
                 .flex()
-                .flex_col()
-                .p_3()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(shell.palette.accent))
-                .bg(rgb(0x18181c))
-                .shadow_lg()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(0x2a2a30))
                 .child(
-                    // Header: Title + Role selection tabs + Connect/Disconnect + Clear + Close
                     div()
                         .flex()
                         .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .pb_2()
-                        .border_b_1()
-                        .border_color(rgb(0x2a2a30))
+                        .gap_1p5()
+                        .min_w_0()
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap_1p5()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(0xf2f2f5))
-                                        .flex_none()
-                                        .child("💻 GTP 终端"),
-                                )
-                                // Role tabs (short labels only; the full engine
-                                // name is shown in the transcript status line)
-                                .children([
-                                    crate::engine_console::EngineRole::Analysis,
-                                    crate::engine_console::EngineRole::Black,
-                                    crate::engine_console::EngineRole::White,
-                                ].into_iter().enumerate().map(|(idx, role)| {
-                                    let is_active = shell.active_console_role == Some(role)
-                                        || (shell.active_console_role.is_none() && role == crate::engine_console::EngineRole::Analysis);
-                                    let attached = shell.engine_controller.is_attached(role);
-                                    Button::new(("gtp-role", idx))
-                                        .small()
-                                        .ghost()
-                                        .selected(is_active)
-                                        .label(format!(
-                                            "{} {}",
-                                            if attached { "●" } else { "○" },
-                                            role.label(),
-                                        ))
-                                        .on_click(cx.listener(move |shell, _, _, cx| {
-                                            shell.active_console_role = Some(role);
-                                            cx.notify();
-                                        }))
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0xf2f2f5))
+                                .flex_none()
+                                .child("💻 GTP 终端"),
+                        )
+                        // Role tabs (short labels only; the full engine
+                        // name is shown in the transcript status line)
+                        .children([
+                            crate::engine_console::EngineRole::Analysis,
+                            crate::engine_console::EngineRole::Black,
+                            crate::engine_console::EngineRole::White,
+                        ].into_iter().enumerate().map(|(idx, role)| {
+                            let is_active = shell.active_console_role == Some(role)
+                                || (shell.active_console_role.is_none() && role == crate::engine_console::EngineRole::Analysis);
+                            let attached = shell.engine_controller.is_attached(role);
+                            Button::new(("gtp-role", idx))
+                                .small()
+                                .ghost()
+                                .selected(is_active)
+                                .label(format!(
+                                    "{} {}",
+                                    if attached { "●" } else { "○" },
+                                    role.label(),
+                                ))
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    shell.active_console_role = Some(role);
+                                    cx.notify();
+                                }))
+                        }))
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .flex_none()
+                        .child(
+                            Button::new("gtp-attach-toggle")
+                                .small()
+                                .outline()
+                                .label(if is_attached { "⏹ 断开" } else { "🔌 连接" })
+                                .on_click(cx.listener(move |shell, _, window, cx| {
+                                    if shell.engine_controller.is_attached(selected_role) {
+                                        shell.on_engine_disconnect(selected_role, &MouseDownEvent::default(), window, cx);
+                                    } else {
+                                        shell.on_engine_connect(selected_role, cx);
+                                    }
                                 }))
                         )
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .flex_none()
-                                .child(
-                                    Button::new("gtp-attach-toggle")
-                                        .small()
-                                        .outline()
-                                        .label(if is_attached { "⏹ 断开" } else { "🔌 连接" })
-                                        .on_click(cx.listener(move |shell, _, window, cx| {
-                                            if shell.engine_controller.is_attached(selected_role) {
-                                                shell.on_engine_disconnect(selected_role, &MouseDownEvent::default(), window, cx);
-                                            } else {
-                                                shell.on_engine_connect(selected_role, cx);
-                                            }
-                                        }))
-                                )
-                                .child(
-                                    Button::new("gtp-clear-log")
-                                        .small()
-                                        .ghost()
-                                        .label("清空")
-                                        .on_click(cx.listener(|shell, _, _, cx| {
-                                            shell.engine_log.clear();
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Button::new("gtp-close-terminal")
-                                        .small()
-                                        .ghost()
-                                        .label("✕")
-                                        .on_click(cx.listener(|shell, _, window, cx| {
-                                            shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
-                                        })),
-                                )
+                            Button::new("gtp-clear-log")
+                                .small()
+                                .ghost()
+                                .label("清空")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.engine_log.clear();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("gtp-close-terminal")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
+                                })),
                         )
                 )
+        )
                 .child(
                     // Transcript body
                     div()
@@ -3391,6 +3502,37 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 ),
                         )
                 )
+}
+
+/// The pull-up bottom GTP terminal drawer, retained for legacy caller compatibility.
+#[allow(dead_code)]
+pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    div()
+        .id("gtp-terminal-drawer")
+        .debug_selector(|| "gtp-terminal-drawer".to_owned())
+        .absolute()
+        .bottom(px(42.0))
+        .left(px(16.0))
+        .right(px(16.0))
+        .flex()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            div()
+                .w_full()
+                .max_w(px(780.0))
+                .h(px(320.0))
+                .flex()
+                .flex_col()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(shell.palette.accent))
+                .bg(rgb(0x18181c))
+                .shadow_lg()
+                .child(render_gtp_terminal_body(shell, cx)),
         )
 }
 

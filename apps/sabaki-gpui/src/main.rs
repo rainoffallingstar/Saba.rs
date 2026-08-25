@@ -143,6 +143,16 @@ actions!(
     ]
 );
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BottomDeckTab {
+    GtpTerminal,
+    KataGo,
+    FoxSync,
+    PositionSgf,
+    PluginManager,
+    Generic(String),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 enum ActiveDrawer {
@@ -834,8 +844,11 @@ impl ShellApp {
     }
 
     fn toggle_gtp_terminal(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.gtp_terminal_open = !self.gtp_terminal_open;
         if self.gtp_terminal_open {
+            self.gtp_terminal_open = false;
+        } else {
+            self.gtp_terminal_open = true;
+            self.active_plugin_popover = None;
             self.active_text_input = Some(ActiveTextInput::GtpInput);
         }
         cx.notify();
@@ -4851,11 +4864,79 @@ impl ShellApp {
         self.toggle_plugin_popover("all", cx);
     }
 
+    pub fn is_bottom_deck_open(&self) -> bool {
+        self.gtp_terminal_open || self.active_plugin_popover.is_some()
+    }
+
+    pub fn active_bottom_tab(&self) -> BottomDeckTab {
+        if self.gtp_terminal_open {
+            BottomDeckTab::GtpTerminal
+        } else if let Some(target) = self.active_plugin_popover.as_deref() {
+            match target {
+                "org.sabaki.katago-setup-hub" => BottomDeckTab::KataGo,
+                "org.sabaki.fox-kifu-sync" => BottomDeckTab::FoxSync,
+                "org.sabaki.position-to-sgf" => BottomDeckTab::PositionSgf,
+                "all" => BottomDeckTab::PluginManager,
+                other => BottomDeckTab::Generic(other.to_owned()),
+            }
+        } else {
+            BottomDeckTab::GtpTerminal
+        }
+    }
+
+    pub fn switch_bottom_tab(&mut self, tab: BottomDeckTab, cx: &mut Context<Self>) {
+        match tab {
+            BottomDeckTab::GtpTerminal => {
+                self.gtp_terminal_open = true;
+                self.active_plugin_popover = None;
+                self.active_text_input = Some(ActiveTextInput::GtpInput);
+            }
+            BottomDeckTab::KataGo => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("org.sabaki.katago-setup-hub".to_owned());
+            }
+            BottomDeckTab::FoxSync => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("org.sabaki.fox-kifu-sync".to_owned());
+                self.active_text_input = Some(ActiveTextInput::FoxQuery);
+            }
+            BottomDeckTab::PositionSgf => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("org.sabaki.position-to-sgf".to_owned());
+            }
+            BottomDeckTab::PluginManager => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("all".to_owned());
+            }
+            BottomDeckTab::Generic(id) => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some(id);
+            }
+        }
+        cx.notify();
+    }
+
+    #[allow(dead_code)]
+    pub fn toggle_bottom_deck_tab(&mut self, tab: BottomDeckTab, cx: &mut Context<Self>) {
+        if self.is_bottom_deck_open() && self.active_bottom_tab() == tab {
+            self.close_bottom_deck(cx);
+        } else {
+            self.switch_bottom_tab(tab, cx);
+        }
+    }
+
+    pub fn close_bottom_deck(&mut self, cx: &mut Context<Self>) {
+        self.gtp_terminal_open = false;
+        self.active_plugin_popover = None;
+        cx.notify();
+    }
+
     fn toggle_plugin_popover(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.active_plugin_popover.as_deref() == Some(id) {
             self.active_plugin_popover = None;
         } else {
             self.active_plugin_popover = Some(id.to_owned());
+            self.gtp_terminal_open = false;
         }
         cx.notify();
     }
@@ -5130,8 +5211,14 @@ impl Render for ShellApp {
         } else {
             0.0
         };
+        let bottom_panel_height = if self.is_bottom_deck_open() {
+            280.0
+        } else {
+            0.0
+        };
         let available_width = (window_width - side_panels - 16.0).max(240.0);
-        let available_height = (window_height - 40.0 - 36.0 - 16.0).max(240.0);
+        let available_height =
+            (window_height - 40.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
         let board_pixel_size = available_width.min(available_height).max(BOARD_PIXEL_SIZE);
 
         div()
@@ -5336,19 +5423,22 @@ impl Render for ShellApp {
                             .debug_selector(|| "right-sidebar-hidden".to_owned())
                     }),
             )
-            .child(panels::render_player_bar(
-                &snapshot, &status, palette, self, cx,
-            ))
-            .child(if self.active_plugin_popover.is_some() {
-                panels::render_plugin_menu(self, cx)
-            } else {
-                div().id("plugin-menu-hidden")
-            })
-            .child(if self.gtp_terminal_open {
-                panels::render_gtp_terminal_drawer(self, cx)
-            } else {
-                div().id("gtp-terminal-hidden")
-            })
+            .child(
+                div()
+                    .id("bottom-dock-container")
+                    .debug_selector(|| "bottom-dock-container".to_owned())
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .child(panels::render_player_bar(
+                        &snapshot, &status, palette, self, cx,
+                    ))
+                    .children(if self.is_bottom_deck_open() {
+                        Some(panels::render_bottom_deck_panel(&snapshot, self, cx))
+                    } else {
+                        None
+                    }),
+            )
             .child(match self.active_drawer {
                 Some(ActiveDrawer::Preferences) => div().id("preferences-drawer-hidden"),
                 Some(ActiveDrawer::GameInfo) => {
@@ -6855,7 +6945,7 @@ mod frontend_smoke {
                 right_sidebar
             );
         }
-        assert!(vcx.debug_bounds("plugin-menu").is_none());
+        assert!(vcx.debug_bounds("bottom-deck-panel").is_none());
         shell.update(&mut vcx.cx, |shell, cx| {
             shell.toggle_plugin_popover("all", cx);
         });
@@ -6863,7 +6953,7 @@ mod frontend_smoke {
             let _ = window.draw(cx);
         });
         vcx.run_until_parked();
-        assert!(vcx.debug_bounds("plugin-menu").is_some());
+        assert!(vcx.debug_bounds("bottom-deck-panel").is_some());
         let plugin_close = vcx
             .debug_bounds("plugin-menu-close")
             .expect("Plugin menu must expose a close control");
