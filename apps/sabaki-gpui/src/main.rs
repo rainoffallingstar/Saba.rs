@@ -407,13 +407,13 @@ impl ShellApp {
             &settings,
             "view.leftsidebar_width",
             "view.leftsidebar_minwidth",
-            280.0,
+            320.0,
         );
         let right_sidebar_width = pane_size_from_settings(
             &settings,
             "view.sidebar_width",
             "view.sidebar_minwidth",
-            280.0,
+            320.0,
         );
         let peer_list_height = pane_size_from_settings(
             &settings,
@@ -5068,7 +5068,7 @@ impl Render for ShellApp {
         } else {
             0.0
         };
-        let available_width = (window_width - side_panels - 32.0).max(240.0);
+        let available_width = (window_width - side_panels - 16.0).max(240.0);
         let available_height = (window_height - 40.0 - 36.0 - 16.0).max(240.0);
         let board_pixel_size = available_width.min(available_height).max(BOARD_PIXEL_SIZE);
 

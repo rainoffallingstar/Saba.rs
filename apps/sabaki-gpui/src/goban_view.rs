@@ -725,7 +725,7 @@ pub fn render_goban_with_id(
                 candidate.vertex.column,
                 candidate.vertex.row,
             );
-            let size = (spacing * 0.88).clamp(20.0, 36.0);
+            let size = stone_size;
             let bg_color = if candidate.is_best {
                 0x10b981 // KaTrain best: emerald green
             } else if candidate.winrate_percent >= 50.0 {
@@ -803,7 +803,7 @@ pub fn render_goban_with_id(
         }
     }
 
-    // Prospective PV variation sequence preview ghost stones
+    // Prospective PV variation sequence preview stones (rendered consistently with solid played stones)
     for (vtx, color, step_num) in &options.pv_preview {
         if vtx.row < height
             && vtx.column < width
@@ -814,21 +814,15 @@ pub fn render_goban_with_id(
                 == Some(&0)
         {
             let (x, y) = intersection_position(board, board_pixel_size, vtx.column, vtx.row);
-            let psize = spacing * 0.72;
+            // Solid stone matching real stones
+            children.push(stone(*color, x, y, stone_size, stone_black, stone_white));
+            // Move number overlaid clearly in contrasting color
             children.push(
                 div()
                     .absolute()
-                    .left(px(x - psize / 2.0))
-                    .top(px(y - psize / 2.0))
-                    .size(px(psize))
-                    .rounded_full()
-                    .border_2()
-                    .border_color(rgb(0x007aff))
-                    .bg(if *color == Color::Black {
-                        hsla(0.0, 0.0, 0.1, 0.6)
-                    } else {
-                        hsla(0.0, 0.0, 0.95, 0.6)
-                    })
+                    .left(px(x - stone_size / 2.0))
+                    .top(px(y - stone_size / 2.0))
+                    .size(px(stone_size))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -837,7 +831,7 @@ pub fn render_goban_with_id(
                     .text_color(if *color == Color::Black {
                         rgb(0xffffff)
                     } else {
-                        rgb(0x111111)
+                        rgb(0x111114)
                     })
                     .child(step_num.to_string()),
             );
