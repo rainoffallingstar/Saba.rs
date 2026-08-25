@@ -1133,9 +1133,27 @@ pub fn render_plugins_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
     panel
 }
 
-/// Compact overlay menu for managing pinned toolbar plugins.
+/// Compact overlay menu for managing pinned toolbar plugins and standalone plugin dialogs.
 pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
-    let pinned_ids = shell.pinned_plugin_ids();
+    let active_target = shell.active_plugin_popover.as_deref().unwrap_or("all");
+
+    let content = match active_target {
+        "org.sabaki.katago-setup-hub" => render_katago_dialog(shell, cx),
+        "org.sabaki.fox-kifu-sync" => render_fox_sync_dialog(shell, cx),
+        "org.sabaki.position-to-sgf" => render_position_to_sgf_dialog(shell, cx),
+        "all" => render_pinned_plugins_manager(shell, cx),
+        other_id => {
+            if let Some(plugin) = shell
+                .installed_plugins
+                .iter()
+                .find(|p| p.plugin_id == other_id)
+            {
+                render_generic_plugin_dialog(plugin, shell, cx)
+            } else {
+                render_pinned_plugins_manager(shell, cx)
+            }
+        }
+    };
 
     div()
         .id("plugin-menu")
@@ -1146,142 +1164,589 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
         .w_full()
         .flex()
         .justify_center()
+        .child(content)
+}
+
+fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    let analysis_connected = shell
+        .engine_controller
+        .is_attached(crate::engine_console::EngineRole::Analysis);
+    div()
+        .w(px(460.0))
+        .flex()
+        .flex_col()
+        .gap_2p5()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(shell.palette.panel))
+        .shadow_lg()
         .child(
             div()
-                .w(px(380.0))
-                .max_h(px(420.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child("⚡ KataGo AI 引擎与模型配置")
+                )
+                .child(
+                    div()
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.close_plugin_popover(&MouseDownEvent::default(), window, cx);
+                                })),
+                        ),
+                )
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
                 .flex()
                 .flex_col()
-                .gap_2()
-                .p_3()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(shell.palette.accent))
-                .bg(rgb(shell.palette.panel))
-                .shadow_lg()
+                .gap_1()
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .justify_between()
-                        .pb_2()
-                        .border_b_1()
-                        .border_color(rgb(shell.palette.border))
+                        .child(div().text_xs().text_color(rgb(shell.palette.subtle)).child("引擎运行状态:"))
+                        .child(
+                            Badge::new()
+                                .small()
+                                .child(if analysis_connected { "● Kata-Analyze 已连接" } else { "○ 待连接" })
+                        )
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.muted))
+                        .child("支持自动下载 KataGo 原生引擎，并根据本机硬件自动匹配 Metal (Apple Silicon) / OpenCL / CUDA 加速。")
+                )
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    Button::new("katago-setup-action-btn")
+                        .small()
+                        .primary()
+                        .label("⚡ 一键配置 / 诊断环境与模型")
+                        .tooltip("自动检查环境、下载最新模型并配置引擎")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.on_plugin_command("org.sabaki.katago-setup-hub", "katago.setup", cx);
+                        }))
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1p5()
+                        .child(
+                            Button::new("katago-connect-analysis-btn")
+                                .small()
+                                .outline()
+                                .label(if analysis_connected { "⏹ 断开分析" } else { "🔌 连接为分析引擎" })
+                                .on_click(cx.listener(move |shell, _, window, cx| {
+                                    if shell.engine_controller.is_attached(crate::engine_console::EngineRole::Analysis) {
+                                        shell.on_engine_disconnect(crate::engine_console::EngineRole::Analysis, &MouseDownEvent::default(), window, cx);
+                                    } else {
+                                        shell.on_engine_connect(crate::engine_console::EngineRole::Analysis, cx);
+                                    }
+                                }))
+                        )
+                        .child(
+                            Button::new("katago-open-terminal-btn")
+                                .small()
+                                .ghost()
+                                .label("💻 GTP 终端")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
+                                }))
+                        )
+                )
+        )
+}
+
+fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    div()
+        .w(px(460.0))
+        .flex()
+        .flex_col()
+        .gap_2p5()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(shell.palette.panel))
+        .shadow_lg()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child("🦊 野狐围棋对局同步与查询"),
+                )
+                .child(
+                    div()
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.close_plugin_popover(
+                                        &MouseDownEvent::default(),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("野狐对局用户查询"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1p5()
                         .child(
                             div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(rgb(shell.palette.text))
-                                        .child("🧩 插件管理"),
+                                .flex_1()
+                                .track_focus(&shell.fox_query_focus_handle)
+                                .px_3()
+                                .py_1p5()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(shell.palette.accent))
+                                .bg(rgb(shell.palette.panel))
+                                .text_xs()
+                                .text_color(rgb(shell.palette.text))
+                                .child(if shell.fox_query_input.text().is_empty() {
+                                    "输入野狐用户名或用户 ID".to_owned()
+                                } else {
+                                    shell.fox_query_input.text().to_owned()
+                                })
+                                .child(NativeInputBinding::new(
+                                    shell.fox_query_focus_handle.clone(),
+                                    cx.entity().clone(),
+                                ))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(ShellApp::on_fox_query_focus),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(shell.palette.subtle))
-                                        .child("选择固定到底部操作栏的快捷插件"),
-                                ),
+                                .on_key_down(cx.listener(ShellApp::on_fox_query_key_down)),
+                        )
+                        .child(
+                            Button::new("fox-search-btn")
+                                .small()
+                                .primary()
+                                .label("🔍 查询")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.fetch_fox_query(cx);
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div().flex().gap_1p5().child(
+                Button::new("fox-sync-recent-btn")
+                    .small()
+                    .outline()
+                    .label("🔄 同步最近对局")
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.on_plugin_command("org.sabaki.fox-kifu-sync", "fox.query_games", cx);
+                    })),
+            ),
+        )
+}
+
+fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    div()
+        .w(px(460.0))
+        .flex()
+        .flex_col()
+        .gap_2p5()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(shell.palette.panel))
+        .shadow_lg()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child("📋 局面转 SGF / 剪贴板导出"),
+                )
+                .child(
+                    div()
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.close_plugin_popover(
+                                        &MouseDownEvent::default(),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("当前盘面导出选项:"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.text))
+                        .child(format!(
+                            "棋盘路数: {} × {} · 已落子: {} 手",
+                            shell.host.snapshot().board.width,
+                            shell.host.snapshot().board.height,
+                            shell.host.snapshot().moves.len()
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    Button::new("export-full-sgf-btn")
+                        .small()
+                        .primary()
+                        .label("📋 复制完整对局 SGF 到剪贴板")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.on_plugin_command(
+                                "org.sabaki.position-to-sgf",
+                                "export.clipboard_sgf",
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    Button::new("export-pos-sgf-btn")
+                        .small()
+                        .outline()
+                        .label("🎯 仅复制当前死活/初始局面 (AB/AW)")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.on_plugin_command(
+                                "org.sabaki.position-to-sgf",
+                                "export.clipboard_position",
+                                cx,
+                            );
+                        })),
+                )
+                .child(
+                    Button::new("export-gif-modal-btn")
+                        .small()
+                        .ghost()
+                        .label("🎬 导出动画 GIF 棋谱…")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                        })),
+                ),
+        )
+}
+
+fn render_generic_plugin_dialog(
+    plugin: &PluginPanelEntry,
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Div {
+    let plugin_id = plugin.plugin_id.clone();
+    div()
+        .w(px(460.0))
+        .flex()
+        .flex_col()
+        .gap_2p5()
+        .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(shell.palette.panel))
+        .shadow_lg()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child(format!(
+                            "{} {}",
+                            plugin_icon(&plugin.plugin_id),
+                            plugin.name
+                        )),
+                )
+                .child(
+                    div()
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.close_plugin_popover(
+                                        &MouseDownEvent::default(),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .text_xs()
+                .text_color(rgb(shell.palette.subtle))
+                .child(plugin_description(&plugin.plugin_id)),
+        )
+        .children((!plugin.commands.is_empty()).then(|| {
+            div().flex().flex_col().gap_1p5().children(
+                plugin
+                    .command_ids
+                    .iter()
+                    .zip(plugin.commands.iter())
+                    .enumerate()
+                    .map(|(idx, (command_id, title))| {
+                        let pid = plugin_id.clone();
+                        let cid = command_id.clone();
+                        Button::new(("generic-plugin-cmd", idx))
+                            .small()
+                            .primary()
+                            .label(title.clone())
+                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                shell.on_plugin_command(&pid, &cid, cx);
+                            }))
+                    }),
+            )
+        }))
+}
+
+fn render_pinned_plugins_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    let pinned_ids = shell.pinned_plugin_ids();
+    div()
+        .w(px(380.0))
+        .max_h(px(420.0))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(shell.palette.accent))
+        .bg(rgb(shell.palette.panel))
+        .shadow_lg()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .pb_2()
+                .border_b_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(shell.palette.text))
+                                .child("🧩 插件管理"),
                         )
                         .child(
                             div()
-                                .id("plugin-menu-close")
-                                .debug_selector(|| "plugin-menu-close".to_owned())
-                                .child(
-                                    Button::new("plugin-menu-close-btn")
-                                        .small()
-                                        .ghost()
-                                        .label("✕")
-                                        .on_click(cx.listener(|shell, _, window, cx| {
-                                            shell.close_plugin_popover(
-                                                &MouseDownEvent::default(),
-                                                window,
-                                                cx,
-                                            );
-                                        })),
-                                ),
+                                .text_xs()
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("选择固定到底部操作栏的快捷插件"),
                         ),
                 )
-                .child(if shell.installed_plugins.is_empty() {
+                .child(
                     div()
-                        .id("plugin-list-empty")
-                        .p_3()
-                        .rounded_md()
-                        .bg(rgb(shell.palette.input))
-                        .text_xs()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("暂无已安装的扩展插件。可在顶部菜单【Plugins】中安装。")
-                } else {
-                    div()
-                        .id("plugin-list-scroll")
-                        .flex()
-                        .flex_col()
-                        .gap_1p5()
-                        .overflow_y_scroll()
-                        .children(shell.installed_plugins.iter().enumerate().map(
-                            |(idx, plugin)| {
-                                let plugin_id = plugin.plugin_id.clone();
-                                let is_pinned = pinned_ids.contains(&plugin_id);
-                                let toggle_id = plugin_id.clone();
-                                let desc = plugin_description(&plugin_id);
-
-                                div()
-                                    .p_2()
-                                    .rounded_md()
-                                    .bg(rgb(shell.palette.input))
-                                    .border_1()
-                                    .border_color(rgb(if is_pinned {
-                                        shell.palette.accent
-                                    } else {
-                                        shell.palette.border
-                                    }))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(shell.palette.text))
-                                                    .child(format!(
-                                                        "{} {}",
-                                                        plugin_icon(&plugin_id),
-                                                        plugin.name
-                                                    )),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(shell.palette.subtle))
-                                                    .child(desc),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new(("pin-toggle", idx))
-                                            .small()
-                                            .ghost()
-                                            .selected(is_pinned)
-                                            .label(if is_pinned {
-                                                "📌 已固定"
-                                            } else {
-                                                "固定到栏"
-                                            })
-                                            .on_click(cx.listener(move |shell, _, _, cx| {
-                                                shell.toggle_plugin_pinned(&toggle_id, cx);
-                                            })),
-                                    )
-                            },
-                        ))
-                }),
+                        .id("plugin-menu-close")
+                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .child(
+                            Button::new("plugin-menu-close-btn")
+                                .small()
+                                .ghost()
+                                .label("✕")
+                                .on_click(cx.listener(|shell, _, window, cx| {
+                                    shell.close_plugin_popover(
+                                        &MouseDownEvent::default(),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                ),
         )
+        .child(if shell.installed_plugins.is_empty() {
+            div()
+                .id("plugin-list-empty")
+                .p_3()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .text_xs()
+                .text_color(rgb(shell.palette.subtle))
+                .child("暂无已安装的扩展插件。可在顶部菜单【Plugins】中安装。")
+        } else {
+            div()
+                .id("plugin-list-scroll")
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .overflow_y_scroll()
+                .children(
+                    shell
+                        .installed_plugins
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, plugin)| {
+                            let plugin_id = plugin.plugin_id.clone();
+                            let is_pinned = pinned_ids.contains(&plugin_id);
+                            let toggle_id = plugin_id.clone();
+                            let desc = plugin_description(&plugin_id);
+
+                            div()
+                                .p_2()
+                                .rounded_md()
+                                .bg(rgb(shell.palette.input))
+                                .border_1()
+                                .border_color(rgb(if is_pinned {
+                                    shell.palette.accent
+                                } else {
+                                    shell.palette.border
+                                }))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgb(shell.palette.text))
+                                                .child(format!(
+                                                    "{} {}",
+                                                    plugin_icon(&plugin_id),
+                                                    plugin.name
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.subtle))
+                                                .child(desc),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(("pin-toggle", idx))
+                                        .small()
+                                        .ghost()
+                                        .selected(is_pinned)
+                                        .label(if is_pinned {
+                                            "📌 已固定"
+                                        } else {
+                                            "固定到栏"
+                                        })
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
+                                            shell.toggle_plugin_pinned(&toggle_id, cx);
+                                        })),
+                                )
+                        }),
+                )
+        })
 }
 
 /// Renders a compact WinrateGraph from the current variation's persisted and

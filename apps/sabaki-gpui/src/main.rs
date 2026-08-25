@@ -6105,19 +6105,19 @@ fn main() {
         let shell_p_katago = shell.clone();
         cx.on_action(move |_: &PluginKataGoSetup, cx| {
             shell_p_katago.update(cx, |shell, cx| {
-                shell.on_plugin_command("org.sabaki.katago-setup-hub", "katago.setup", cx);
+                shell.toggle_plugin_popover("org.sabaki.katago-setup-hub", cx);
             });
         });
         let shell_p_fox = shell.clone();
         cx.on_action(move |_: &PluginFoxSync, cx| {
             shell_p_fox.update(cx, |shell, cx| {
-                shell.on_plugin_command("org.sabaki.fox-kifu-sync", "fox.query_games", cx);
+                shell.toggle_plugin_popover("org.sabaki.fox-kifu-sync", cx);
             });
         });
         let shell_p_pos = shell.clone();
         cx.on_action(move |_: &PluginPositionToSgf, cx| {
             shell_p_pos.update(cx, |shell, cx| {
-                shell.on_plugin_command("org.sabaki.position-to-sgf", "export.clipboard_sgf", cx);
+                shell.toggle_plugin_popover("org.sabaki.position-to-sgf", cx);
             });
         });
         let shell_p_zip = shell.clone();
