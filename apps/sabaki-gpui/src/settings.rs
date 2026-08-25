@@ -2,6 +2,7 @@ use crate::theme::ThemeTokens;
 use sabaki_host::setting_kind;
 
 /// The board sizes offered by the settings panel presets.
+#[allow(dead_code)]
 pub const BOARD_SIZE_OPTIONS: &[usize] = &[9, 13, 19];
 
 /// A named theme the settings panel can switch between. Each theme maps to a
@@ -15,6 +16,7 @@ pub enum ThemeChoice {
     Mist,
 }
 
+#[allow(dead_code)]
 pub const THEME_CHOICES: &[ThemeChoice] =
     &[ThemeChoice::Classic, ThemeChoice::Dark, ThemeChoice::Mist];
 

@@ -5,6 +5,7 @@
 //! that schema into UI rows and applies user edits through the validated
 //! `SettingsStore`. All persistence happens through the shared
 //! `persist_settings_store` workflow.
+#![allow(dead_code)]
 
 use sabaki_host::{SettingKind, SettingsStore, setting_kind};
 use serde_json::Value;

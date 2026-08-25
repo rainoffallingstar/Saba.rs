@@ -122,11 +122,29 @@ actions!(
         ToggleGtpTerminal,
         StartWholeGameReview,
         ExportGif,
+        SetThemeClassic,
+        SetThemeDark,
+        SetThemeMist,
+        SetBoardSize19,
+        SetBoardSize13,
+        SetBoardSize9,
+        SetCoordsA1,
+        SetCoords1_1,
+        SetVisits100,
+        SetVisits500,
+        SetVisits1000,
+        SetVisitsUnlimited,
+        PluginKataGoSetup,
+        PluginFoxSync,
+        PluginPositionToSgf,
+        PluginInstallZip,
+        TogglePluginMenu,
         Quit,
     ]
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 enum ActiveDrawer {
     Preferences,
     GameInfo,
@@ -217,11 +235,17 @@ struct ShellApp {
     active_drawer: Option<ActiveDrawer>,
     active_plugin_popover: Option<String>,
     game_graph_context_node: Option<sabaki_domain_core::NodeId>,
+    #[allow(dead_code)]
     installed_themes: Vec<sabaki_host::InstalledTheme>,
+    #[allow(dead_code)]
     legacy_asar_themes: Vec<std::path::PathBuf>,
+    #[allow(dead_code)]
     board_size: usize,
+    #[allow(dead_code)]
     settings_editing_key: Option<String>,
+    #[allow(dead_code)]
     settings_draft: SharedString,
+    #[allow(dead_code)]
     settings_input_focus_handle: FocusHandle,
     plugin_controller: sabaki_host::PluginController<NativePluginPersistence>,
     installed_plugins: Vec<PluginPanelEntry>,
@@ -2652,6 +2676,7 @@ impl ShellApp {
 
     /// Applies an installed theme package: swaps the active tokens and
     /// records the choice as `theme:<id>` under `theme.current`.
+    #[allow(dead_code)]
     fn on_installed_theme_selected(&mut self, theme_id: &str, cx: &mut Context<Self>) {
         let Some(theme) = self
             .installed_themes
@@ -2683,6 +2708,7 @@ impl ShellApp {
     }
 
     /// Re-scans the themes root and refreshes the installed-theme list.
+    #[allow(dead_code)]
     fn refresh_installed_themes(&mut self) {
         match file_workflow::theme_root() {
             Ok(theme_root) => match sabaki_host::scan_theme_root(&theme_root) {
@@ -2698,6 +2724,7 @@ impl ShellApp {
 
     /// Picks a theme package directory with a native dialog, validates and
     /// installs it into the themes root, then refreshes the panel.
+    #[allow(dead_code)]
     fn on_theme_install(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.dialog_service.pick_open_path() else {
             self.status = "theme install cancelled".into();
@@ -2732,6 +2759,7 @@ impl ShellApp {
     }
 
     /// Removes an installed theme by id.
+    #[allow(dead_code)]
     fn on_theme_uninstall(&mut self, theme_id: &str, cx: &mut Context<Self>) {
         let theme_root = match file_workflow::theme_root() {
             Ok(root) => root,
@@ -2812,12 +2840,7 @@ impl ShellApp {
     }
 
     /// Installs a plugin from a user-selected `.zip` archive.
-    fn on_install_plugin_zip(
-        &mut self,
-        _: &MouseDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn install_plugin_zip(&mut self, cx: &mut Context<Self>) {
         let Some(zip_path) = self.dialog_service.pick_open_zip_path() else {
             return;
         };
@@ -2831,7 +2854,8 @@ impl ShellApp {
         };
         match self.plugin_controller.install_zip(&zip_path, &install_root) {
             Ok(outcome) => {
-                self.status = outcome.message.into();
+                self.status = outcome.message.clone().into();
+                self.show_toast(outcome.message, cx);
                 self.installed_plugins = self
                     .plugin_controller
                     .records()
@@ -2839,13 +2863,28 @@ impl ShellApp {
                     .map(entry_from_record)
                     .collect();
             }
-            Err(error) => self.status = format!("plugin installation failed: {error}").into(),
+            Err(error) => {
+                self.status = format!("plugin installation failed: {error}").into();
+                self.show_toast(format!("插件安装失败: {error}"), cx);
+            }
         }
+        self.synchronize_recovery();
         cx.notify();
+    }
+
+    #[allow(dead_code)]
+    fn on_install_plugin_zip(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_plugin_zip(cx);
     }
 
     /// Delegates enablement, persistence and native-process lifecycle to the
     /// host plugin Module, then refreshes the UI projection.
+    #[allow(dead_code)]
     fn on_plugin_toggle(&mut self, plugin_id: &str) {
         match self.plugin_controller.toggle(plugin_id) {
             Ok(outcome) => self.status = outcome.message.into(),
@@ -2856,6 +2895,7 @@ impl ShellApp {
 
     /// Grants the manifest permissions and enables the plugin through the
     /// controller's single persisted lifecycle operation.
+    #[allow(dead_code)]
     fn on_plugin_grant(&mut self, plugin_id: &str, cx: &mut Context<Self>) {
         match self.plugin_controller.grant_and_enable(plugin_id) {
             Ok(outcome) => self.status = outcome.message.into(),
@@ -2886,6 +2926,7 @@ impl ShellApp {
 
     /// Authorizes native execution for a native plugin after an explicit
     /// confirmation, then grants its permissions and enables it.
+    #[allow(dead_code)]
     fn on_plugin_authorize(&mut self, plugin_id: &str, cx: &mut Context<Self>) {
         let choice = rfd::MessageDialog::new()
             .set_title("Authorize Native Plugin")
@@ -3261,6 +3302,7 @@ impl ShellApp {
     /// Applies a settings edit through the validated store and persists it.
     /// A persistence failure rolls the store back so the UI never shows a
     /// value that is not on disk.
+    #[allow(dead_code)]
     fn apply_settings_edit(&mut self, edit: SettingEdit) {
         let key = edit.key().to_owned();
         let previous = self.settings.get(&key).cloned();
@@ -3288,6 +3330,7 @@ impl ShellApp {
         }
     }
 
+    #[allow(dead_code)]
     fn on_settings_toggle(
         &mut self,
         row: &SettingRow,
@@ -3301,6 +3344,7 @@ impl ShellApp {
 
     /// Starts text editing for a non-boolean settings row: remembers the row,
     /// seeds the draft from the current value and focuses the input.
+    #[allow(dead_code)]
     fn on_settings_row_clicked(
         &mut self,
         row: &SettingRow,
@@ -3317,6 +3361,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn on_settings_input_focus(
         &mut self,
         _: &MouseDownEvent,
@@ -3326,6 +3371,7 @@ impl ShellApp {
         window.focus(&self.settings_input_focus_handle);
     }
 
+    #[allow(dead_code)]
     fn on_settings_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -3368,6 +3414,7 @@ impl ShellApp {
 
     /// Commits the settings draft for the row: parses it by the host value
     /// kind, applies and persists it, then leaves the editing state.
+    #[allow(dead_code)]
     fn commit_settings_input(&mut self, row: &SettingRow, text: &str, cx: &mut Context<Self>) {
         let edit = match row.kind {
             sabaki_host::SettingKind::Number => number_edit(&row.key, text),
@@ -4398,6 +4445,7 @@ impl ShellApp {
 
     /// Toggles the scoring mode: while active, board clicks cycle scoring
     /// overrides instead of placing moves.
+    #[allow(dead_code)]
     fn on_scoring_mode_toggle(
         &mut self,
         _: &MouseDownEvent,
@@ -4792,12 +4840,15 @@ impl ShellApp {
     }
 
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
-        self.open_drawer(ActiveDrawer::Preferences, "preferences opened", cx);
+        self.show_toast(
+            "💡 设置与插件功能已全部移入顶部菜单栏 (View / Board & Theme / Engines / Plugins)",
+            cx,
+        );
     }
 
-    /// Opens the Preferences drawer from the player bar hamburger menu.
+    /// Opens the plugin pinning manager from the player bar hamburger menu.
     fn open_side_menu(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.open_drawer(ActiveDrawer::Preferences, "preferences opened", cx);
+        self.toggle_plugin_popover("all", cx);
     }
 
     fn toggle_plugin_popover(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -5022,7 +5073,7 @@ impl Render for ShellApp {
         );
 
         let inspector_metadata = current_node_metadata(&snapshot);
-        let settings_rows = panel_setting_rows(&self.settings);
+        let _settings_rows = panel_setting_rows(&self.settings);
         let external_status = self.external_file.status();
         let _external_conflict = matches!(
             external_status.status,
@@ -5299,9 +5350,7 @@ impl Render for ShellApp {
                 div().id("gtp-terminal-hidden")
             })
             .child(match self.active_drawer {
-                Some(ActiveDrawer::Preferences) => {
-                    panels::render_preferences_drawer(&settings_rows, self, cx)
-                }
+                Some(ActiveDrawer::Preferences) => div().id("preferences-drawer-hidden"),
                 Some(ActiveDrawer::GameInfo) => {
                     panels::render_game_info_drawer(&snapshot, self, cx)
                 }
@@ -5569,14 +5618,7 @@ fn shell_menus() -> Vec<Menu> {
         Menu {
             name: "Saba.rs".into(),
             items: vec![
-                MenuItem::action("New Game", NewGame),
-                MenuItem::action("Open…", OpenGame),
-                MenuItem::separator(),
-                MenuItem::action("Save", SaveGame),
-                MenuItem::action("Save As…", SaveGameAs),
-                MenuItem::separator(),
-                MenuItem::action("Undo", UndoMove),
-                MenuItem::action("Redo", RedoMove),
+                MenuItem::action("About Saba.rs", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Quit", Quit),
             ],
@@ -5589,6 +5631,8 @@ fn shell_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Save", SaveGame),
                 MenuItem::action("Save As…", SaveGameAs),
+                MenuItem::separator(),
+                MenuItem::action("Export Animated GIF…", ExportGif),
             ],
         },
         Menu {
@@ -5602,14 +5646,28 @@ fn shell_menus() -> Vec<Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Game Info", OpenGameInfo),
-                MenuItem::action("Score", OpenScore),
-                MenuItem::action("Preferences", OpenPreferences),
+                MenuItem::action("Score Summary", OpenScore),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Game Graph", ToggleGameGraph),
                 MenuItem::action("Toggle Comments", ToggleComments),
                 MenuItem::action("Toggle Winrate Graph", ToggleWinrateGraph),
                 MenuItem::action("Toggle Coordinates", ToggleCoordinates),
                 MenuItem::action("Toggle Move Numbers", ToggleMoveNumbers),
+            ],
+        },
+        Menu {
+            name: "Board & Theme".into(),
+            items: vec![
+                MenuItem::action("19 × 19 Board", SetBoardSize19),
+                MenuItem::action("13 × 13 Board", SetBoardSize13),
+                MenuItem::action("9 × 9 Board", SetBoardSize9),
+                MenuItem::separator(),
+                MenuItem::action("Theme: Classic Light", SetThemeClassic),
+                MenuItem::action("Theme: Dark Slate", SetThemeDark),
+                MenuItem::action("Theme: Mist", SetThemeMist),
+                MenuItem::separator(),
+                MenuItem::action("Coordinates: A1 Style", SetCoordsA1),
+                MenuItem::action("Coordinates: 1-1 Style", SetCoords1_1),
             ],
         },
         Menu {
@@ -5628,10 +5686,28 @@ fn shell_menus() -> Vec<Menu> {
             name: "Engines".into(),
             items: vec![
                 MenuItem::action("Show Engines Sidebar", ToggleEnginesSidebar),
+                MenuItem::action("Toggle GTP Terminal", ToggleGtpTerminal),
                 MenuItem::separator(),
-                MenuItem::action("Generate Engine Move", GenerateEngineMove),
                 MenuItem::action("Start Analysis", StartAnalysis),
                 MenuItem::action("Stop Analysis", StopAnalysis),
+                MenuItem::action("Start Whole Game Review", StartWholeGameReview),
+                MenuItem::action("Generate Engine Move", GenerateEngineMove),
+                MenuItem::separator(),
+                MenuItem::action("Visits Limit: 100", SetVisits100),
+                MenuItem::action("Visits Limit: 500", SetVisits500),
+                MenuItem::action("Visits Limit: 1000", SetVisits1000),
+                MenuItem::action("Visits Limit: Unlimited", SetVisitsUnlimited),
+            ],
+        },
+        Menu {
+            name: "Plugins".into(),
+            items: vec![
+                MenuItem::action("⚡ KataGo 一键配置与环境诊断", PluginKataGoSetup),
+                MenuItem::action("🦊 野狐对局与棋谱同步", PluginFoxSync),
+                MenuItem::action("📋 局面转 SGF 剪贴板导出", PluginPositionToSgf),
+                MenuItem::separator(),
+                MenuItem::action("📌 插件管理器 (固定到栏)", TogglePluginMenu),
+                MenuItem::action("+ 从 ZIP 安装插件…", PluginInstallZip),
             ],
         },
         Menu {
@@ -5971,6 +6047,90 @@ fn main() {
         let shell_preferences = shell.clone();
         cx.on_action(move |_: &OpenPreferences, cx| {
             shell_preferences.update(cx, |shell, cx| shell.open_preferences(cx));
+        });
+        let shell_th_classic = shell.clone();
+        cx.on_action(move |_: &SetThemeClassic, cx| {
+            shell_th_classic.update(cx, |shell, cx| shell.on_theme_selected(ThemeChoice::Classic, cx));
+        });
+        let shell_th_dark = shell.clone();
+        cx.on_action(move |_: &SetThemeDark, cx| {
+            shell_th_dark.update(cx, |shell, cx| shell.on_theme_selected(ThemeChoice::Dark, cx));
+        });
+        let shell_th_mist = shell.clone();
+        cx.on_action(move |_: &SetThemeMist, cx| {
+            shell_th_mist.update(cx, |shell, cx| shell.on_theme_selected(ThemeChoice::Mist, cx));
+        });
+        let shell_bs19 = shell.clone();
+        cx.on_action(move |_: &SetBoardSize19, cx| {
+            shell_bs19.update(cx, |shell, cx| shell.on_board_size_selected(19, cx));
+        });
+        let shell_bs13 = shell.clone();
+        cx.on_action(move |_: &SetBoardSize13, cx| {
+            shell_bs13.update(cx, |shell, cx| shell.on_board_size_selected(13, cx));
+        });
+        let shell_bs9 = shell.clone();
+        cx.on_action(move |_: &SetBoardSize9, cx| {
+            shell_bs9.update(cx, |shell, cx| shell.on_board_size_selected(9, cx));
+        });
+        let shell_ca1 = shell.clone();
+        cx.on_action(move |_: &SetCoordsA1, cx| {
+            shell_ca1.update(cx, |shell, cx| {
+                let _ = shell.settings.set("view.coordinates_type", serde_json::json!("A1"));
+                cx.notify();
+            });
+        });
+        let shell_c11 = shell.clone();
+        cx.on_action(move |_: &SetCoords1_1, cx| {
+            shell_c11.update(cx, |shell, cx| {
+                let _ = shell.settings.set("view.coordinates_type", serde_json::json!("1-1"));
+                cx.notify();
+            });
+        });
+        let shell_v100 = shell.clone();
+        cx.on_action(move |_: &SetVisits100, cx| {
+            shell_v100.update(cx, |shell, cx| shell.apply_analysis_visits(100, cx));
+        });
+        let shell_v500 = shell.clone();
+        cx.on_action(move |_: &SetVisits500, cx| {
+            shell_v500.update(cx, |shell, cx| shell.apply_analysis_visits(500, cx));
+        });
+        let shell_v1000 = shell.clone();
+        cx.on_action(move |_: &SetVisits1000, cx| {
+            shell_v1000.update(cx, |shell, cx| shell.apply_analysis_visits(1000, cx));
+        });
+        let shell_v0 = shell.clone();
+        cx.on_action(move |_: &SetVisitsUnlimited, cx| {
+            shell_v0.update(cx, |shell, cx| shell.apply_analysis_visits(0, cx));
+        });
+        let shell_p_katago = shell.clone();
+        cx.on_action(move |_: &PluginKataGoSetup, cx| {
+            shell_p_katago.update(cx, |shell, cx| {
+                shell.on_plugin_command("org.sabaki.katago-setup-hub", "katago.setup", cx);
+            });
+        });
+        let shell_p_fox = shell.clone();
+        cx.on_action(move |_: &PluginFoxSync, cx| {
+            shell_p_fox.update(cx, |shell, cx| {
+                shell.on_plugin_command("org.sabaki.fox-kifu-sync", "fox.query_games", cx);
+            });
+        });
+        let shell_p_pos = shell.clone();
+        cx.on_action(move |_: &PluginPositionToSgf, cx| {
+            shell_p_pos.update(cx, |shell, cx| {
+                shell.on_plugin_command("org.sabaki.position-to-sgf", "export.clipboard_sgf", cx);
+            });
+        });
+        let shell_p_zip = shell.clone();
+        cx.on_action(move |_: &PluginInstallZip, cx| {
+            shell_p_zip.update(cx, |shell, cx| {
+                shell.install_plugin_zip(cx);
+            });
+        });
+        let shell_p_menu = shell.clone();
+        cx.on_action(move |_: &TogglePluginMenu, cx| {
+            shell_p_menu.update(cx, |shell, cx| {
+                shell.toggle_plugin_popover("all", cx);
+            });
         });
         let shell_last = shell.clone();
         cx.on_action(move |_: &GoToLastNode, cx| {
@@ -6704,41 +6864,18 @@ mod frontend_smoke {
         });
         vcx.run_until_parked();
         assert!(vcx.debug_bounds("plugin-menu").is_some());
-        shell.update(&mut vcx.cx, |shell, cx| shell.open_preferences(cx));
-        vcx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        vcx.run_until_parked();
-        let preferences_drawer = vcx
-            .debug_bounds("preferences-drawer")
-            .expect("Preferences action must open a drawer");
-        let settings_drawer_panel = vcx
-            .debug_bounds("settings-panel")
-            .expect("settings must render inside Preferences");
-        assert_eq!(
-            preferences_drawer.size.width,
-            px(380.0),
-            "Preferences drawer must keep its stable desktop width"
-        );
-        assert!(
-            settings_drawer_panel.origin.x >= preferences_drawer.origin.x
-                && settings_drawer_panel.right() <= preferences_drawer.right(),
-            "settings {:?} must stay inside Preferences {:?}",
-            settings_drawer_panel,
-            preferences_drawer
-        );
-        let preferences_close = vcx
-            .debug_bounds("preferences-close")
-            .expect("Preferences drawer must expose a close control");
-        vcx.simulate_click(preferences_close.center(), gpui::Modifiers::none());
+        let plugin_close = vcx
+            .debug_bounds("plugin-menu-close")
+            .expect("Plugin menu must expose a close control");
+        vcx.simulate_click(plugin_close.center(), gpui::Modifiers::none());
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
         vcx.run_until_parked();
         assert_eq!(
-            shell.read_with(&vcx.cx, |shell, _| shell.active_drawer),
+            shell.read_with(&vcx.cx, |shell, _| shell.active_plugin_popover.clone()),
             None,
-            "closing Preferences must clear drawer state"
+            "closing plugin menu must clear popover state"
         );
         shell.update(&mut vcx.cx, |shell, cx| shell.open_game_info(cx));
         vcx.update(|window, cx| {
