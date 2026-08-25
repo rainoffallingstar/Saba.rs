@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
-use gpui::{
-    App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Styled,
-    Window, div, px, rgb,
-};
+use gpui::{App, Div, ParentElement, Styled, Window, div};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::{Selectable, Sizable};
 use sabaki_domain_core::{
     CURRENT_TRANSACTION_SCHEMA_VERSION, GameTransaction, GameTransactionType, MarkerSnapshot,
     NodeId, Vertex,
@@ -266,7 +265,7 @@ pub fn markup_symbol(marker_type: &str, label: Option<&str>) -> String {
 /// that tool; the active tool is highlighted.
 pub fn render_markup_toolbar<F>(
     active_tool: MarkupTool,
-    palette: UiPalette,
+    _palette: UiPalette,
     on_tool_clicked: F,
 ) -> Div
 where
@@ -278,58 +277,32 @@ where
         .flex()
         .items_center()
         .gap_1()
-        .children(MARKUP_TOOLS.iter().map(|tool| {
+        .children(MARKUP_TOOLS.iter().enumerate().map(|(idx, tool)| {
             let handler = on_tool_clicked.clone();
             let tool = *tool;
             let is_active = tool == active_tool;
-            div()
-                .w(px(26.0))
-                .h(px(26.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .rounded_md()
-                .bg(if is_active {
-                    rgb(palette.button_active)
-                } else {
-                    rgb(palette.input)
+            let icon_str = match tool {
+                MarkupTool::Play => "●",
+                MarkupTool::Circle => "◯",
+                MarkupTool::Square => "□",
+                MarkupTool::Triangle => "△",
+                MarkupTool::Cross => "✕",
+                MarkupTool::Label => "A",
+                MarkupTool::Line => "╱",
+                MarkupTool::Arrow => "→",
+                MarkupTool::SetupBlack => "B",
+                MarkupTool::SetupWhite => "W",
+                MarkupTool::SetupClear => "✖",
+            };
+            Button::new(("markup-tool", idx))
+                .small()
+                .ghost()
+                .selected(is_active)
+                .tooltip(tool.label())
+                .label(icon_str)
+                .on_click(move |_, window, cx| {
+                    handler(&tool, window, cx);
                 })
-                .border_1()
-                .border_color(rgb(if is_active {
-                    palette.accent
-                } else {
-                    palette.border
-                }))
-                .text_color(rgb(palette.text))
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .hover(|style| {
-                    if !is_active {
-                        style.bg(rgb(palette.button))
-                    } else {
-                        style
-                    }
-                })
-                .child(match tool {
-                    MarkupTool::Play => "●".to_owned(),
-                    MarkupTool::Circle => "◯".to_owned(),
-                    MarkupTool::Square => "□".to_owned(),
-                    MarkupTool::Triangle => "△".to_owned(),
-                    MarkupTool::Cross => "✕".to_owned(),
-                    MarkupTool::Label => "A".to_owned(),
-                    MarkupTool::Line => "╱".to_owned(),
-                    MarkupTool::Arrow => "→".to_owned(),
-                    MarkupTool::SetupBlack => "B".to_owned(),
-                    MarkupTool::SetupWhite => "W".to_owned(),
-                    MarkupTool::SetupClear => "✖".to_owned(),
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                        handler(&tool, window, cx);
-                    },
-                )
         }))
 }
 

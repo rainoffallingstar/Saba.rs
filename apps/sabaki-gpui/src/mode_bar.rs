@@ -7,9 +7,10 @@
 #![allow(dead_code)]
 
 use gpui::{
-    App, Context, Div, FontWeight, InteractiveElement, MouseButton, ParentElement, Styled, Window,
-    div, rgb,
+    App, Context, Div, FontWeight, InteractiveElement, ParentElement, Styled, Window, div, rgb,
 };
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::{Selectable, Sizable};
 use sabaki_domain_core::{Color, GameMode, GameSnapshot};
 
 use crate::ShellApp;
@@ -64,57 +65,39 @@ pub fn mode_label(mode: GameMode) -> &'static str {
     }
 }
 
-fn mode_button(mode: GameMode, active: bool, palette: UiPalette, cx: &Context<ShellApp>) -> Div {
-    div()
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(if active {
-            rgb(palette.button_active)
-        } else {
-            rgb(palette.panel)
-        })
-        .border_1()
-        .border_color(rgb(if active {
-            palette.accent
-        } else {
-            palette.panel
+fn mode_button(
+    mode: GameMode,
+    active: bool,
+    _palette: UiPalette,
+    cx: &Context<ShellApp>,
+) -> Button {
+    let mode_idx: usize = match mode {
+        GameMode::Play => 0,
+        GameMode::Edit => 1,
+        GameMode::Scoring => 2,
+        GameMode::Estimator => 3,
+        GameMode::Find => 4,
+        GameMode::Guess => 5,
+        GameMode::Autoplay => 6,
+    };
+    Button::new(("mode-btn", mode_idx))
+        .small()
+        .ghost()
+        .selected(active)
+        .label(mode_label(mode).to_owned())
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            shell.on_mode_selected(mode, &gpui::MouseDownEvent::default(), window, cx);
         }))
-        .text_xs()
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(if active { palette.text } else { palette.muted }))
-        .hover(|style| {
-            if !active {
-                style.bg(rgb(palette.button)).text_color(rgb(palette.text))
-            } else {
-                style
-            }
-        })
-        .child(mode_label(mode).to_owned())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |shell, event, window, cx| {
-                shell.on_mode_selected(mode, event, window, cx);
-            }),
-        )
 }
 
-fn mode_action_button(label: &str, palette: UiPalette, cx: &Context<ShellApp>) -> Div {
-    div()
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .border_1()
-        .border_color(rgb(palette.accent))
-        .bg(rgb(palette.button))
-        .text_xs()
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(palette.text))
-        .hover(|style| style.bg(rgb(palette.button_active)))
-        .child(label.to_owned())
-        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_mode_action))
+fn mode_action_button(label: &'static str, _palette: UiPalette, cx: &Context<ShellApp>) -> Button {
+    Button::new(label)
+        .small()
+        .primary()
+        .label(label.to_owned())
+        .on_click(cx.listener(|shell, _, window, cx| {
+            shell.on_mode_action(&gpui::MouseDownEvent::default(), window, cx);
+        }))
 }
 
 pub fn render_mode_bar(
@@ -190,37 +173,23 @@ pub fn render_mode_bar(
                     !info.black_to_move,
                 ))
                 .child(
-                    div()
-                        .id("pass-button")
-                        .debug_selector(|| "pass-button".to_owned())
-                        .px_3()
-                        .py_1()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(palette.accent))
-                        .rounded_md()
-                        .bg(rgb(palette.button))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(palette.text))
-                        .hover(|style| style.bg(rgb(palette.button_active)))
-                        .child("Pass")
-                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_pass)),
+                    Button::new("mode-bar-pass")
+                        .small()
+                        .ghost()
+                        .label("Pass")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_pass(&gpui::MouseDownEvent::default(), window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(palette.danger_text))
-                        .rounded_md()
-                        .bg(rgb(palette.danger))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(palette.danger_text))
-                        .child("Resign")
-                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_resign)),
+                    Button::new("mode-bar-resign")
+                        .small()
+                        .ghost()
+                        .danger()
+                        .label("Resign")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_resign(&gpui::MouseDownEvent::default(), window, cx);
+                        })),
                 );
         }
         GameMode::Edit => {

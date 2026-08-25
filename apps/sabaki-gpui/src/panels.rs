@@ -15,6 +15,7 @@ use sabaki_domain_core::{GameMode, GameSnapshot, Vertex};
 
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::switch::Switch;
 use gpui_component::{Selectable, Sizable};
 
 use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
@@ -2741,27 +2742,20 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                     crate::engine_console::EngineRole::Analysis,
                                     crate::engine_console::EngineRole::Black,
                                     crate::engine_console::EngineRole::White,
-                                ].into_iter().map(|role| {
+                                ].into_iter().enumerate().map(|(idx, role)| {
                                     let is_active = shell.active_console_role == Some(role)
                                         || (shell.active_console_role.is_none() && role == crate::engine_console::EngineRole::Analysis);
                                     let attached = shell.engine_controller.is_attached(role);
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_md()
-                                        .border_1()
-                                        .flex_none()
-                                        .border_color(if is_active { rgb(shell.palette.accent) } else { rgb(0x3a3a42) })
-                                        .bg(if is_active { rgb(0x262630) } else { rgb(0x1e1e24) })
-                                        .text_xs()
-                                        .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0x9a9a9a) })
-                                        .child(format!(
+                                    Button::new(("gtp-role", idx))
+                                        .small()
+                                        .ghost()
+                                        .selected(is_active)
+                                        .label(format!(
                                             "{} {}",
                                             if attached { "●" } else { "○" },
                                             role.label(),
                                         ))
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
                                             shell.active_console_role = Some(role);
                                             cx.notify();
                                         }))
@@ -2774,50 +2768,36 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .gap_2()
                                 .flex_none()
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_md()
-                                        .border_1()
-                                        .whitespace_nowrap()
-                                        .border_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
-                                        .bg(if is_attached { rgb(shell.palette.danger) } else { rgb(shell.palette.button) })
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(if is_attached { rgb(shell.palette.danger_text) } else { rgb(shell.palette.accent) })
-                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                        .child(if is_attached { "⏹ 断开" } else { "🔌 连接" })
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, event, window, cx| {
+                                    Button::new("gtp-attach-toggle")
+                                        .small()
+                                        .outline()
+                                        .label(if is_attached { "⏹ 断开" } else { "🔌 连接" })
+                                        .on_click(cx.listener(move |shell, _, window, cx| {
                                             if shell.engine_controller.is_attached(selected_role) {
-                                                shell.on_engine_disconnect(selected_role, event, window, cx);
+                                                shell.on_engine_disconnect(selected_role, &MouseDownEvent::default(), window, cx);
                                             } else {
                                                 shell.on_engine_connect(selected_role, cx);
                                             }
                                         }))
                                 )
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .whitespace_nowrap()
-                                        .text_color(rgb(0x9a9a9a))
-                                        .hover(|style| style.text_color(rgb(0xf2f2f5)))
-                                        .child("清空")
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                    Button::new("gtp-clear-log")
+                                        .small()
+                                        .ghost()
+                                        .label("清空")
+                                        .on_click(cx.listener(|shell, _, _, cx| {
                                             shell.engine_log.clear();
                                             cx.notify();
                                         })),
                                 )
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .whitespace_nowrap()
-                                        .text_color(rgb(0x9a9a9a))
-                                        .hover(|style| style.text_color(rgb(0xf2f2f5)))
-                                        .child("✕")
-                                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::toggle_gtp_terminal)),
+                                    Button::new("gtp-close-terminal")
+                                        .small()
+                                        .ghost()
+                                        .label("✕")
+                                        .on_click(cx.listener(|shell, _, window, cx| {
+                                            shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
+                                        })),
                                 )
                         )
                 )
@@ -2871,19 +2851,11 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .items_center()
                                 .gap_1p5()
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .bg(rgb(0x24242c))
-                                        .border_1()
-                                        .border_color(rgb(shell.palette.accent))
-                                        .text_xs()
-                                        .text_color(rgb(0x8ec5ff))
-                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
-                                        .child(if shell.analysis_task.is_some() { "⏹ 停止分析" } else { "⚡ 启动分析" })
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                    Button::new("gtp-start-analysis")
+                                        .xsmall()
+                                        .outline()
+                                        .label(if shell.analysis_task.is_some() { "⏹ 停止分析" } else { "⚡ 启动分析" })
+                                        .on_click(cx.listener(|shell, _, _, cx| {
                                             if shell.analysis_task.is_some() {
                                                 shell.stop_analysis(cx);
                                             } else {
@@ -2903,26 +2875,19 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 .text_color(rgb(0x9a9a9a))
                                                 .child("访问量:"),
                                         )
-                                        .children([100u64, 500, 1000, 0].into_iter().map(|visits| {
+                                        .children([100u64, 500, 1000, 0].into_iter().enumerate().map(|(idx, visits)| {
                                             let current = shell
                                                 .settings
                                                 .get("engines.analysis_max_visits")
                                                 .and_then(serde_json::Value::as_u64)
                                                 .unwrap_or(500);
                                             let is_active = current == visits;
-                                            div()
-                                                .cursor_pointer()
-                                                .px_1p5()
-                                                .py_0p5()
-                                                .rounded_sm()
-                                                .bg(if is_active { rgb(0x30303c) } else { rgb(0x24242c) })
-                                                .border_1()
-                                                .border_color(if is_active { rgb(shell.palette.accent) } else { rgb(0x383844) })
-                                                .text_xs()
-                                                .text_color(if is_active { rgb(0x8ec5ff) } else { rgb(0xd0d0d8) })
-                                                .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
-                                                .child(if visits == 0 { "无限".to_owned() } else { visits.to_string() })
-                                                .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                            Button::new(("visits-switch", idx))
+                                                .xsmall()
+                                                .ghost()
+                                                .selected(is_active)
+                                                .label(if visits == 0 { "无限".to_owned() } else { visits.to_string() })
+                                                .on_click(cx.listener(move |shell, _, _, cx| {
                                                     shell.apply_analysis_visits(visits, cx);
                                                 }))
                                         }))
@@ -2945,36 +2910,20 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         }))
                                 )
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .bg(rgb(0x24242c))
-                                        .border_1()
-                                        .border_color(rgb(0x383844))
-                                        .text_xs()
-                                        .text_color(rgb(0xd0d0d8))
-                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
-                                        .child("🔄 清空棋盘")
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                    Button::new("gtp-clear-board")
+                                        .xsmall()
+                                        .ghost()
+                                        .label("🔄 清空棋盘")
+                                        .on_click(cx.listener(|shell, _, _, cx| {
                                             shell.send_engine_command("clear_board", cx);
                                         }))
                                 )
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded_sm()
-                                        .bg(rgb(0x24242c))
-                                        .border_1()
-                                        .border_color(rgb(0x383844))
-                                        .text_xs()
-                                        .text_color(rgb(0xd0d0d8))
-                                        .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
-                                        .child("📋 列出指令")
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                    Button::new("gtp-list-commands")
+                                        .xsmall()
+                                        .ghost()
+                                        .label("📋 列出指令")
+                                        .on_click(cx.listener(|shell, _, _, cx| {
                                             shell.send_engine_command("list_commands", cx);
                                         }))
                                 )
@@ -3011,26 +2960,17 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .on_key_down(cx.listener(ShellApp::on_engine_key_down)),
                                 )
                                 .child(
-                                    div()
-                                        .cursor_pointer()
-                                        .px_3()
-                                        .py_1p5()
-                                        .rounded_md()
-                                        .bg(rgb(shell.palette.button))
-                                        .border_1()
-                                        .border_color(rgb(shell.palette.border))
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(rgb(shell.palette.text))
-                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                        .child("发送 ↵")
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _, _, cx| {
+                                    Button::new("gtp-send-button")
+                                        .small()
+                                        .primary()
+                                        .label("发送 ↵")
+                                        .on_click(cx.listener(|shell, _, _, cx| {
                                             let draft = shell.gtp_input.text().to_owned();
                                             shell.send_engine_command(&draft, cx);
                                             shell.gtp_input.set_text("");
                                             cx.notify();
                                         })),
-                                )
+                                ),
                         )
                 )
         )
@@ -3616,62 +3556,42 @@ pub fn render_engine_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
                 .text_sm()
                 .child("engines")
                 .child(div().flex().flex_col().gap_1().children(
-                    shell.engine_store.list().iter().map(|record| {
+                    shell.engine_store.list().iter().enumerate().map(|(idx, record)| {
                         let name = record.name.clone();
                         let connected = shell.engine_controller.any_attached();
+                        let connect_name = name.clone();
+                        let remove_name = name.clone();
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
                             .child(format!("{} ({})", record.name, record.path))
                             .child(if connected {
-                                div()
-                                    .text_color(rgb(shell.palette.success))
-                                    .child("connected")
+                                div().child(Badge::new().small().child("connected"))
                             } else {
-                                let connect_name = name.clone();
-                                div()
-                                        .px_2()
-                                        .py_1()
-                                        .border_1()
-                                        .border_color(rgb(shell.palette.accent))
-                                        .rounded(px(4.0))
-                                        .bg(rgb(shell.palette.button))
-                                        .child("connect")
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |shell,
-                                                        _: &MouseDownEvent,
-                                                        _: &mut Window,
-                                                        cx: &mut Context<ShellApp>| {
-                                                let _ = &connect_name;
-                                                let role = shell.active_console_role.unwrap_or(
-                                                    crate::engine_console::EngineRole::Analysis,
-                                                );
-                                                shell.on_engine_connect(role, cx);
-                                            }),
-                                        )
+                                div().child(
+                                    Button::new(("engine-connect", idx))
+                                        .xsmall()
+                                        .outline()
+                                        .label("connect")
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
+                                            let _ = &connect_name;
+                                            let role = shell.active_console_role.unwrap_or(
+                                                crate::engine_console::EngineRole::Analysis,
+                                            );
+                                            shell.on_engine_connect(role, cx);
+                                        }))
+                                )
                             })
-                            .child({
-                                let remove_name = name.clone();
-                                div()
-                                        .px_2()
-                                        .py_1()
-                                        .border_1()
-                                        .border_color(rgb(shell.palette.danger_text))
-                                        .rounded(px(4.0))
-                                        .bg(rgb(shell.palette.danger))
-                                        .child("remove")
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |shell,
-                                                        _: &MouseDownEvent,
-                                                        _: &mut Window,
-                                                        cx: &mut Context<ShellApp>| {
-                                                shell.on_engine_remove(&remove_name, cx);
-                                            }),
-                                        )
-                            })
+                            .child(
+                                Button::new(("engine-remove", idx))
+                                    .xsmall()
+                                    .danger()
+                                    .label("remove")
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.on_engine_remove(&remove_name, cx);
+                                    }))
+                            )
                     }),
                 ))
                 .child(
@@ -3952,7 +3872,10 @@ pub fn render_node_inspector_panel(
                 } else {
                     shell.node_title_input.text().to_owned()
                 })
-                .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_node_title_focus))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(ShellApp::on_node_title_focus),
+                )
                 .on_key_down(cx.listener(ShellApp::on_node_title_key_down))
                 .child(NativeInputBinding::new(
                     shell.node_title_focus_handle.clone(),
@@ -4027,29 +3950,25 @@ pub fn render_node_inspector_panel(
                         .text_color(rgb(shell.palette.subtle))
                         .child("Move Evaluation"),
                 )
-                .child(div().flex().flex_wrap().gap_1().children(NodeAnnotation::MOVE.map(|annotation| {
-                    let active = metadata.move_annotation == Some(annotation);
-                    div()
-                        .px_2()
-                        .py_1()
-                        .border_1()
-                        .border_color(rgb(if active { shell.palette.accent } else { shell.palette.border }))
-                        .rounded_md()
-                        .bg(rgb(if active { shell.palette.button_active } else { shell.palette.input }))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(if active { shell.palette.text } else { shell.palette.muted }))
-                        .cursor_pointer()
-                        .hover(|style| {
-                            if !active {
-                                style.bg(rgb(shell.palette.button)).text_color(rgb(shell.palette.text))
-                            } else {
-                                style
-                            }
-                        })
-                        .child(annotation.label())
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<ShellApp>| shell.on_node_annotation(annotation, cx)))
-                })))
+                .child(
+                    div().flex().flex_wrap().gap_1().children(
+                        NodeAnnotation::MOVE
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, annotation)| {
+                                let ann = *annotation;
+                                let active = metadata.move_annotation == Some(ann);
+                                Button::new(("move-eval", idx))
+                                    .small()
+                                    .ghost()
+                                    .selected(active)
+                                    .label(ann.label())
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.on_node_annotation(ann, cx)
+                                    }))
+                            }),
+                    ),
+                )
                 .child(
                     div()
                         .text_xs()
@@ -4057,51 +3976,36 @@ pub fn render_node_inspector_panel(
                         .text_color(rgb(shell.palette.subtle))
                         .child("Position Evaluation"),
                 )
-                .child(div().flex().flex_wrap().gap_1().children(NodeAnnotation::POSITION.map(|annotation| {
-                    let active = metadata.position_annotation == Some(annotation);
-                    div()
-                        .px_2()
-                        .py_1()
-                        .border_1()
-                        .border_color(rgb(if active { shell.palette.accent } else { shell.palette.border }))
-                        .rounded_md()
-                        .bg(rgb(if active { shell.palette.button_active } else { shell.palette.input }))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(if active { shell.palette.text } else { shell.palette.muted }))
-                        .cursor_pointer()
-                        .hover(|style| {
-                            if !active {
-                                style.bg(rgb(shell.palette.button)).text_color(rgb(shell.palette.text))
-                            } else {
-                                style
-                            }
-                        })
-                        .child(annotation.label())
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<ShellApp>| shell.on_node_annotation(annotation, cx)))
-                })))
                 .child(
-                    div()
-                        .id("commentbox-hotspot")
-                        .px_2()
-                        .py_1()
-                        .border_1()
-                        .border_color(rgb(if metadata.hotspot { shell.palette.accent } else { shell.palette.border }))
-                        .rounded_md()
-                        .bg(rgb(if metadata.hotspot { shell.palette.button_active } else { shell.palette.input }))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(if metadata.hotspot { shell.palette.accent } else { shell.palette.muted }))
-                        .cursor_pointer()
-                        .hover(|style| {
-                            if !metadata.hotspot {
-                                style.bg(rgb(shell.palette.button)).text_color(rgb(shell.palette.text))
-                            } else {
-                                style
-                            }
+                    div().flex().flex_wrap().gap_1().children(
+                        NodeAnnotation::POSITION
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, annotation)| {
+                                let ann = *annotation;
+                                let active = metadata.position_annotation == Some(ann);
+                                Button::new(("pos-eval", idx))
+                                    .small()
+                                    .ghost()
+                                    .selected(active)
+                                    .label(ann.label())
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.on_node_annotation(ann, cx)
+                                    }))
+                            }),
+                    ),
+                )
+                .child(
+                    Button::new("commentbox-hotspot")
+                        .small()
+                        .ghost()
+                        .selected(metadata.hotspot)
+                        .label(if metadata.hotspot {
+                            "⭐ Hotspot"
+                        } else {
+                            "☆ Hotspot"
                         })
-                        .child(if metadata.hotspot { "⭐ Hotspot" } else { "☆ Hotspot" })
-                        .on_mouse_down(MouseButton::Left, cx.listener(|shell, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<ShellApp>| shell.on_hotspot_toggle(cx))),
+                        .on_click(cx.listener(|shell, _, _, cx| shell.on_hotspot_toggle(cx))),
                 ),
         )
         .child(
@@ -4120,7 +4024,11 @@ pub fn render_node_inspector_panel(
                                 .text_color(rgb(shell.palette.subtle))
                                 .child(format!("{}:", row.name)),
                         )
-                        .child(div().text_color(rgb(shell.palette.text)).child(row.value.clone()))
+                        .child(
+                            div()
+                                .text_color(rgb(shell.palette.text))
+                                .child(row.value.clone()),
+                        )
                 }))
                 .child(if metadata.properties.is_empty() {
                     div()
@@ -4135,41 +4043,22 @@ pub fn render_node_inspector_panel(
                 .flex()
                 .gap_2()
                 .child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(shell.palette.accent))
-                        .bg(rgb(shell.palette.button))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(shell.palette.text))
-                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                        .child("Promote")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_variation_promote),
-                        ),
+                    Button::new("variation-promote")
+                        .small()
+                        .outline()
+                        .label("Promote")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_variation_promote(&MouseDownEvent::default(), window, cx);
+                        })),
                 )
                 .child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(shell.palette.danger_text))
-                        .bg(rgb(shell.palette.danger))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(shell.palette.danger_text))
-                        .child("Remove")
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(ShellApp::on_variation_remove),
-                        ),
+                    Button::new("variation-remove")
+                        .small()
+                        .danger()
+                        .label("Remove")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_variation_remove(&MouseDownEvent::default(), window, cx);
+                        })),
                 )
         } else {
             div()
@@ -4210,49 +4099,23 @@ pub fn render_settings_panel(
                     div()
                         .flex()
                         .gap_1p5()
-                        .children(crate::THEME_CHOICES.iter().map(|choice| {
-                            let is_active = *choice == shell.theme_choice;
-                            div()
-                                .px_3()
-                                .py_1p5()
-                                .border_1()
-                                .border_color(rgb(if is_active {
-                                    shell.palette.accent
-                                } else {
-                                    shell.palette.border
-                                }))
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(if is_active {
-                                    rgb(shell.palette.button_active)
-                                } else {
-                                    rgb(shell.palette.input)
-                                })
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(if is_active {
-                                    shell.palette.text
-                                } else {
-                                    shell.palette.muted
-                                }))
-                                .hover(|style| {
-                                    if !is_active {
-                                        style.bg(rgb(shell.palette.button)).text_color(rgb(shell.palette.text))
-                                    } else {
-                                        style
-                                    }
-                                })
-                                .child(choice.label().to_owned())
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell,
-                                                _: &MouseDownEvent,
-                                                _: &mut Window,
-                                                cx: &mut Context<ShellApp>| {
-                                        shell.on_theme_selected(*choice, cx);
-                                    }),
-                                )
-                        })),
+                        .children(
+                            crate::THEME_CHOICES
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, choice)| {
+                                    let is_active = *choice == shell.theme_choice;
+                                    let ch = *choice;
+                                    Button::new(("theme-choice", idx))
+                                        .small()
+                                        .ghost()
+                                        .selected(is_active)
+                                        .label(choice.label().to_owned())
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
+                                            shell.on_theme_selected(ch, cx);
+                                        }))
+                                }),
+                        ),
                 )
                 .child(
                     div()
@@ -4347,12 +4210,15 @@ pub fn render_settings_panel(
                         .legacy_asar_themes
                         .iter()
                         .map(|path| {
-                            div().text_xs().text_color(rgb(shell.palette.danger_text)).child(format!(
-                                "{}: legacy .asar theme — migration only, not loaded",
-                                path.file_name()
-                                    .and_then(|name| name.to_str())
-                                    .unwrap_or("unknown")
-                            ))
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.danger_text))
+                                .child(format!(
+                                    "{}: legacy .asar theme — migration only, not loaded",
+                                    path.file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or("unknown")
+                                ))
                         })
                         .collect::<Vec<_>>()
                         .into_iter()
@@ -4374,52 +4240,23 @@ pub fn render_settings_panel(
                         .child("DEFAULT BOARD SIZE"),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .gap_1p5()
-                        .children(crate::BOARD_SIZE_OPTIONS.iter().map(|size| {
-                            let is_active = *size == shell.board_size;
-                            div()
-                                .px_3()
-                                .py_1()
-                                .border_1()
-                                .border_color(rgb(if is_active {
-                                    shell.palette.accent
-                                } else {
-                                    shell.palette.border
-                                }))
-                                .rounded_md()
-                                .cursor_pointer()
-                                .bg(if is_active {
-                                    rgb(shell.palette.button_active)
-                                } else {
-                                    rgb(shell.palette.input)
-                                })
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(if is_active {
-                                    shell.palette.text
-                                } else {
-                                    shell.palette.muted
-                                }))
-                                .hover(|style| {
-                                    if !is_active {
-                                        style.bg(rgb(shell.palette.button)).text_color(rgb(shell.palette.text))
-                                    } else {
-                                        style
-                                    }
-                                })
-                                .child(format!("{size} × {size}"))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell,
-                                                _: &MouseDownEvent,
-                                                _: &mut Window,
-                                                cx: &mut Context<ShellApp>| {
-                                        shell.on_board_size_selected(*size, cx);
-                                    }),
-                                )
-                        })),
+                    div().flex().gap_1p5().children(
+                        crate::BOARD_SIZE_OPTIONS
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, size)| {
+                                let is_active = *size == shell.board_size;
+                                let s = *size;
+                                Button::new(("board-size-choice", idx))
+                                    .small()
+                                    .ghost()
+                                    .selected(is_active)
+                                    .label(format!("{size} × {size}"))
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.on_board_size_selected(s, cx);
+                                    }))
+                            }),
+                    ),
                 ),
         )
         .child(
@@ -4436,39 +4273,22 @@ pub fn render_settings_panel(
                 )
                 .child(
                     div().flex().gap_1().child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .border_1()
-                            .border_color(rgb(if shell.mode == GameMode::Scoring {
-                                shell.palette.accent
-                            } else {
-                                shell.palette.border
-                            }))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if shell.mode == GameMode::Scoring {
-                                rgb(shell.palette.button_active)
-                            } else {
-                                rgb(shell.palette.input)
-                            })
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(if shell.mode == GameMode::Scoring {
-                                shell.palette.text
-                            } else {
-                                shell.palette.muted
-                            }))
-                            .hover(|style| style.bg(rgb(shell.palette.button)))
-                            .child(if shell.mode == GameMode::Scoring {
+                        Button::new("scoring-mode-toggle-button")
+                            .small()
+                            .ghost()
+                            .selected(shell.mode == GameMode::Scoring)
+                            .label(if shell.mode == GameMode::Scoring {
                                 "Scoring: ON"
                             } else {
                                 "Scoring: OFF"
                             })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(ShellApp::on_scoring_mode_toggle),
-                            ),
+                            .on_click(cx.listener(|shell, _, window, cx| {
+                                shell.on_scoring_mode_toggle(
+                                    &MouseDownEvent::default(),
+                                    window,
+                                    cx,
+                                );
+                            })),
                     ),
                 )
                 .child(if shell.mode == GameMode::Scoring {
@@ -4504,150 +4324,180 @@ pub fn render_settings_panel(
                                 .child(format!("{} installed", shell.installed_plugins.len())),
                         ),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .children(shell.installed_plugins.iter().map(|plugin| {
+                .child(div().flex().flex_col().gap_2().children(
+                    shell.installed_plugins.iter().map(|plugin| {
+                        let plugin_id = plugin.plugin_id.clone();
+                        let icon = plugin_icon(&plugin_id);
+                        let desc = plugin_description(&plugin_id);
+                        let toggle_listener = {
                             let plugin_id = plugin.plugin_id.clone();
-                            let icon = plugin_icon(&plugin_id);
-                            let desc = plugin_description(&plugin_id);
-                            let toggle_listener = {
-                                let plugin_id = plugin.plugin_id.clone();
-                                cx.listener(
-                                    move |shell,
-                                          _: &MouseDownEvent,
-                                          _window: &mut Window,
-                                          _cx: &mut Context<ShellApp>| {
-                                        shell.on_plugin_toggle(&plugin_id)
-                                    },
-                                )
-                            };
-                            let grant_listener = {
-                                let plugin_id = plugin.plugin_id.clone();
-                                cx.listener(
-                                    move |shell,
-                                          _: &MouseDownEvent,
-                                          _window: &mut Window,
-                                          cx: &mut Context<ShellApp>| {
-                                        shell.on_plugin_grant(&plugin_id, cx)
-                                    },
-                                )
-                            };
-                            let authorize_listener = {
-                                let plugin_id = plugin.plugin_id.clone();
-                                cx.listener(
-                                    move |shell,
-                                          _: &MouseDownEvent,
-                                          _window: &mut Window,
-                                          cx: &mut Context<ShellApp>| {
-                                        shell.on_plugin_authorize(&plugin_id, cx)
-                                    },
-                                )
-                            };
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1p5()
-                                .p_2p5()
-                                .rounded_md()
-                                .bg(rgb(shell.palette.input))
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1p5()
-                                                .child(div().text_sm().child(icon))
-                                                .child(
-                                                    div()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_xs()
-                                                        .text_color(rgb(shell.palette.text))
-                                                        .child(format!("{} v{}", plugin.name, plugin.version)),
+                            cx.listener(
+                                move |shell,
+                                      _: &MouseDownEvent,
+                                      _window: &mut Window,
+                                      _cx: &mut Context<ShellApp>| {
+                                    shell.on_plugin_toggle(&plugin_id)
+                                },
+                            )
+                        };
+                        let grant_listener = {
+                            let plugin_id = plugin.plugin_id.clone();
+                            cx.listener(
+                                move |shell,
+                                      _: &MouseDownEvent,
+                                      _window: &mut Window,
+                                      cx: &mut Context<ShellApp>| {
+                                    shell.on_plugin_grant(&plugin_id, cx)
+                                },
+                            )
+                        };
+                        let authorize_listener = {
+                            let plugin_id = plugin.plugin_id.clone();
+                            cx.listener(
+                                move |shell,
+                                      _: &MouseDownEvent,
+                                      _window: &mut Window,
+                                      cx: &mut Context<ShellApp>| {
+                                    shell.on_plugin_authorize(&plugin_id, cx)
+                                },
+                            )
+                        };
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .p_2p5()
+                            .rounded_md()
+                            .bg(rgb(shell.palette.input))
+                            .border_1()
+                            .border_color(rgb(shell.palette.border))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1p5()
+                                            .child(div().text_sm().child(icon))
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_xs()
+                                                    .text_color(rgb(shell.palette.text))
+                                                    .child(format!(
+                                                        "{} v{}",
+                                                        plugin.name, plugin.version
+                                                    )),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .children(
+                                                (!plugin.missing_permissions.is_empty()).then(
+                                                    || {
+                                                        div()
+                                                            .px_2()
+                                                            .py_0p5()
+                                                            .rounded_md()
+                                                            .cursor_pointer()
+                                                            .border_1()
+                                                            .border_color(rgb(shell.palette.accent))
+                                                            .bg(rgb(shell.palette.button))
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(rgb(shell.palette.text))
+                                                            .hover(|style| {
+                                                                style.bg(rgb(shell
+                                                                    .palette
+                                                                    .button_active))
+                                                            })
+                                                            .child("🛡️ 授予权限")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                grant_listener,
+                                                            )
+                                                    },
                                                 ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1()
-                                                .children((!plugin.missing_permissions.is_empty()).then(|| {
-                                                    div()
-                                                        .px_2()
-                                                        .py_0p5()
-                                                        .rounded_md()
-                                                        .cursor_pointer()
-                                                        .border_1()
-                                                        .border_color(rgb(shell.palette.accent))
-                                                        .bg(rgb(shell.palette.button))
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(rgb(shell.palette.text))
-                                                        .hover(|style| style.bg(rgb(shell.palette.button_active)))
-                                                        .child("🛡️ 授予权限")
-                                                        .on_mouse_down(MouseButton::Left, grant_listener)
-                                                }))
-                                                .children((plugin.native_runtime && !plugin.native_authorized).then(|| {
-                                                    div()
-                                                        .px_2()
-                                                        .py_0p5()
-                                                        .rounded_md()
-                                                        .cursor_pointer()
-                                                        .border_1()
-                                                        .border_color(rgb(shell.palette.danger_text))
-                                                        .bg(rgb(shell.palette.danger))
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(rgb(shell.palette.danger_text))
-                                                        .child("⚠️ 授权原生进程")
-                                                        .on_mouse_down(MouseButton::Left, authorize_listener)
-                                                }))
-                                                .child(
-                                                    div()
-                                                        .px_2p5()
-                                                        .py_1()
-                                                        .rounded_md()
-                                                        .cursor_pointer()
-                                                        .border_1()
-                                                        .border_color(if plugin.enabled {
-                                                            rgb(shell.palette.accent)
-                                                        } else {
-                                                            rgb(shell.palette.border)
-                                                        })
-                                                        .bg(if plugin.enabled {
-                                                            rgb(shell.palette.button_active)
-                                                        } else {
-                                                            rgb(shell.palette.panel)
-                                                        })
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(rgb(if plugin.enabled {
-                                                            shell.palette.text
-                                                        } else {
-                                                            shell.palette.muted
-                                                        }))
-                                                        .hover(|style| style.bg(rgb(shell.palette.button)))
-                                                        .child(if plugin.enabled { "已启用 (Disable)" } else { "已禁用 (Enable)" })
-                                                        .on_mouse_down(MouseButton::Left, toggle_listener),
-                                                ),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(shell.palette.subtle))
-                                        .child(desc),
-                                )
-                        })),
-                )
+                                            )
+                                            .children(
+                                                (plugin.native_runtime
+                                                    && !plugin.native_authorized)
+                                                    .then(|| {
+                                                        div()
+                                                            .px_2()
+                                                            .py_0p5()
+                                                            .rounded_md()
+                                                            .cursor_pointer()
+                                                            .border_1()
+                                                            .border_color(rgb(shell
+                                                                .palette
+                                                                .danger_text))
+                                                            .bg(rgb(shell.palette.danger))
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(rgb(shell
+                                                                .palette
+                                                                .danger_text))
+                                                            .child("⚠️ 授权原生进程")
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                authorize_listener,
+                                                            )
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .px_2p5()
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .cursor_pointer()
+                                                    .border_1()
+                                                    .border_color(if plugin.enabled {
+                                                        rgb(shell.palette.accent)
+                                                    } else {
+                                                        rgb(shell.palette.border)
+                                                    })
+                                                    .bg(if plugin.enabled {
+                                                        rgb(shell.palette.button_active)
+                                                    } else {
+                                                        rgb(shell.palette.panel)
+                                                    })
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(rgb(if plugin.enabled {
+                                                        shell.palette.text
+                                                    } else {
+                                                        shell.palette.muted
+                                                    }))
+                                                    .hover(|style| {
+                                                        style.bg(rgb(shell.palette.button))
+                                                    })
+                                                    .child(if plugin.enabled {
+                                                        "已启用 (Disable)"
+                                                    } else {
+                                                        "已禁用 (Enable)"
+                                                    })
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        toggle_listener,
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(shell.palette.subtle))
+                                    .child(desc),
+                            )
+                    }),
+                ))
                 .child(
                     div()
                         .px_3()
@@ -5135,38 +4985,22 @@ pub fn render_setting_row(
                         .child(row.label.to_owned()),
                 )
                 .child(
-                    div()
-                        .px_2p5()
-                        .py_0p5()
-                        .rounded_full()
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(rgb(if is_on {
-                            palette.accent
-                        } else {
-                            palette.border
-                        }))
-                        .bg(if is_on {
-                            rgb(palette.button_active)
-                        } else {
-                            rgb(palette.input)
-                        })
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(if is_on { palette.accent } else { palette.muted }))
-                        .hover(|style| style.bg(rgb(palette.button)))
-                        .child(if is_on { "ON" } else { "OFF" })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(
-                                move |shell,
-                                      event: &MouseDownEvent,
-                                      window: &mut Window,
-                                      cx: &mut Context<ShellApp>| {
-                                    shell.on_settings_toggle(&row_for_listener, event, window, cx)
-                                },
-                            ),
-                        ),
+                    Switch::new(gpui::SharedString::from(row.key.clone()))
+                        .small()
+                        .checked(is_on)
+                        .on_click(cx.listener(
+                            move |shell,
+                                  _checked: &bool,
+                                  window: &mut Window,
+                                  cx: &mut Context<ShellApp>| {
+                                shell.on_settings_toggle(
+                                    &row_for_listener,
+                                    &MouseDownEvent::default(),
+                                    window,
+                                    cx,
+                                )
+                            },
+                        )),
                 )
         }
         _ => {
