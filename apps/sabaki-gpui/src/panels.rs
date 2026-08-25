@@ -106,7 +106,6 @@ pub fn render_titlebar(
                     Button::new("left-sidebar-toggle")
                         .small()
                         .ghost()
-                        .selected(show_left_sidebar)
                         .tooltip("切换引擎侧栏 (Cmd+Shift+B)")
                         .child(mac_sidebar_icon(
                             true,
@@ -169,7 +168,6 @@ pub fn render_titlebar(
                     Button::new("right-sidebar-toggle")
                         .small()
                         .ghost()
-                        .selected(show_right_sidebar)
                         .tooltip("切换侧栏变化与分析面板")
                         .child(mac_sidebar_icon(
                             false,
