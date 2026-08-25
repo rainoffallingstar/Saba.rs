@@ -402,6 +402,93 @@ pub fn build_katago_engine_record(
     }
 }
 
+/// Extracts the value following a `-flag "..."` / `-flag '...'` / `-flag ...`
+/// argument from an engine command line.
+fn extract_arg_value(args: &str, flag: &str) -> Option<String> {
+    let mut tokens = args.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        if token != flag {
+            continue;
+        }
+        let value = tokens.next()?;
+        let trimmed = value.trim_matches(|c| c == '"' || c == '\'');
+        return Some(trimmed.to_owned());
+    }
+    None
+}
+
+/// Scans candidate directories for a KataGo network model, preferring the
+/// directory of the stale path first so a re-downloaded / renamed model in the
+/// same folder is found.
+fn discover_katago_model(stale_path: &Path) -> Option<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(parent) = stale_path.parent() {
+        roots.push(parent.to_path_buf());
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        roots.push(home.join(".config/sabaki-gpui/plugins/engines/katago/models"));
+        roots.push(home.join(".config/saba-rs/plugins/engines/katago/models"));
+        roots.push(home.join(".config/sabaki-gpui/engines/katago/models"));
+        roots.push(home.join(".katago/models"));
+    }
+
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let is_model = name.ends_with(".bin.gz")
+                || name.ends_with(".txt.gz")
+                || name.ends_with(".bin")
+                || name.ends_with(".onnx");
+            if is_model && path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Repairs a KataGo engine record whose `-model` path no longer exists by
+/// discovering a replacement model (e.g. after a re-download changed the
+/// filename). Returns a repaired record, or the original when the record is
+/// healthy or not a KataGo record.
+pub fn repair_katago_engine_record(record: &EngineRecord) -> EngineRecord {
+    let is_katago = record.path.to_lowercase().contains("katago")
+        || record.name.to_lowercase().contains("katago")
+        || record.args.to_lowercase().contains("katago");
+    if !is_katago {
+        return record.clone();
+    }
+
+    let Some(model) = extract_arg_value(&record.args, "-model") else {
+        return record.clone();
+    };
+    let model_path = PathBuf::from(&model);
+    if model_path.is_file() {
+        return record.clone();
+    }
+
+    let Some(replacement) = discover_katago_model(&model_path) else {
+        return record.clone();
+    };
+
+    let mut repaired = record.clone();
+    let config = extract_arg_value(&record.args, "-config");
+    repaired.args = match config {
+        Some(config) => format!(
+            "gtp -model \"{}\" -config \"{}\"",
+            replacement.display(),
+            config
+        ),
+        None => format!("gtp -model \"{}\"", replacement.display()),
+    };
+    repaired
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +604,69 @@ mod tests {
         assert_eq!(record.path, "/usr/local/bin/katago");
         assert!(record.args.contains("-model \"/models/b10.bin.gz\""));
         assert!(record.args.contains("-config \"/configs/gtp.cfg\""));
+    }
+
+    #[test]
+    fn repairs_a_stale_katago_model_path() {
+        let base =
+            std::env::temp_dir().join(format!("sabaki-katago-repair-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let models_dir = base.join("models");
+        std::fs::create_dir_all(&models_dir).expect("models dir exists");
+        let replacement = models_dir.join("b10c384h6nbttflrs.bin.gz");
+        std::fs::write(&replacement, b"model").expect("replacement model writes");
+
+        let stale_model = models_dir.join("b10c512h8nbt3tflrs.bin.gz");
+        let config = base.join("default_gtp.cfg");
+        let stale_record = EngineRecord::new(
+            "KataGo (Apple Silicon (Metal GPU))",
+            "/opt/homebrew/bin/katago",
+            format!(
+                "gtp -model \"{}\" -config \"{}\"",
+                stale_model.display(),
+                config.display()
+            ),
+        );
+
+        let repaired = repair_katago_engine_record(&stale_record);
+        assert!(repaired.args.contains(&replacement.display().to_string()));
+        assert!(!repaired.args.contains("b10c512h8"));
+        assert!(repaired.args.contains(&config.display().to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn leaves_healthy_and_non_katago_records_unchanged() {
+        // Healthy model path is untouched.
+        let base =
+            std::env::temp_dir().join(format!("sabaki-katago-healthy-{}", std::process::id()));
+        std::fs::remove_dir_all(&base).ok();
+        let models_dir = base.join("models");
+        std::fs::create_dir_all(&models_dir).expect("models dir exists");
+        let model = models_dir.join("b10.bin.gz");
+        std::fs::write(&model, b"model").expect("model writes");
+        let config = base.join("gtp.cfg");
+        let healthy = EngineRecord::new(
+            "KataGo",
+            "/opt/homebrew/bin/katago",
+            format!(
+                "gtp -model \"{}\" -config \"{}\"",
+                model.display(),
+                config.display()
+            ),
+        );
+        assert_eq!(repair_katago_engine_record(&healthy), healthy);
+
+        // Non-KataGo engines are never rewritten.
+        let leela = EngineRecord::new(
+            "Leela Zero",
+            "/usr/bin/leelaz",
+            "-g -w /weights/lz.gz".to_owned(),
+        );
+        assert_eq!(repair_katago_engine_record(&leela), leela);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -68,6 +68,7 @@ pub use katago_setup::{
     MODEL_STRONGEST_NAME, MODEL_STRONGEST_URL, build_katago_engine_record,
     ensure_katago_environment, find_katago_executable, generate_optimized_gtp_config,
     install_katago_model, install_katago_model_with, katago_storage_dir,
+    repair_katago_engine_record,
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use move_grading::{

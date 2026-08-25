@@ -769,7 +769,9 @@ impl ShellApp {
         &mut self,
         role: EngineRole,
     ) -> Option<sabaki_host::EngineRecord> {
-        // 1. If role is explicitly assigned to a record in the store, return it.
+        // 1. If role is explicitly assigned to a record in the store, return it
+        // after repairing a stale KataGo model path (a re-downloaded/renamed
+        // model otherwise makes the engine exit during the handshake).
         if let Some(name) = self.engine_roles.get(role)
             && let Some(record) = self
                 .engine_store
@@ -778,7 +780,16 @@ impl ShellApp {
                 .find(|r| r.name == name)
                 .cloned()
         {
-            return Some(record);
+            let repaired = sabaki_host::repair_katago_engine_record(&record);
+            if repaired != record {
+                self.engine_store.upsert(repaired.clone());
+                let _ = self.engine_store.save(&mut self.settings);
+                let _ = sabaki_host::persist_settings_store(
+                    &self.settings,
+                    &mut self.settings_persistence,
+                );
+            }
+            return Some(repaired);
         }
 
         // 2. Look for any existing KataGo / engine record in the store.
@@ -795,10 +806,19 @@ impl ShellApp {
             .cloned();
 
         if let Some(record) = candidate {
-            let engine_name = record.name.clone();
+            let repaired = sabaki_host::repair_katago_engine_record(&record);
+            let engine_name = repaired.name.clone();
             self.engine_roles.assign(role, &engine_name);
+            if repaired != record {
+                self.engine_store.upsert(repaired.clone());
+                let _ = self.engine_store.save(&mut self.settings);
+                let _ = sabaki_host::persist_settings_store(
+                    &self.settings,
+                    &mut self.settings_persistence,
+                );
+            }
             let _ = self.persist_engine_roles();
-            return Some(record);
+            return Some(repaired);
         }
 
         // 3. Auto-discover KataGo executable from system / local storage
@@ -870,7 +890,13 @@ impl ShellApp {
             .attach(role, transport, &record, board_size, &moves)
         {
             self.status = format!("engine attach failed: {error}").into();
-            self.show_toast(format!("引擎连接握手失败: {error}"), cx);
+            self.show_toast(
+                format!(
+                    "引擎连接握手失败: {error}\n（引擎: {}，参数: {}）",
+                    record.path, record.args
+                ),
+                cx,
+            );
             cx.notify();
             return;
         }
