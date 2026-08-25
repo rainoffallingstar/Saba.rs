@@ -1160,11 +1160,27 @@ pub fn render_plugin_menu(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<
         .debug_selector(|| "plugin-menu".to_owned())
         .absolute()
         .bottom(px(42.0))
-        .left_0()
-        .w_full()
+        .left(px(16.0))
+        .right(px(16.0))
         .flex()
         .justify_center()
-        .child(content)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            div()
+                .w_full()
+                .max_w(px(780.0))
+                .flex()
+                .flex_col()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(shell.palette.accent))
+                .bg(rgb(0x18181c))
+                .shadow_lg()
+                .child(content),
+        )
 }
 
 fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
@@ -1172,16 +1188,10 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
         .engine_controller
         .is_attached(crate::engine_console::EngineRole::Analysis);
     div()
-        .w(px(460.0))
+        .w_full()
         .flex()
         .flex_col()
         .gap_2p5()
-        .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .child(
             div()
                 .flex()
@@ -1189,13 +1199,13 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                 .justify_between()
                 .pb_2()
                 .border_b_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x2a2a30))
                 .child(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child("⚡ KataGo AI 引擎与模型配置")
+                        .text_color(rgb(0xf2f2f5))
+                        .child("⚡ KataGo AI 引擎与模型配置"),
                 )
                 .child(
                     div()
@@ -1207,18 +1217,22 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                                 .ghost()
                                 .label("✕")
                                 .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.close_plugin_popover(&MouseDownEvent::default(), window, cx);
+                                    shell.close_plugin_popover(
+                                        &MouseDownEvent::default(),
+                                        window,
+                                        cx,
+                                    );
                                 })),
                         ),
-                )
+                ),
         )
         .child(
             div()
                 .p_2p5()
                 .rounded_md()
-                .bg(rgb(shell.palette.input))
+                .bg(rgb(0x121214))
                 .border_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x26262c))
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -1227,25 +1241,32 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_xs().text_color(rgb(shell.palette.subtle)).child("引擎运行状态:"))
                         .child(
-                            Badge::new()
-                                .small()
-                                .child(if analysis_connected { "● Kata-Analyze 已连接" } else { "○ 待连接" })
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("引擎运行状态:"),
                         )
+                        .child(
+                            Badge::new().small().child(if analysis_connected {
+                                "● Kata-Analyze 已连接"
+                            } else {
+                                "○ 待连接"
+                            }),
+                        ),
                 )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(shell.palette.muted))
-                        .child("支持自动下载 KataGo 原生引擎，并根据本机硬件自动匹配 Metal (Apple Silicon) / OpenCL / CUDA 加速。")
-                )
+                        .text_color(rgb(0x9a9a9a))
+                        .child("支持自动下载 KataGo 原生引擎，并根据本机硬件自动匹配 Metal (Apple Silicon) / OpenCL / CUDA 加速。"),
+                ),
         )
         .child(
             div()
                 .flex()
-                .flex_col()
-                .gap_1p5()
+                .items_center()
+                .gap_2()
                 .child(
                     Button::new("katago-setup-action-btn")
                         .small()
@@ -1253,51 +1274,59 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                         .label("⚡ 一键配置 / 诊断环境与模型")
                         .tooltip("自动检查环境、下载最新模型并配置引擎")
                         .on_click(cx.listener(|shell, _, _, cx| {
-                            shell.on_plugin_command("org.sabaki.katago-setup-hub", "katago.setup", cx);
-                        }))
+                            shell.on_plugin_command(
+                                "org.sabaki.katago-setup-hub",
+                                "katago.setup",
+                                cx,
+                            );
+                        })),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .gap_1p5()
-                        .child(
-                            Button::new("katago-connect-analysis-btn")
-                                .small()
-                                .outline()
-                                .label(if analysis_connected { "⏹ 断开分析" } else { "🔌 连接为分析引擎" })
-                                .on_click(cx.listener(move |shell, _, window, cx| {
-                                    if shell.engine_controller.is_attached(crate::engine_console::EngineRole::Analysis) {
-                                        shell.on_engine_disconnect(crate::engine_console::EngineRole::Analysis, &MouseDownEvent::default(), window, cx);
-                                    } else {
-                                        shell.on_engine_connect(crate::engine_console::EngineRole::Analysis, cx);
-                                    }
-                                }))
-                        )
-                        .child(
-                            Button::new("katago-open-terminal-btn")
-                                .small()
-                                .ghost()
-                                .label("💻 GTP 终端")
-                                .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
-                                }))
-                        )
+                    Button::new("katago-connect-analysis-btn")
+                        .small()
+                        .outline()
+                        .label(if analysis_connected {
+                            "⏹ 断开分析"
+                        } else {
+                            "🔌 连接为分析引擎"
+                        })
+                        .on_click(cx.listener(move |shell, _, window, cx| {
+                            if shell
+                                .engine_controller
+                                .is_attached(crate::engine_console::EngineRole::Analysis)
+                            {
+                                shell.on_engine_disconnect(
+                                    crate::engine_console::EngineRole::Analysis,
+                                    &MouseDownEvent::default(),
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                shell.on_engine_connect(
+                                    crate::engine_console::EngineRole::Analysis,
+                                    cx,
+                                );
+                            }
+                        })),
                 )
+                .child(
+                    Button::new("katago-open-terminal-btn")
+                        .small()
+                        .ghost()
+                        .label("💻 GTP 终端")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
+                        })),
+                ),
         )
 }
 
 fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     div()
-        .w(px(460.0))
+        .w_full()
         .flex()
         .flex_col()
         .gap_2p5()
-        .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .child(
             div()
                 .flex()
@@ -1305,12 +1334,12 @@ fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                 .justify_between()
                 .pb_2()
                 .border_b_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x2a2a30))
                 .child(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
+                        .text_color(rgb(0xf2f2f5))
                         .child("🦊 野狐围棋对局同步与查询"),
                 )
                 .child(
@@ -1406,16 +1435,10 @@ fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
 
 fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     div()
-        .w(px(460.0))
+        .w_full()
         .flex()
         .flex_col()
         .gap_2p5()
-        .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .child(
             div()
                 .flex()
@@ -1423,12 +1446,12 @@ fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Di
                 .justify_between()
                 .pb_2()
                 .border_b_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x2a2a30))
                 .child(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
+                        .text_color(rgb(0xf2f2f5))
                         .child("📋 局面转 SGF / 剪贴板导出"),
                 )
                 .child(
@@ -1528,16 +1551,10 @@ fn render_generic_plugin_dialog(
 ) -> Div {
     let plugin_id = plugin.plugin_id.clone();
     div()
-        .w(px(460.0))
+        .w_full()
         .flex()
         .flex_col()
         .gap_2p5()
-        .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .child(
             div()
                 .flex()
@@ -1545,12 +1562,12 @@ fn render_generic_plugin_dialog(
                 .justify_between()
                 .pb_2()
                 .border_b_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x2a2a30))
                 .child(
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
+                        .text_color(rgb(0xf2f2f5))
                         .child(format!(
                             "{} {}",
                             plugin_icon(&plugin.plugin_id),
@@ -1610,17 +1627,11 @@ fn render_generic_plugin_dialog(
 fn render_pinned_plugins_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     let pinned_ids = shell.pinned_plugin_ids();
     div()
-        .w(px(380.0))
+        .w_full()
         .max_h(px(420.0))
         .flex()
         .flex_col()
         .gap_2()
-        .p_3()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .child(
             div()
                 .flex()
@@ -1628,7 +1639,7 @@ fn render_pinned_plugins_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Di
                 .justify_between()
                 .pb_2()
                 .border_b_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(0x2a2a30))
                 .child(
                     div()
                         .flex()
@@ -1637,13 +1648,13 @@ fn render_pinned_plugins_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Di
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(shell.palette.text))
-                                .child("🧩 插件管理"),
+                                .text_color(rgb(0xf2f2f5))
+                                .child("🧩 插件栏管理"),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(rgb(shell.palette.subtle))
+                                .text_color(rgb(0x9a9a9a))
                                 .child("选择固定到底部操作栏的快捷插件"),
                         ),
                 )
