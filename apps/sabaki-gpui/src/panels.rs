@@ -1416,6 +1416,7 @@ pub fn render_winrate_graph_panel(
     height: f32,
     palette: UiPalette,
     on_node_clicked: impl Fn(&sabaki_domain_core::NodeId, &mut Window, &mut App) + 'static,
+    cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
     let on_node_clicked = Rc::new(on_node_clicked);
     let has_values = points.iter().any(|point| point.y.is_some());
@@ -1441,15 +1442,27 @@ pub fn render_winrate_graph_panel(
                     div()
                         .flex()
                         .items_center()
-                        .gap_1p5()
+                        .gap_1()
                         .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(palette.subtle))
-                                .child("胜率走势"),
+                            Button::new("metric-tab-winrate")
+                                .xsmall()
+                                .ghost()
+                                .selected(metric == WinrateGraphMetric::Winrate)
+                                .label("胜率走势")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.set_winrate_metric(WinrateGraphMetric::Winrate, cx);
+                                })),
                         )
-                        .child(Badge::new().small().child(metric.label().to_uppercase())),
+                        .child(
+                            Button::new("metric-tab-score")
+                                .xsmall()
+                                .ghost()
+                                .selected(metric == WinrateGraphMetric::ScoreLead)
+                                .label("目差走势")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.set_winrate_metric(WinrateGraphMetric::ScoreLead, cx);
+                                })),
+                        ),
                 )
                 .children(has_values.then(|| {
                     Badge::new()
@@ -4615,8 +4628,8 @@ pub fn render_analysis_preview_panel(
             pv_preview,
         )
     });
-    let preview_board_size = (shell.right_sidebar_width - 32.0).clamp(150.0, 194.0);
-    let preview_panel_height = preview_board_size + 60.0;
+    let preview_board_size = (shell.right_sidebar_width - 24.0).clamp(180.0, 360.0);
+    let preview_panel_height = preview_board_size + 42.0;
     let preview_stones = preview
         .as_ref()
         .map(|(_, pv_preview)| pv_preview.clone())

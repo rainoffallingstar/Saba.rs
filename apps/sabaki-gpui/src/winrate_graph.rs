@@ -29,6 +29,7 @@ impl WinrateGraphMetric {
         }
     }
 
+    #[allow(dead_code)]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Winrate => "winrate · black",

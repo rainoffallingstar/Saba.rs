@@ -407,13 +407,13 @@ impl ShellApp {
             &settings,
             "view.leftsidebar_width",
             "view.leftsidebar_minwidth",
-            320.0,
+            360.0,
         );
         let right_sidebar_width = pane_size_from_settings(
             &settings,
             "view.sidebar_width",
             "view.sidebar_minwidth",
-            320.0,
+            360.0,
         );
         let peer_list_height = pane_size_from_settings(
             &settings,
@@ -4751,6 +4751,17 @@ impl ShellApp {
         cx.notify();
     }
 
+    pub fn set_winrate_metric(&mut self, metric: WinrateGraphMetric, cx: &mut Context<Self>) {
+        let val = match metric {
+            WinrateGraphMetric::Winrate => "winrate",
+            WinrateGraphMetric::ScoreLead => "scorelead",
+        };
+        let _ = self
+            .settings
+            .set("board.analysis_type", serde_json::json!(val));
+        cx.notify();
+    }
+
     fn on_export_gif_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let options = sabaki_host::GifExportOptions::default();
@@ -5182,6 +5193,7 @@ impl Render for ShellApp {
                                             let handler = on_node_clicked.clone();
                                             move |node_id, window, cx| handler(node_id, window, cx)
                                         },
+                                        cx,
                                     )
                                 } else {
                                     div().id("winrate-graph-panel-hidden")
