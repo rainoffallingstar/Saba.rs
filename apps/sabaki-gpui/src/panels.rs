@@ -2993,15 +2993,7 @@ pub fn render_gtp_terminal_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 .hover(|style| style.bg(rgb(0x30303c)).text_color(rgb(0xffffff)))
                                                 .child(if visits == 0 { "无限".to_owned() } else { visits.to_string() })
                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
-                                                    let _ = shell.settings.set(
-                                                        "engines.analysis_max_visits",
-                                                        serde_json::json!(visits),
-                                                    );
-                                                    let _ = sabaki_host::persist_settings_store(
-                                                        &shell.settings,
-                                                        &mut shell.settings_persistence,
-                                                    );
-                                                    cx.notify();
+                                                    shell.apply_analysis_visits(visits, cx);
                                                 }))
                                         }))
                                 )

@@ -163,6 +163,9 @@ struct ShellApp {
     analysis_task: Option<Task<()>>,
     batch_review_progress: Option<sabaki_host::BatchReviewProgress>,
     hovered_candidate_pv: Option<Vec<String>>,
+    /// Set when a maxVisits quick-switch lands while analysis is streaming;
+    /// after the run finishes cleanly, analysis restarts with the new limit.
+    restart_analysis_after_stop: bool,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
     /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
@@ -423,6 +426,7 @@ impl ShellApp {
             analysis_task: None,
             batch_review_progress: None,
             hovered_candidate_pv: None,
+            restart_analysis_after_stop: false,
             last_analysis_node: None,
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
@@ -1444,6 +1448,14 @@ impl ShellApp {
         self.analysis_task = None;
         self.status = "analysis finished".into();
         cx.notify();
+
+        // A maxVisits quick-switch landed while analysis was streaming; the
+        // search has now stopped and the session returned, so restart with
+        // the new limit on the same node (reusing KataGo's search tree).
+        if self.restart_analysis_after_stop {
+            self.restart_analysis_after_stop = false;
+            self.start_analysis(cx);
+        }
     }
 
     fn on_analysis_stop(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1458,6 +1470,34 @@ impl ShellApp {
             self.status = "stopping analysis".into();
         } else {
             self.status = "no analysis running".into();
+        }
+        cx.notify();
+    }
+
+    /// Persists a new analysis `maxVisits` value and, when analysis is
+    /// currently streaming, schedules a restart so the new depth applies
+    /// immediately without losing the search tree.
+    fn apply_analysis_visits(&mut self, visits: u64, cx: &mut Context<Self>) {
+        let _ = self
+            .settings
+            .set("engines.analysis_max_visits", serde_json::json!(visits));
+        let _ = sabaki_host::persist_settings_store(&self.settings, &mut self.settings_persistence);
+
+        if self.analysis_task.is_some() {
+            self.restart_analysis_after_stop = true;
+            self.stop_analysis(cx);
+        } else {
+            self.show_toast(
+                format!(
+                    "🔍 分析深度已设为 {}",
+                    if visits == 0 {
+                        "无限".to_owned()
+                    } else {
+                        visits.to_string()
+                    }
+                ),
+                cx,
+            );
         }
         cx.notify();
     }
