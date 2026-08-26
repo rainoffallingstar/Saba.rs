@@ -10,10 +10,10 @@ Run from the repository root before packaging:
 
 ```text
 cargo fmt --all -- --check
-cargo test -p sabaki-gpui --locked
+cargo test -p ryusei-gpui --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo build --release --locked -p sabaki-gpui --bin saba-rs
+cargo build --release --locked -p ryusei-gpui --bin ryusei
 ```
 
 The root workflows `.github/workflows/ci.yml` and

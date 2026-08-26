@@ -3,7 +3,7 @@
 //! `GameDocument`, asserting the same metadata and scale the reference
 //! produces.
 
-use sabaki_domain_core::{GameDocument, legacy};
+use ryusei_domain_core::{GameDocument, legacy};
 use std::path::PathBuf;
 
 fn fixture(name: &str) -> String {

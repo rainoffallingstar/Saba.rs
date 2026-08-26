@@ -1,4 +1,4 @@
-# Saba.rs 发布与架构修复计划
+# Ryusei 发布与架构修复计划
 
 > 目标：从当前 GPUI Beta 阶段推进到可重复构建、可安装验证、可公开发布的 `v0.1.0-beta.1`，并为稳定版消除关键架构债务。
 
@@ -16,11 +16,11 @@
 
 ### P0.1 固化仓库结构
 
-- [x] 将 Saba.rs Git 历史提升到仓库根；
+- [x] 将 Ryusei Git 历史提升到仓库根；
 - [x] 将旧 Electron/Tauri Sabaki 移入 `refer-repo/`；
 - [x] 将 `/refer-repo/` 加入主线 `.gitignore`；
 - [x] 在 README 说明主线与参考仓库的关系；
-- [x] 确认根仓库远端与 CI/Tag/Release 权威均为 Saba.rs。
+- [x] 确认根仓库远端与 CI/Tag/Release 权威均为 Ryusei。
 
 **验收：**
 
@@ -30,7 +30,7 @@ git remote -v
 git status --short --ignored
 ```
 
-`refer-repo/` 必须显示为 ignored，主线远端必须为 Saba.rs。
+`refer-repo/` 必须显示为 ignored，主线远端必须为 Ryusei。
 
 ### P0.2 拆分当前大型工作树
 
@@ -61,7 +61,7 @@ git status --short --ignored
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build --release --locked -p sabaki-gpui
+cargo build --release --locked -p ryusei-gpui
 ```
 
 四条命令必须连续执行两次均成功。
@@ -75,8 +75,8 @@ cargo build --release --locked -p sabaki-gpui
 ### P1.1 CI 与打包
 
 - [x] 推送候选 commit（最终候选：`8880412e54bef87ddf3091e0f9cc830696c067b0`）；
-- [x] Ubuntu、macOS、Windows 的 CI 全绿（run [`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577)）；
-- [x] 当前 commit 触发 release workflow（run [`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374)）；
+- [x] Ubuntu、macOS、Windows 的 CI 全绿（run [`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577)）；
+- [x] 当前 commit 触发 release workflow（run [`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374)）；
 - [x] 记录 `.app/.dmg`、tarball/AppImage、zip/NSIS、Flatpak 的 checksum（见 `docs/release-readiness.md`）；
 - [ ] 失败时不得引用旧 commit 的成功 workflow 作为证据。
 
@@ -99,9 +99,9 @@ cargo build --release --locked -p sabaki-gpui
 **本地实现状态：**
 
 - [x] `[workspace.package]` 是唯一版本源，打包脚本以 `scripts/release-version.sh` 读取它（CI tag 以 `APP_VERSION` 覆盖）；
-- [x] 产物二进制统一为 `saba-rs`，产品名为 `Saba.rs`；
-- [x] macOS/Windows 标识统一为 `dev.saba-rs.app`，Flatpak 使用有效的 `dev.sabars.app`；
-- [x] 新配置目录为 `~/.config/saba-rs`，已有 `~/.config/sabaki-gpui` 自动继续使用；
+- [x] 产物二进制统一为 `ryusei`，产品名为 `Ryusei`；
+- [x] macOS/Windows 标识统一为 `dev.ryusei.app`，Flatpak 使用有效的 `dev.ryusei.app`；
+- [x] 新配置目录为 `~/.config/ryusei`，已有 `~/.config/ryusei-gpui` 自动继续使用；
 - [x] release workflow 使用 locked build、版本化产物名和 `SHA256SUMS.txt`。
 
 ### P1.3 文件关联和安装生命周期
@@ -112,7 +112,7 @@ cargo build --release --locked -p sabaki-gpui
 - [ ] 验证双击棋谱打开（需三平台已安装产物）；
 - [ ] 验证新装、覆盖升级、降级、卸载和配置保留（需三平台已安装产物）。
 
-**macOS 本地打包证据：** `scripts/bundle-macos.sh dist/macos-qa` 已成功构建锁定 release、生成 `Saba.rs.app`、通过 `plutil -lint` 和 `codesign --verify --deep --strict`。当前受限本机环境无法由 `hdiutil` 创建 dmg，脚本按设计保留完整 `.app` 并报告 warning；仍需由 CI 或常规 macOS 环境验证 dmg 与安装生命周期。
+**macOS 本地打包证据：** `scripts/bundle-macos.sh dist/macos-qa` 已成功构建锁定 release、生成 `Ryusei.app`、通过 `plutil -lint` 和 `codesign --verify --deep --strict`。当前受限本机环境无法由 `hdiutil` 创建 dmg，脚本按设计保留完整 `.app` 并报告 warning；仍需由 CI 或常规 macOS 环境验证 dmg 与安装生命周期。
 
 ## 4. P1：真实产品 QA
 
@@ -205,7 +205,7 @@ snapshot()
 ### P2.2 Plugin Controller
 
 - [x] 将 registry、`PluginPersistence` adapter 与 native `Supervisor` map 下沉到 `PluginController<P>`；其 Interface 只公开 restore/install/toggle/grant/authorize/native dispatch/records/process snapshots，成功 mutation 已持久化且 native restart policy 不再泄漏给 `ShellApp`；
-- [x] 建立内置 command handler 注册表：`BuiltinPluginCommandRegistry` 集中维护 plugin/command identity，`ShellApp` 只匹配 `BuiltinPluginCommand` 语义值，不再持有 `org.sabaki.*` 字符串；
+- [x] 建立内置 command handler 注册表：`BuiltinPluginCommandRegistry` 集中维护 plugin/command identity，`ShellApp` 只匹配 `BuiltinPluginCommand` 语义值，不再持有 `org.ryusei.*` 字符串；
 - [ ] 删除 `ShellApp` 中按插件 ID 扩张的 UI 专有分支（KataGo setup、Fox 导入、position checker、Save dialog）；这些分支已由 registry 分类，但具体 GPUI/Document 副作用 adapter 仍待下沉；
 - [x] 第三方 native 插件只通过 controller 的稳定 JSON-RPC 生命周期与 capability/permission 校验工作；WASM 仍按既有 sandbox 协议执行。
 

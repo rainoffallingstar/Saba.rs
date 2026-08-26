@@ -50,14 +50,14 @@ patch, not a behavioral test.
    the workspace volume lacks artifact space:
 
    ```bash
-   CARGO_TARGET_DIR=/tmp/sabaki-cargo-target \
+   CARGO_TARGET_DIR=/tmp/ryusei-cargo-target \
      cargo fmt --all -- --check && \
-   CARGO_TARGET_DIR=/tmp/sabaki-cargo-target \
+   CARGO_TARGET_DIR=/tmp/ryusei-cargo-target \
      cargo test --workspace --locked && \
-   CARGO_TARGET_DIR=/tmp/sabaki-cargo-target \
+   CARGO_TARGET_DIR=/tmp/ryusei-cargo-target \
      cargo clippy --workspace --all-targets -- -D warnings && \
-   CARGO_TARGET_DIR=/tmp/sabaki-cargo-target \
-     cargo build --release --locked -p sabaki-gpui --bin saba-rs
+   CARGO_TARGET_DIR=/tmp/ryusei-cargo-target \
+     cargo build --release --locked -p ryusei-gpui --bin ryusei
    ```
 
 5. Run the test-platform smokes and the two native macOS manual scenarios.

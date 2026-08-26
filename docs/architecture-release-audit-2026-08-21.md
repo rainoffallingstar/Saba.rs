@@ -1,4 +1,4 @@
-# Saba.rs 架构与发布就绪度审查
+# Ryusei 架构与发布就绪度审查
 
 > 审查日期：2026-08-21
 >
@@ -8,7 +8,7 @@
 
 ## 1. 执行摘要
 
-Saba.rs 已经越过技术原型阶段：围棋领域核心、SGF 数据保真、UI 无关 Host 工作流、GTP 引擎会话和插件安全边界均已形成可测试实现；GPUI 客户端具备打开、编辑、分析、计分、保存和插件管理等主要产品路径。
+Ryusei 已经越过技术原型阶段：围棋领域核心、SGF 数据保真、UI 无关 Host 工作流、GTP 引擎会话和插件安全边界均已形成可测试实现；GPUI 客户端具备打开、编辑、分析、计分、保存和插件管理等主要产品路径。
 
 当前最准确的定位是：
 
@@ -26,7 +26,7 @@ Saba.rs 已经越过技术原型阶段：围棋领域核心、SGF 数据保真�
 
 ## 2. 仓库主线决策
 
-本次整理后，仓库根已切换为 Saba.rs 主线：
+本次整理后，仓库根已切换为 Ryusei 主线：
 
 ```text
 apps/                 GPUI 客户端
@@ -47,14 +47,14 @@ refer-repo/            旧 Electron/Tauri Sabaki 参考仓库（Git 忽略）
 
 ```text
 domain-core ───────┐
-                   ├──> sabaki-host ──> sabaki-gpui
+                   ├──> ryusei-host ──> ryusei-gpui
 plugin-runtime ────┘
 ```
 
 - `domain-core` 不依赖窗口、文件对话框或 GPUI；
 - `plugin-runtime` 独立承载插件协议、权限和运行时限制；
-- `sabaki-host` 编排 UI 无关工作流；
-- `sabaki-gpui` 是生产 Adapter 和原生视图层。
+- `ryusei-host` 编排 UI 无关工作流；
+- `ryusei-gpui` 是生产 Adapter 和原生视图层。
 
 整体不存在明显的反向依赖或循环依赖。
 
@@ -62,17 +62,17 @@ plugin-runtime ────┘
 
 以下模块通过较小 Interface 隐藏了大量复杂 Implementation，具备良好 leverage 和 locality：
 
-- `crates/sabaki-host/src/file_codec.rs`：SGF `CA` 探测、多种 CJK 编码、严格解码和无损写回；
-- `crates/sabaki-host/src/settings.rs`：历史键表、类型校验、加载与持久化回滚；
+- `crates/ryusei-host/src/file_codec.rs`：SGF `CA` 探测、多种 CJK 编码、严格解码和无损写回；
+- `crates/ryusei-host/src/settings.rs`：历史键表、类型校验、加载与持久化回滚；
 - `crates/plugin-runtime/src/wasm.rs`：WASM 编译、fuel、内存、payload 和 capability 限制；
-- `crates/sabaki-host/src/engine_session.rs`：GTP 生命周期、会话同步与流式分析；
+- `crates/ryusei-host/src/engine_session.rs`：GTP 生命周期、会话同步与流式分析；
 - `crates/domain-core/src/lib.rs`：事务、revision、快照和游戏树一致性。
 
 ### 3.3 主要架构风险
 
 #### A. `ShellApp` 成为 God Object
 
-`apps/sabaki-gpui/src/main.rs` 超过 5,000 行，`panels.rs` 超过 3,000 行。`ShellApp` 同时持有文件、恢复、设置、布局、输入、引擎、分析、插件、主题和通知状态。
+`apps/ryusei-gpui/src/main.rs` 超过 5,000 行，`panels.rs` 超过 3,000 行。`ShellApp` 同时持有文件、恢复、设置、布局、输入、引擎、分析、插件、主题和通知状态。
 
 影响：
 
@@ -150,8 +150,8 @@ plugin-runtime ────┘
 审查期间当前工作树的普通测试结果为：
 
 - `domain-core`、差分 fixture、legacy fixture 和 property tests：通过；
-- `sabaki-gpui`：140 个测试通过；
-- `sabaki-host`：114 个测试通过；
+- `ryusei-gpui`：140 个测试通过；
+- `ryusei-host`：114 个测试通过；
 - `plugin-runtime`：26 个测试通过；
 - 真实引擎子进程和组合 workflow：通过。
 
@@ -159,7 +159,7 @@ plugin-runtime ────┘
 
 但当前仍不能声明 workspace 全绿：
 
-1. `cargo test --workspace` 在 `sabaki-host` doctest 阶段出现依赖 crate 无法找到，单独运行 `cargo test -p sabaki-host --doc` 可以通过，说明存在 workspace/rustdoc 构建不稳定；
+1. `cargo test --workspace` 在 `ryusei-host` doctest 阶段出现依赖 crate 无法找到，单独运行 `cargo test -p ryusei-host --doc` 可以通过，说明存在 workspace/rustdoc 构建不稳定；
 2. `cargo fmt --all -- --check` 当前报告格式差异；
 3. 构建存在未使用 import、dead code、未处理 `Result` 和未来 Rust 不兼容依赖警告；
 4. 当前大型本地改动尚未提交到 `origin/main`，历史 CI 不能证明当前候选版本。
@@ -170,7 +170,7 @@ plugin-runtime ────┘
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo build --release --locked -p sabaki-gpui
+cargo build --release --locked -p ryusei-gpui
 ```
 
 ## 6. 发布工程现状
@@ -188,7 +188,7 @@ cargo build --release --locked -p sabaki-gpui
 - macOS 仅 ad-hoc 签名，没有 Developer ID、hardened runtime、公证和 staple；
 - Windows 没有 Authenticode 签名；
 - `0.1.0` 分散硬编码于 Cargo、Info.plist、DMG 和 NSIS；
-- `Saba.rs`、`sabaki-gpui`、`dev.saba-rs.app`、`dev.sabars.app` 身份不统一；
+- `Ryusei`、`ryusei-gpui`、`dev.ryusei.app` 身份统一；
 - SGF 文件关联未在三个安装格式中完整落地；
 - 干净机器新装、升级、降级、卸载和配置保留尚未形成证据；
 - 尚未用真实 KataGo/GNU Go 完成候选版本手工 smoke；

@@ -5132,7 +5132,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "sabaki-domain-core"
+name = "ryusei-domain-core"
 version = "0.1.0"
 dependencies = [
  "proptest",
@@ -5142,28 +5142,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "sabaki-gpui"
+name = "ryusei-gpui"
 version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui-component",
  "rand 0.9.5",
  "rfd",
- "sabaki-domain-core",
- "sabaki-host",
- "sabaki-plugin-runtime",
+ "ryusei-domain-core",
+ "ryusei-host",
+ "ryusei-plugin-runtime",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "sabaki-host"
+name = "ryusei-host"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "gif",
- "sabaki-domain-core",
- "sabaki-plugin-runtime",
+ "ryusei-domain-core",
+ "ryusei-plugin-runtime",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5172,7 +5172,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sabaki-plugin-runtime"
+name = "ryusei-plugin-runtime"
 version = "0.1.0"
 dependencies = [
  "serde",

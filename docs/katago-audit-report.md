@@ -44,7 +44,7 @@
 
 ### 2.1 安装、发现与配置
 
-- `crates/sabaki-host/src/katago_setup.rs`
+- `crates/ryusei-host/src/katago_setup.rs`
   - `HardwareBackend`
   - `KataGoModelTier`
   - 官方模型 URL
@@ -54,7 +54,7 @@
   - `ensure_katago_environment`
   - `find_katago_executable`
   - stale model path 修复
-- `apps/sabaki-gpui/src/file_workflow.rs`
+- `apps/ryusei-gpui/src/file_workflow.rs`
   - 内置 KataGo setup plugin 安装
 - `examples/plugins/katago-setup-hub/`
   - declarative setup/download commands
@@ -69,37 +69,37 @@
   - `GtpProcessSupervisor`
   - stdout/stderr reader thread
   - bounded command、streaming command、timeout、stop/drop
-- `crates/sabaki-host/src/engine_session.rs`
+- `crates/ryusei-host/src/engine_session.rs`
   - handshake、capability probe、board setup、command forwarding、streaming API
-- `crates/sabaki-host/src/engine_controller.rs`
+- `crates/ryusei-host/src/engine_controller.rs`
   - role → session map
   - attach/detach
   - command/analysis lease
   - replay、synchronize、session ownership
-- `apps/sabaki-gpui/src/main.rs`
+- `apps/ryusei-gpui/src/main.rs`
   - GPUI task、generation、角色连接和状态投影
 
 ### 2.3 分析与全盘复盘
 
-- `crates/sabaki-host/src/analysis.rs`
+- `crates/ryusei-host/src/analysis.rs`
   - Leela/KataGo GTP `info move` parser
   - JSON proxy parser
   - streaming process replay
-- `crates/sabaki-host/src/analysis_controller.rs`
+- `crates/ryusei-host/src/analysis_controller.rs`
   - run generation、node/player binding、stop/dispose/replay flag
-- `crates/sabaki-host/src/whole_game_review.rs`
+- `crates/ryusei-host/src/whole_game_review.rs`
   - active root→current lineage
-- `apps/sabaki-gpui/src/engine_console.rs`
+- `apps/ryusei-gpui/src/engine_console.rs`
   - 分析命令、候选合并、胜率换算、PV 和 vertex 辅助逻辑
-- `apps/sabaki-gpui/src/main.rs`
+- `apps/ryusei-gpui/src/main.rs`
   - attached/fresh stream worker、批量 UI 更新、SGF 写回、全盘复盘推进
-- `apps/sabaki-gpui/src/panels.rs`、`goban_view.rs`、`winrate_graph.rs`
+- `apps/ryusei-gpui/src/panels.rs`、`goban_view.rs`、`winrate_graph.rs`
   - UI 展示、ownership 热图和 winrate graph
 
 ### 2.4 测试与文档
 
-- `crates/sabaki-host/tests/katago_regression.rs`
-- `crates/sabaki-host/src/*` 中的 fixture/unit tests
+- `crates/ryusei-host/tests/katago_regression.rs`
+- `crates/ryusei-host/src/*` 中的 fixture/unit tests
 - `docs/release-remediation-plan.md`
 - `docs/handoff.md`
 
@@ -109,11 +109,11 @@
 
 ### 3.1 GPUI 前台冻结路径已显著收敛，但仍需以实际 checkout 为准
 
-在当前 checkout 中，`on_engine_connect` 把进程启动、握手、capability probe、board setup 和 replay 放入 `background_executor`，见 `apps/sabaki-gpui/src/main.rs:981-1046`。
+在当前 checkout 中，`on_engine_connect` 把进程启动、握手、capability probe、board setup 和 replay 放入 `background_executor`，见 `apps/ryusei-gpui/src/main.rs:981-1046`。
 
-当前版本的 attached streaming 路径也将 replay、`kata-set-param`、stream start、50ms 读取、stop 和 drain 放入 worker/background executor，见 `apps/sabaki-gpui/src/main.rs:1313-1546`；fresh `AnalysisStream` 路径见 `apps/sabaki-gpui/src/main.rs:1580-1737`。
+当前版本的 attached streaming 路径也将 replay、`kata-set-param`、stream start、50ms 读取、stop 和 drain 放入 worker/background executor，见 `apps/ryusei-gpui/src/main.rs:1313-1546`；fresh `AnalysisStream` 路径见 `apps/ryusei-gpui/src/main.rs:1580-1737`。
 
-审查过程中另一个基于较早行号/旧 checkout 的异步审查报告认为这些循环仍在 GPUI foreground。该结论与本文件所引用的当前源代码不一致，不能作为当前实现的直接事实；但它指出的架构目标仍应保留：分析 worker 应继续下沉为 `sabaki-host` 的 UI-independent seam，foreground 只处理 generation-gated events。后续重构必须保留确定性测试，防止重新把 blocking I/O、packed-line parsing 或 session cleanup 移回 GPUI 前台。
+审查过程中另一个基于较早行号/旧 checkout 的异步审查报告认为这些循环仍在 GPUI foreground。该结论与本文件所引用的当前源代码不一致，不能作为当前实现的直接事实；但它指出的架构目标仍应保留：分析 worker 应继续下沉为 `ryusei-host` 的 UI-independent seam，foreground 只处理 generation-gated events。后续重构必须保留确定性测试，防止重新把 blocking I/O、packed-line parsing 或 session cleanup 移回 GPUI 前台。
 
 ### 3.2 stdout/stderr 双管道都有持续读取
 
@@ -121,11 +121,11 @@
 
 ### 3.3 当前分析节点有明确绑定
 
-`AnalysisRunController` 保存 generation、node id 和 player；`player_for_node` 会阻止明显的跨节点结果写入，见 `crates/sabaki-host/src/analysis_controller.rs:64-186`。
+`AnalysisRunController` 保存 generation、node id 和 player；`player_for_node` 会阻止明显的跨节点结果写入，见 `crates/ryusei-host/src/analysis_controller.rs:64-186`。
 
 ### 3.4 全盘复盘使用 active lineage，并已存在真实 progression
 
-当前 checkout 中，全盘复盘不是按 `moves.len()` 或颜色奇偶推断，而是通过节点父链取得 root→current 的真实活动分支；sibling variation 会被排除。`BatchReviewState` 保存 `original_node_id`、冻结的节点列表和 `next_index`；`analysis_finished` 在前一轮 worker 结束并归还/处置 session 后推进到下一 NodeId，最后恢复原节点。相关实现位于 `crates/sabaki-host/src/whole_game_review.rs` 和 `apps/sabaki-gpui/src/main.rs:1844-2037`。
+当前 checkout 中，全盘复盘不是按 `moves.len()` 或颜色奇偶推断，而是通过节点父链取得 root→current 的真实活动分支；sibling variation 会被排除。`BatchReviewState` 保存 `original_node_id`、冻结的节点列表和 `next_index`；`analysis_finished` 在前一轮 worker 结束并归还/处置 session 后推进到下一 NodeId，最后恢复原节点。相关实现位于 `crates/ryusei-host/src/whole_game_review.rs` 和 `apps/ryusei-gpui/src/main.rs:1844-2037`。
 
 审查过程中另一个基于旧源码行号的报告认为 whole-game review 只初始化进度、没有逐手 progression。该结论描述的是修改前实现，与当前 checkout 不一致，不能作为当前缺陷记录。该报告提出的风险仍有效并已纳入 Findings/测试缺口：ticket-bound NodeId、lease 归还后再推进、用户导航/编辑取消策略、空局、失败恢复、并发任务竞争和 fake-engine 端到端测试。
 
@@ -138,15 +138,15 @@
 - JSON proxy 兼容格式
 - ownership 数组
 
-见 `crates/sabaki-host/src/analysis.rs:33-185`。
+见 `crates/ryusei-host/src/analysis.rs:33-185`。
 
 ### 3.6 模型下载具备基本原子替换语义
 
-模型先写到临时文件，检查非空后再替换 live 文件；失败或空文件不会覆盖既有模型，见 `crates/sabaki-host/src/katago_setup.rs:185-245`。
+模型先写到临时文件，检查非空后再替换 live 文件；失败或空文件不会覆盖既有模型，见 `crates/ryusei-host/src/katago_setup.rs:185-245`。
 
 ### 3.7 当前本机真实 KataGo 核心 smoke 已有证据
 
-`crates/sabaki-host/tests/katago_regression.rs` 覆盖真实引擎的：
+`crates/ryusei-host/tests/katago_regression.rs` 覆盖真实引擎的：
 
 - handshake
 - boardsize/clear_board
@@ -167,7 +167,7 @@
 
 ### P0-1：官方 KataGo 二进制 archive URL 已失效
 
-**位置：** `crates/sabaki-host/src/katago_setup.rs:69-83`
+**位置：** `crates/ryusei-host/src/katago_setup.rs:69-83`
 
 `HardwareBackend::download_archive_name()` 返回：
 
@@ -217,7 +217,7 @@ katago-v1.17.1-linux-x64-eigen.zip
 
 ### P1-1：fallback `AnalysisStream` 不读取 replay/setup response
 
-**位置：** `crates/sabaki-host/src/analysis.rs:211-229`；调用点 `apps/sabaki-gpui/src/main.rs:1584-1603`
+**位置：** `crates/ryusei-host/src/analysis.rs:211-229`；调用点 `apps/ryusei-gpui/src/main.rs:1584-1603`
 
 `replay_position_stream` 逐行发送：
 
@@ -247,7 +247,7 @@ kata-analyze ...
 
 ### P1-2：bounded `analyze` 完成路径缺少 stale generation 守卫
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1214-1262`
+**位置：** `apps/ryusei-gpui/src/main.rs:1214-1262`
 
 bounded `analyze` worker 取得 command lease 后在后台运行。完成回调直接：
 
@@ -276,10 +276,10 @@ bounded `analyze` worker 取得 command lease 后在后台运行。完成回调�
 
 **位置：**
 
-- `apps/sabaki-gpui/src/main.rs:843-874`
-- `apps/sabaki-gpui/src/main.rs:1017-1019`
-- `apps/sabaki-gpui/src/main.rs:1126-1133`
-- `apps/sabaki-gpui/src/main.rs:2084-2114`
+- `apps/ryusei-gpui/src/main.rs:843-874`
+- `apps/ryusei-gpui/src/main.rs:1017-1019`
+- `apps/ryusei-gpui/src/main.rs:1126-1133`
+- `apps/ryusei-gpui/src/main.rs:2084-2114`
 
 Analysis、White、Black、Console 共用同一个 `engine_generation`。任意角色连接/断开都会递增该值，所有异步 command/connect worker 都以此值判断 stale。
 
@@ -299,7 +299,7 @@ EngineRole -> RoleGeneration
 
 ### P1-4：超时策略对 KataGo 搜索命令过于粗糙
 
-**位置：** `crates/domain-core/src/gtp.rs:110-115, 208-292`；测试 `crates/sabaki-host/tests/katago_regression.rs:332-336`
+**位置：** `crates/domain-core/src/gtp.rs:110-115, 208-292`；测试 `crates/ryusei-host/tests/katago_regression.rs:332-336`
 
 所有 bounded command 使用统一 `DEFAULT_COMMAND_TIMEOUT = 30s`。但 KataGo 的 `genmove` 或冷启动可能受模型加载、Metal/CUDA 初始化、CPU 负载和 visits 设置影响。
 
@@ -320,7 +320,7 @@ EngineRole -> RoleGeneration
 
 ### P1-5：分析 stream setup 失败的错误语义不完整
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1584-1617`
+**位置：** `apps/ryusei-gpui/src/main.rs:1584-1617`
 
 fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-analyze` 串成一个 `and_then` 链，但 setup command response 未被完整读取/校验，失败的诊断只可能来自写入错误或进程退出。
 
@@ -350,7 +350,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P1-7：全盘复盘错误路径可能继续推进并报告完成
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1352-1367, 1483-1546, 1607-1617, 1705-1737, 1844-1893`
+**位置：** `apps/ryusei-gpui/src/main.rs:1352-1367, 1483-1546, 1607-1617, 1705-1737, 1844-1893`
 
 当前复盘推进集中在 `analysis_finished`。准备失败和 stdout EOF 的 worker 路径最终可能进入普通完成清理；如果没有明确的 `Completed / Cancelled / Failed` worker outcome，batch 状态机无法可靠区分“用户停止”“无输出失败”和“有效完成”。
 
@@ -360,7 +360,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P1-8：fallback 分析进程可能按节点反复冷启动
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1554-1605, 1729-1737, 1854-1877`
+**位置：** `apps/ryusei-gpui/src/main.rs:1554-1605, 1729-1737, 1854-1877`
 
 当 attached session 不支持 streaming 时，普通流程每次 `start_analysis` 都创建独立 `AnalysisStream`。全盘复盘的每个节点完成后会销毁该进程，再为下一节点重新启动。
 
@@ -370,7 +370,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P1-9：全盘复盘缺少根局面基线
 
-**位置：** `crates/sabaki-host/src/whole_game_review.rs` 的 active lineage 规划；`apps/sabaki-gpui/src/main.rs:1953-2010`
+**位置：** `crates/ryusei-host/src/whole_game_review.rs` 的 active lineage 规划；`apps/ryusei-gpui/src/main.rs:1953-2010`
 
 当前计划只包含带 `B/W` 的落子节点，从第一手落子后的局面开始分析，没有根局面/落子前基线。
 
@@ -380,7 +380,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P1-10：全盘复盘缺少真实 3+ 节点端到端锁定测试
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1844-1893, 1953-2037`
+**位置：** `apps/ryusei-gpui/src/main.rs:1844-1893, 1953-2037`
 
 现有 `BatchReviewState`/lineage 单测验证规划和索引，但尚未验证 fake engine 下的完整顺序：分析、stop/drain、归还 lease、按 NodeId 导航、下一轮、取消、恢复 original node 和 stale late result。
 
@@ -392,7 +392,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P2-1：leased role 的 detach 没有持久化“必须丢弃”意图
 
-**位置：** `crates/sabaki-host/src/engine_controller.rs:116-135, 187-212, 254-280`
+**位置：** `crates/ryusei-host/src/engine_controller.rs:116-135, 187-212, 254-280`
 
 `detach(role)` 对 leased role 只返回 `true`，并不从 `leased_roles` 清除，也不记录 detach intent；实现依赖 UI worker 观察 `AnalysisRunController` 后自行 discard。
 
@@ -402,7 +402,7 @@ fresh stream preparation 把 `start_in`、replay、`kata-set-param` 和 `kata-an
 
 ### P2-2：`EngineController` 中 role state 由多个集合平行表示
 
-**位置：** `crates/sabaki-host/src/engine_controller.rs:20-36`
+**位置：** `crates/ryusei-host/src/engine_controller.rs:20-36`
 
 ` sessions`、`leased_roles`、`command_roles` 三个集合表达同一 role 的互斥状态。虽然当前方法有测试，但平行集合容易在异常/取消路径中出现组合状态不一致。
 
@@ -420,7 +420,7 @@ Stopping
 
 ### P2-3：模型下载没有 checksum/可信 digest 校验
 
-**位置：** `crates/sabaki-host/src/katago_setup.rs:185-236`
+**位置：** `crates/ryusei-host/src/katago_setup.rs:185-236`
 
 当前只检查下载文件非空，然后原子替换。`docs/release-remediation-plan.md:217-220` 已明确记录官方固定 checksum 尚待补齐。
 
@@ -430,7 +430,7 @@ Stopping
 
 ### P2-4：环境发现会选择 models 目录中的第一个模型
 
-**位置：** `crates/sabaki-host/src/katago_setup.rs:343-369`
+**位置：** `crates/ryusei-host/src/katago_setup.rs:343-369`
 
 没有 custom path 时，`read_dir` 遍历后遇到第一个 `.bin.gz`/`.bin`/`.onnx` 就作为当前模型。目录中同时存在轻量、均衡、最强模型时，选择顺序依赖文件系统返回顺序，不一定符合用户选择的 tier。
 
@@ -440,7 +440,7 @@ Stopping
 
 ### P2-5：配置文件只在不存在时生成
 
-**位置：** `crates/sabaki-host/src/katago_setup.rs:322-325`
+**位置：** `crates/ryusei-host/src/katago_setup.rs:322-325`
 
 已有 `default_gtp.cfg` 不会根据当前版本或后端重新生成，也没有 schema/version marker。
 
@@ -450,11 +450,11 @@ Stopping
 
 ### P2-6：流式分析每个批次都会走 SGF 持久化路径
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1744-1812`
+**位置：** `apps/ryusei-gpui/src/main.rs:1744-1812`
 
 `push_analysis_batch` 调用 `set_analysis`，`set_analysis` 又调用 `persist_analysis_snapshot`。因此每次约 120ms 的合并批次都尝试把最强候选写入 `SBKV`/`SBKS`。
 
-同时 `parse_lz_analysis_line` 默认把 `is_during_search` 设为 `false`，见 `crates/sabaki-host/src/analysis.rs:41-50`；官方 KataGo GTP `info move` 记录没有 JSON `isDuringSearch` 字段来补充这一状态。
+同时 `parse_lz_analysis_line` 默认把 `is_during_search` 设为 `false`，见 `crates/ryusei-host/src/analysis.rs:41-50`；官方 KataGo GTP `info move` 记录没有 JSON `isDuringSearch` 字段来补充这一状态。
 
 **影响：**
 
@@ -467,7 +467,7 @@ Stopping
 
 ### P2-7：分析 command 解析仍是 whitespace split
 
-**位置：** `apps/sabaki-gpui/src/engine_console.rs:404-424`
+**位置：** `apps/ryusei-gpui/src/engine_console.rs:404-424`
 
 `analysis_command_from_settings` 用 `split_whitespace()` 解析 `engines.analyze_commands`。普通引擎参数 parser 支持引号，但分析命令 parser 不支持包含空格的 quoted argument。
 
@@ -477,7 +477,7 @@ Stopping
 
 ### P2-8：分析 result 的 best candidate 选择没有统一完成/合法性策略
 
-**位置：** `apps/sabaki-gpui/src/engine_console.rs:364-382`、`main.rs:1768-1774`
+**位置：** `apps/ryusei-gpui/src/engine_console.rs:364-382`、`main.rs:1768-1774`
 
 best winrate 取最大 visits；持久化也取最大 visits 的非 `is_during_search` entry，但不同 parser 对 `winrate`、player perspective、pass/resign、缺字段的默认值不同。
 
@@ -485,7 +485,7 @@ best winrate 取最大 visits；持久化也取最大 visits 的非 `is_during_s
 
 ### P2-9：全盘复盘主流程已有，但真实长循环缺少锁定测试
 
-**位置：** `apps/sabaki-gpui/src/main.rs:1953-2037`、`1844-1893`
+**位置：** `apps/ryusei-gpui/src/main.rs:1953-2037`、`1844-1893`
 
 当前实现正确地保存原节点、按 active lineage 推进、支持自动导航和取消恢复；但现有测试主要是 `BatchReviewState` 小状态测试和 lineage 测试。
 
@@ -507,7 +507,7 @@ best winrate 取最大 visits；持久化也取最大 visits 的非 `is_during_s
 
 **位置：** `scripts/bundle-macos.sh:13-63`
 
-macOS bundle 脚本只复制 `saba-rs` 可执行文件和 plist，没有 KataGo binary、model、config 或明确安装引导。`docs/release-remediation-plan.md:217-219` 也将可执行文件发现和引擎资产目录列为未完成项。
+macOS bundle 脚本只复制 `ryusei` 可执行文件和 plist，没有 KataGo binary、model、config 或明确安装引导。`docs/release-remediation-plan.md:217-219` 也将可执行文件发现和引擎资产目录列为未完成项。
 
 **影响：** 用户从 `.dmg` 安装后仍可能看到“正在连接 KataGo”，但机器没有可执行文件或模型；自动配置链又存在 P0-1 URL 问题。
 
@@ -515,7 +515,7 @@ macOS bundle 脚本只复制 `saba-rs` 可执行文件和 plist，没有 KataGo 
 
 ### P2-11：自动 engine role 选择会回退到任意第一个引擎
 
-**位置：** `apps/sabaki-gpui/src/main.rs:931-942`
+**位置：** `apps/ryusei-gpui/src/main.rs:931-942`
 
 当没有明确 Analysis role 时，候选先找名字/path 含 KataGo 的记录，否则回退到 `engine_store.list().first()`。
 
@@ -590,15 +590,15 @@ active lineage、节点绑定、自动推进、取消和恢复原节点均已实
 在当前工作树上执行过：
 
 ```bash
-cargo test -p sabaki-host -q
-cargo test -p sabaki-gpui --no-run -q
-cargo test -p sabaki-host --test katago_regression -- --nocapture
+cargo test -p ryusei-host -q
+cargo test -p ryusei-gpui --no-run -q
+cargo test -p ryusei-host --test katago_regression -- --nocapture
 git diff --check
 ```
 
 观察结果：
 
-- `sabaki-host` 单元测试通过（当前记录为 138 tests passed）；
+- `ryusei-host` 单元测试通过（当前记录为 138 tests passed）；
 - GPUI 测试目标可编译；
 - 真实 KataGo regression 在一次运行中 3 项通过；
 - 另一轮运行的完整 session smoke 在 `genmove` 处超过 30 秒 timeout；
@@ -640,7 +640,7 @@ git diff --check
 4. 为 lease 增加 token 和 detach/discard intent。
 5. 加入 setup command response reader/validator。
 6. 用 generation/node/request 绑定的 `PendingAnalysisRequest` 替代 `start_analysis_when_connected: bool`。
-7. 在 `sabaki-host` 提取统一 worker seam，例如 `run_analysis(request, source, ticket, emit) -> AnalysisWorkerExit`；attached/fresh 仅作为 source adapter，GPUI foreground 只应用 generation-gated event 和最终 session disposition。
+7. 在 `ryusei-host` 提取统一 worker seam，例如 `run_analysis(request, source, ticket, emit) -> AnalysisWorkerExit`；attached/fresh 仅作为 source adapter，GPUI foreground 只应用 generation-gated event 和最终 session disposition。
 
 ### 阶段 B：修复分析语义与持久化
 
@@ -709,7 +709,7 @@ Release readiness:        不建议以“完整稳定 KataGo 集成”发布
 
 ### P1：插件 archive 直接解压到 live 目录，缺少路径与链接安全检查
 
-**位置：** `crates/sabaki-host/src/plugin_workflow.rs:217-259`
+**位置：** `crates/ryusei-host/src/plugin_workflow.rs:217-259`
 
 `install_plugin_from_zip_file` 创建 live destination 后，在 Unix 调用外部 `unzip -o`，Windows 调用 `tar -xf`，直接把不可信 archive 解压进去。当前没有显式执行：
 

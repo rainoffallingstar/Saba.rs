@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Ryusei
+Comment=Modern Go board and SGF editor
+Exec=ryusei %F
+Icon=dev.ryusei.app
+Terminal=false
+Type=Application
+Categories=Game;BoardGame;
+MimeType=application/x-go-sgf;application/x-cyberoro-ngf;application/x-tygem-gib;application/x-pandanet-ugf;
+StartupWMClass=ryusei

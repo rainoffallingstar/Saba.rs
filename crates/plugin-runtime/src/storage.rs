@@ -240,7 +240,7 @@ mod tests {
 
     fn fresh_root(test_name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "sabaki-plugin-storage-{test_name}-{}",
+            "ryusei-plugin-storage-{test_name}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);

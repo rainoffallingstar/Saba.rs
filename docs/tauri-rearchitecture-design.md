@@ -16,11 +16,11 @@ Electron 版本在原生 GPUI 版本达到公开 Beta 质量以前仍是行为�
 
 1. 使用 Rust + GPUI 替换 Electron 主进程、preload
    bridge、Node 运行时依赖以及 WebView/Preact 渲染层；最终客户端是纯 Rust 原生应用。
-2. 先抽出 UI 无关的 `sabaki-host` 应用核心，再在其上构建 GPUI
+2. 先抽出 UI 无关的 `ryusei-host` 应用核心，再在其上构建 GPUI
    adapter；Tauri/Preact 仅作为过渡 adapter、UI 行为参考和回退切片，直到 GPUI 达到 Beta 质量。
 3. 将棋谱、棋局规则、文件格式、引擎、设置和插件生命周期移入可测试的 Rust 服务。
 4. 默认最小权限：UI 层不获得文件系统、进程、网络或任意原生 API；能力边界由
-   `sabaki-host` typed ports 定义，而不是 WebView 安全限制。
+   `ryusei-host` typed ports 定义，而不是 WebView 安全限制。
 5. 兼容 SGF、NGF、GIB、UGF 文件，以及现有 `settings.json`
    与引擎设置；`styles.css` 采用版本化 theme-token + asset
    manifest 的迁移策略，不承诺运行时/二进制兼容。
@@ -106,7 +106,7 @@ flowchart TB
 
 要点：
 
-- GPUI 客户端与 Preact/Tauri 过渡 adapter 是同一 `sabaki-host` 的两个 consumer；
+- GPUI 客户端与 Preact/Tauri 过渡 adapter 是同一 `ryusei-host` 的两个 consumer；
 - host 通过 typed ports（如 `GameFileAccess`、`HostEventSink`，后续扩展
   `Persistence`、`DialogService`、`ResourceAccess`、`WindowService`）与 adapter 对接；
 - 过渡期 Tauri command/event 只存在于 adapter 外层，最终随 Tauri 退役移除。
@@ -133,7 +133,7 @@ UI 层（无论 GPUI 还是 WebView）**不得**直接访问：
 
 ### 3.2 UI 无关的 Rust host
 
-`sabaki-host` 是唯一拥有本机能力的应用核心，负责：
+`ryusei-host` 是唯一拥有本机能力的应用核心，负责：
 
 - 受控文件读写、对话框、剪贴板、外链和配置目录（通过 adapter ports 完成）；
 - 游戏文档、设置、主题、引擎和插件状态；
@@ -235,14 +235,14 @@ GameTransaction
 
 ## 5. UI 无关的 host 服务与 adapter
 
-`sabaki-host` 是最终服务层，`src-tauri` 只保留过渡 adapter。
+`ryusei-host` 是最终服务层，`src-tauri` 只保留过渡 adapter。
 
 | 服务               | 职责                                                       | 最终归属                    |
 | ------------------ | ---------------------------------------------------------- | --------------------------- |
-| `HostApplication`  | 文档管理、事务、undo/redo、快照、open/save/reload/recovery | `sabaki-host`               |
-| `GameFileAccess`   | 文件读写、编码处理、原子保存（port）                       | `sabaki-host`               |
-| `HostPersistence`  | 自动保存、最近文件（port）                                 | `sabaki-host`               |
-| `HostEventSink`    | 状态变化事件（port）                                       | `sabaki-host`               |
+| `HostApplication`  | 文档管理、事务、undo/redo、快照、open/save/reload/recovery | `ryusei-host`               |
+| `GameFileAccess`   | 文件读写、编码处理、原子保存（port）                       | `ryusei-host`               |
+| `HostPersistence`  | 自动保存、最近文件（port）                                 | `ryusei-host`               |
+| `HostEventSink`    | 状态变化事件（port）                                       | `ryusei-host`               |
 | `file_service`     | Tauri adapter：对话框、编码、原子写入                      | 过渡期保留，迁入 host codec |
 | `settings_service` | 默认值、迁移、持久化、theme-token 设置变更事件             | 过渡期保留                  |
 | `theme_service`    | 新主题发现、验证、安装、卸载和资源路径控制                 | 过渡期保留                  |
@@ -256,7 +256,7 @@ GameTransaction
 
 ### 6.1 过渡期 Tauri commands
 
-Tauri command 是过渡 adapter 的稳定用户意图入口，最终被 GPUI 对 `sabaki-host`
+Tauri command 是过渡 adapter 的稳定用户意图入口，最终被 GPUI 对 `ryusei-host`
 的直接调用替代：
 
 ```text
@@ -301,7 +301,7 @@ PluginCommands
 
 ### 6.2 host typed API（最终）
 
-最终 GPUI 客户端直接调用 `sabaki-host`
+最终 GPUI 客户端直接调用 `ryusei-host`
 的 typed 方法与 ports，不再经过 command/DTO transport。host 状态变化通过
 `HostEventSink` 以 typed `HostEvent`（如
 `GameChanged { snapshot }`）下发，由 GPUI adapter 直接消费，或由 Tauri
@@ -360,7 +360,7 @@ PluginEvents
 - 插件面板使用 host 校验的声明式 contribution 渲染，不加载任意 Web UI；
 - 可访问性、原生 screenshot 交互测试、headless/GPU CI 全部重建。
 
-GPUI 视图只读取 `sabaki-host` 的快照/DTO 并调用 typed actions；不持有 source
+GPUI 视图只读取 `ryusei-host` 的快照/DTO 并调用 typed actions；不持有 source
 path、原始文件内容或可写 `GameDocument`。
 
 ## 8. 设置、theme-token 与主题
@@ -447,7 +447,7 @@ stateDiagram-v2
 
 ### 10.1 插件包和 manifest
 
-每个插件必须提供 `sabaki-plugin.json`：
+每个插件必须提供 `ryusei-plugin.json`：
 
 ```json
 {
@@ -546,7 +546,7 @@ sequenceDiagram
 | 层次             | 覆盖内容                                                                               |
 | ---------------- | -------------------------------------------------------------------------------------- |
 | Rust unit        | 规则、游戏树、SGF、legacy import、GTP parser、插件 manifest/RPC                        |
-| Rust integration | host services、sabaki-host ports、原子保存、设置迁移、主题验证、引擎进程、插件生命周期 |
+| Rust integration | host services、ryusei-host ports、原子保存、设置迁移、主题验证、引擎进程、插件生命周期 |
 | JS unit          | Tauri store、DTO mapper、组件 selector、命令错误显示（过渡期）                         |
 | native UI        | GPUI snapshot/screenshot 交互测试、可访问性、Goban hit-testing                         |
 | e2e              | 打开、编辑、保存、导航、设置、引擎、主题、插件与窗口关闭流程                           |
@@ -575,7 +575,7 @@ Tauri/Preact 在 GPUI 达到这些门槛前继续作为行为参考和回退切�
 | ---------- | ----------------------------------------------- | ----------------------------------------------------------------- |
 | 桌面宿主   | Rust + GPUI（最终）；Tauri 过渡 adapter         | 移除 WebView、Rust end-to-end、原生 GPU 渲染；保留迁移期回退切片  |
 | UI         | GPUI 原生重写（渐进、基于 host）                | WebView/CSS 资产多数不可复用；避免为 Web UI 长期维护两套渲染      |
-| 应用核心   | `sabaki-host` UI 无关 crate                     | 可测试、可复用、无 UI/宿主依赖，Tauri 与 GPUI 共用同一 host       |
+| 应用核心   | `ryusei-host` UI 无关 crate                     | 可测试、可复用、无 UI/宿主依赖，Tauri 与 GPUI 共用同一 host       |
 | 前端状态   | typed host API + typed events                   | UI 只消费 DTO 快照与 actions，不持有可变游戏树/文件能力           |
 | 领域核心   | Rust crate                                      | 可测试、可复用、无 UI/宿主依赖、适合确定性围棋规则和 codec        |
 | 主题       | 版本化 theme-token + asset manifest             | 不承诺 `styles.css` 运行时/二进制兼容；渲染层可安全应用 token     |

@@ -9,16 +9,16 @@
 
 **最近迭代（2026-08-21）：** 插件不可用根因修复（命令 ID 命名空间校验）、插件扫描容错、点目模式防卡死、ZIP 选择器过滤修复。
 依据用户最新实测反馈完成落地：
-1. **插件不可用根因修复（命令 ID 命名空间校验）**（`examples/plugins/*/sabaki-plugin.json` + `main.rs`）：
-   - 定位到 `katago-setup-hub` 与 `fox-kifu-sync` 插件的命令 ID 未以插件 ID 为命名空间前缀（如 `org.sabaki.katago.setup` 而非 `org.sabaki.katago-setup-hub.setup`），触发 `PluginManifest::validate` 的 `command identifiers must be namespaced by the plugin id` 校验失败，导致插件被整体拒绝加载；
+1. **插件不可用根因修复（命令 ID 命名空间校验）**（`examples/plugins/*/ryusei-plugin.json` + `main.rs`）：
+   - 定位到 `katago-setup-hub` 与 `fox-kifu-sync` 插件的命令 ID 未以插件 ID 为命名空间前缀（如 `org.ryusei.katago.setup` 而非 `org.ryusei.katago-setup-hub.setup`），触发 `PluginManifest::validate` 的 `command identifiers must be namespaced by the plugin id` 校验失败，导致插件被整体拒绝加载；
    - 已修正全部命令 ID 与面板按钮 ID 为正确的命名空间前缀，并同步更新 `on_plugin_command` 分发逻辑。
-2. **插件扫描容错（单插件损坏不再拖垮全部）**（`crates/sabaki-host/src/plugin_workflow.rs`）：
+2. **插件扫描容错（单插件损坏不再拖垮全部）**（`crates/ryusei-host/src/plugin_workflow.rs`）：
    - `scan_plugin_installations` 由「任一插件无效即整体失败」改为「跳过无效插件并继续扫描」，单个损坏插件不再导致整个插件库为空。
 3. **点目（Scoring）模式防卡死与一键退出**（`main.rs` + `panels.rs`）：
    - 在点目/估目模式下，底部状态栏高亮展示 `[ 🏁 退出点目 (返回落子) ]` 显式胶囊，点击或按 `Cmd-1` 立即退出点目并重置工具为落子工具，恢复正常下棋落子。
 4. **ZIP 文件选择对话框类型过滤修复**（`dialog_service.rs` + `main.rs`）：
    - `RfdDialogService` 新增专门的 `pick_open_zip_path`，配置 `Plugin Archive (*.zip)` 过滤器，允许在 macOS 访达中直接选中并导入 `.zip` 插件包。
-5. **棋盘落子即时响应修复**（`apps/sabaki-gpui/src/main.rs`）：
+5. **棋盘落子即时响应修复**（`apps/ryusei-gpui/src/main.rs`）：
    - 落子触发时机移至 `on_board_vertex_mouse_down`，鼠标按下瞬间立即完成逻辑落子、棋盘图元刷新与音效播发。
 6. **插件全量打包为离线 ZIP 归档**（`examples/plugins/*.zip`）：
    - 已生成标准独立的 `.zip` 安装包（`katago-setup-hub.zip`、`fox-kifu-sync.zip`、`position-checker.zip`、`sgf-exporter.zip`）。
@@ -57,11 +57,11 @@ Save As 在输入源切换下不再崩溃、实际打开/保存均正常；细�
 
 **全力优先发展 GPUI；永久暂停 Tauri 回退。**
 
-- `apps/sabaki-gpui` 已从 spike 升级为**正式 GPUI 主客户端**（原 `sabaki-gpui-spike`）。
+- `apps/ryusei-gpui` 已从 spike 升级为**正式 GPUI 主客户端**（原 `ryusei-gpui-spike`）。
 - `src-tauri`（Tauri/Preact）与 Electron/Node.js 实现**冻结为行为参考**：本地源码和
-  原 Git 历史保存在被主线忽略的 `refer-repo/`，不参与 Saba.rs 构建、CI 与发布。
+  原 Git 历史保存在被主线忽略的 `refer-repo/`，不参与 Ryusei 构建、CI 与发布。
 - Electron 版本在 GPUI 达到公开 Beta 质量前仍是行为参考与稳定发行版。
-- 所有 UI 无关逻辑收敛到 `crates/sabaki-host`，视图只通过 typed ports 与 DTO 通信；
+- 所有 UI 无关逻辑收敛到 `crates/ryusei-host`，视图只通过 typed ports 与 DTO 通信；
   GPUI 客户端与上游冻结的 Tauri adapter 共享同一套 host 边界。
 
 ## 2. Workspace 结构
@@ -69,17 +69,17 @@ Save As 在输入源切换下不再崩溃、实际打开/保存均正常；细�
 ```
 crates/domain-core      UI 无关领域核心：GameDocument / SGF / 棋盘快照 / GTP 解析 / 进程传输
 crates/plugin-runtime   插件类型、manifest 校验、权限模型、JSON-RPC 帧协议、native 进程
-crates/sabaki-host      UI 无关应用工作流（主战场）
-apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
+crates/ryusei-host      UI 无关应用工作流（主战场）
+apps/ryusei-gpui        GPUI 主客户端（唯一持续开发目标）
 ```
 
-依赖方向：`domain-core` ← `sabaki-host` ← `apps/sabaki-gpui`；`plugin-runtime` 被
-`sabaki-host` 与 GPUI 客户端消费。共享差分 fixture 位于
+依赖方向：`domain-core` ← `ryusei-host` ← `apps/ryusei-gpui`；`plugin-runtime` 被
+`ryusei-host` 与 GPUI 客户端消费。共享差分 fixture 位于
 `crates/domain-core/tests/fixtures/differential/`。
 
 ## 3. 当前架构状态
 
-### 3.1 `sabaki-host`：UI 无关工作流（全部带注入边界 + 单元测试）
+### 3.1 `ryusei-host`：UI 无关工作流（全部带注入边界 + 单元测试）
 
 | 模块 | 能力 | 注入边界 |
 |---|---|---|
@@ -98,7 +98,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 `curl` 副作用，是审查确认的 seam 回退，按 `release-remediation-plan.md` P2.3 修复。
 键表（`setting_kind`）、校验（`validate_setting_value`）和引擎列表校验仍以 host 为唯一权威。
 
-### 3.2 `apps/sabaki-gpui`：GPUI 主客户端
+### 3.2 `apps/ryusei-gpui`：GPUI 主客户端
 
 基于 GPUI 0.2.2（`macos-blade` 后端），已具备：
 
@@ -122,7 +122,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
   `on_window_should_close` 落盘。
 - **dirty 关闭确认**：关闭时经 host `decide_close_request` 决策，dirty 文档弹
   原生 Save/Discard/Cancel 确认；保存失败或取消则保持窗口打开。
-- **文件编码**：`NativeGameFileAccess` 复用 `sabaki_host::file_codec`，
+- **文件编码**：`NativeGameFileAccess` 复用 `ryusei_host::file_codec`，
   支持全部 `CA` 声明的编码（UTF-8/Shift_JIS/EUC-JP/GBK/Big5）与原子写入，
   无损性拒绝策略与冻结的 Tauri 参考一致。
 - **外部文件变更检测**：`NativeExternalFileReader`（解码内容指纹）+
@@ -135,7 +135,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
   `contributes.commands` 为可点击分发按钮与 `contributes.panels` 声明式
   面板（迭代 27 起读取真实 manifest，不再使用硬编码 demo）；
   每次变更 persist，重启恢复启用态；空安装根显示提示。
-- **真实配置目录**（`$HOME/.config/sabaki-gpui` 或 `SABAKI_CONFIG_DIR`）：
+- **真实配置目录**（`$HOME/.config/ryusei-gpui` 或 `SABAKI_CONFIG_DIR`）：
 
 | 数据 | 文件 | 实现 |
 |---|---|---|
@@ -155,7 +155,7 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 ## 4. 关键约定
 
 - **事务**：所有编辑经 `GameTransaction`（camelCase DTO），revision 保护。
-- **键表**：`sabaki_host::settings::setting_kind` 是唯一权威；`engines.list` 为对象数组
+- **键表**：`ryusei_host::settings::setting_kind` 是唯一权威；`engines.list` 为对象数组
   （`EngineRecord`），其余键按 Boolean/Number/String/NullableString/StringArray 校验。
 - **错误**：host 返回 `HostError`/`SettingValidationError` 等 typed error；
   上游 Tauri 侧映射为 `CommandErrorDto`（code/message/details），本仓库不包含该映射。
@@ -168,17 +168,17 @@ apps/sabaki-gpui        GPUI 主客户端（唯一持续开发目标）
 |---|---|
 | `domain-core` | 27 单元（含 9 计分器、标准/Tygem 让子摆位）+ 8 差分 fixture（含计分覆盖事务、流式进程 2 冒烟）+ 5 legacy fixture 导入集成 + 5 SGF proptest |
 | `plugin-runtime` | 26 测试：8 存储 + 5 监督进程（python3 冒烟）+ 11 wasm 沙箱（含 capability imports/事务提议）+ 2 帧/校验 + 2 声明式面板 manifest 校验 |
-| `sabaki-host` | 102 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析、干净新局根属性）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
-| `sabaki-gpui` | 115 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟（三栏 bounds、落子、Pass、分栏拖拽与持久化）、4 分栏纯函数、3 模式栏纯函数、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
+| `ryusei-host` | 102 单元（含 3 监督进程冒烟含真实 Go 插件 e2e、2 流式会话复用、5 wasm 工作流含事务提议、8 主题包、4 styles 迁移分析、干净新局根属性）+ 5 workflow 集成 + **2 真实子进程冒烟**（fake-gtp-engine.py）+ 9 分析解析/重放 + **2 legacy open 分发** |
+| `ryusei-gpui` | 115 测试（含 4 headless 逻辑冒烟、1 完整窗口渲染帧冒烟（三栏 bounds、落子、Pass、分栏拖拽与持久化）、4 分栏纯函数、3 模式栏纯函数、新局默认值、明暗 UiPalette、2 计分摘要;theme tokens 校验测试随类型上移 host）（含真实文件系统往返、外部文件检测、关闭决策、设置表单、引擎管理、插件全流程、流式分析合并/命令选择、大棋谱基准、棋盘渲染几何与 setup/计分事务） |
 
 构建/测试命令：
 
 ```bash
 cargo test --workspace        # 全部测试（当前 304 个全绿）
-cargo test -p sabaki-host     # host 工作流
-cargo test -p sabaki-gpui     # GPUI 客户端
-cargo run -p sabaki-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
-SABAKI_CONFIG_DIR=/tmp/sg cargo run -p sabaki-gpui   # 指定配置目录
+cargo test -p ryusei-host     # host 工作流
+cargo test -p ryusei-gpui     # GPUI 客户端
+cargo run -p ryusei-gpui      # 启动 GPUI 客户端（可传 SGF 路径参数）
+SABAKI_CONFIG_DIR=/tmp/sg cargo run -p ryusei-gpui   # 指定配置目录
 ```
 
 ## 6. 下一步计划（GPUI 优先路线）
@@ -234,7 +234,7 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 对 wasm 插件真实调用并显示结果（声明式面板在迭代 27 改为 manifest
 `contributes.panels` 真实渲染）。
 
-**迭代 13（主题包安装）已完成：** `sabaki-host::theme_workflow`（设计 §8.2）：
+**迭代 13（主题包安装）已完成：** `ryusei-host::theme_workflow`（设计 §8.2）：
 `ThemeManifest`（theme.json：schemaVersion/id/name/version/assets 允许列表）、
 `ThemeTokens` 从 gpui 上移至 host（schema 版本 + hex 颜色校验）、`InstalledTheme`
 加载（manifest+tokens+资源存在性与 10MiB 大小上限）、`scan_theme_root`（扫描
@@ -244,13 +244,13 @@ utf8/euc-kr.gib、amateur.ugf、gb2312.ngf）+ host `open` 分发测试；
 `.asar` 主题显示红色迁移提示；`crate::theme` 改为 host re-export 消除重复。
 
 **迭代 14（WASM capability imports）已完成：** `WasmCapabilities`（默认无
-import；授权时才定义 `sabaki.game_snapshot`，未授权 import 在 link 阶段即
+import；授权时才定义 `ryusei.game_snapshot`，未授权 import 在 link 阶段即
 失败，落实 §10.3「最小 capability import」）；host
 `wasm_capabilities_for`（按 granted `GameRead` 决定是否注入快照）与
 `invoke_wasm_command` 增加快照参数；GPUI 命令分发把当前 `GameSnapshot`
 序列化注入插件。WAT 测试：授权可调用并转发结果、未授权 link 失败。
 
-**迭代 15（Beta 门槛加固）已完成：** `sabaki-host::legacy_styles`
+**迭代 15（Beta 门槛加固）已完成：** `ryusei-host::legacy_styles`
 `analyze_legacy_styles`（设计 §8.1:不承诺 styles.css 运行时兼容,可表达为
 theme-token 的颜色规则列出、其余规则计为忽略;容错解析注释/缺分号/短 hex/
 rgb()）;GPUI 启动时对非空 user styles.css 生成迁移报告并显示在状态栏;
@@ -259,7 +259,7 @@ rgb()）;GPUI 启动时对非空 user styles.css 生成迁移报告并显示在�
 中期/里程碑建议)。
 
 **迭代 16（WASM 事务写入）已完成：** `WasmCapabilities.game_write`
-（授权 `GameWrite` 时暴露 `sabaki.game_submit_transaction` import,未授权
+（授权 `GameWrite` 时暴露 `ryusei.game_submit_transaction` import,未授权
 link 失败）;插件提交的事务 JSON 被**收集为 proposal**(不直接改游戏),
 invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 返回 `WasmInvocationResult { response, proposed_transactions }`;GPUI
@@ -276,7 +276,7 @@ invoke 后由宿主 `take_pending_transactions` 取出,`invoke_wasm_command`
 **迭代 25（headless 冒烟测试）已完成：** 用 gpui `test-support` 的
 `TestAppContext` 在无窗口/无 GPU 环境构造完整 `ShellApp` 实体,headless
 执行核心交互:开局/落子、计分模式覆盖、主题 token 应用、分析命令读取
-（4 测试,`apps/sabaki-gpui` dev-deps 增加 gpui test-support + rand）。
+（4 测试,`apps/ryusei-gpui` dev-deps 增加 gpui test-support + rand）。
 这是 Beta #10 的务实部分:渲染截图仍受 gpui 0.2.2 能力限制（见
 `docs/beta-gate.md`）,但应用逻辑层已纳入 headless CI。
 
@@ -325,7 +325,7 @@ New Game 与启动新局；host 新增 `create_new_with_properties`，在构造�
 
 
 **迭代 28（M0 三栏布局基座）已完成：**
-（1）新增 `apps/sabaki-gpui/src/layout.rs`：`SplitPane`、分栏拖拽尺寸
+（1）新增 `apps/ryusei-gpui/src/layout.rs`：`SplitPane`、分栏拖拽尺寸
 纯函数、min/max clamp、设置回退（`view.leftsidebar_width=250` /
 `view.sidebar_width=200`）、右栏显隐推导（`show_graph || show_comments`）。
 （2）`ShellApp` 新增 `left_sidebar_width` / `right_sidebar_width` 缓存与
@@ -360,12 +360,12 @@ Scoring/Estimator 显示操作提示与计分摘要。
 剩余 M1 第二半：线/箭头拖拽绘制、Find/Guess/Autoplay 模式与
 `view.move_numbers_type`（variation/hotspot）。
 
-**迭代 24（Flatpak 打包）已完成：** `flatpak/dev.sabars.app.yml`
+**迭代 24（Flatpak 打包）已完成：** `flatpak/dev.ryusei.app.yml`
 （Freedesktop Platform/Sdk 24.08 + rust-stable extension;finish-args 仅
 显示 socket/DRI/配置目录;构建沙箱经 `build-args: --share=network` 允许
 cargo 联网）;release.yml 新增 flatpak job（实测产出
-`saba-rs-linux-x86_64.flatpak`）,publish 等待其完成。期间修复:Flatpak
-应用 ID 段不能含连字符（`dev.sabars.app`）、Windows NSIS 安装改回
+`ryusei-linux-x86_64.flatpak`）,publish 等待其完成。期间修复:Flatpak
+应用 ID 段不能含连字符（`dev.ryusei.app`）、Windows NSIS 安装改回
 chocolatey + `--attempts=5` 重试（社区源 503 瞬时故障,sourceforge 直链
 在本环境返回 HTML）。发布流水线四平台产物齐备。
 **迭代 23（分析命令参数透传）已完成：** `analysis_command_from_settings`
@@ -400,7 +400,7 @@ shell）,`UnsupportedStreaming` 或未连接时回退独立 AnalysisStream 进�
 **迭代 18（发布流水线补全）已完成：** `scripts/bundle-linux-appimage.sh`
 （linuxdeploy 收集动态依赖 + appimagetool 产出 AppImage,FUSE-free CI）;
 `scripts/installer.nsi`（NSIS 安装器:开始菜单/桌面快捷方式、卸载器、注册
-表项;路径经 ROOT_DIR 宏解析,已实测 CI 产出 `saba-rs-setup-0.1.0.exe`）;
+表项;路径经 ROOT_DIR 宏解析,已实测 CI 产出 `ryusei-setup-0.1.0.exe`）;
 release.yml 增 Linux AppImage 步骤、Windows NSIS 步骤与 `publish` job
 （v* tag 时 softprops/action-gh-release 自动创建 Release 附加全部产物）。
 手动触发实测:三平台 job 全绿,产物齐全（macOS .app/dmg、Linux
@@ -431,7 +431,7 @@ tar.gz/AppImage、Windows zip/setup.exe）。
 - 原生插件监督与命令调用链已闭环（GPUI 命令按钮经 Supervisor RPC 调用
   真实 Go 示例插件,含崩溃自动重启一次）;WASM 与 native 两条插件路径均
   可执行。
-- WASM capability imports 已实现（gameRead→`sabaki.game_snapshot`，未授权
+- WASM capability imports 已实现（gameRead→`ryusei.game_snapshot`，未授权
   link 失败）；事务写入（gameWrite）等其余能力未接。
 - 插件 `contributes.panels` 已真实渲染；`contributes.settings` 尚未接入
   设置面板，`contributes.menus` 尚未接入应用菜单。

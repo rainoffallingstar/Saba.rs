@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "org.ryusei.position-checker",
+  "name": "Position Checker",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "runtime": "wasm",
+  "entrypoint": "position_checker.wasm",
+  "activationEvents": ["onCommand:org.ryusei.position-checker.check"],
+  "permissions": ["gameRead"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "org.ryusei.position-checker.check",
+        "title": "Check Current Position"
+      }
+    ]
+  }
+}

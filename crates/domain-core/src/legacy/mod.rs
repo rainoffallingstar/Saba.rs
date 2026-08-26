@@ -57,7 +57,7 @@ pub fn file_extension(path: &Path) -> Option<String> {
 }
 
 /// Tygem handicap placement points for a square board, mirroring
-/// `@sabaki/go-board`'s `getHandicapPlacement(count, {tygem: true})`.
+/// `@ryusei/go-board`'s `getHandicapPlacement(count, {tygem: true})`.
 /// Returns at most `count` points as `(column, row)`.
 pub fn tygem_handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)> {
     if size <= 6 || count < 2 {
@@ -88,7 +88,7 @@ pub fn tygem_handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)
 }
 
 /// Standard (non-Tygem) handicap placement for a square board, mirroring
-/// `@sabaki/go-board`'s `getHandicapPlacement(count)`.
+/// `@ryusei/go-board`'s `getHandicapPlacement(count)`.
 /// Returns at most `count` points as `(column, row)`.
 pub fn handicap_placement(size: usize, count: usize) -> Vec<(usize, usize)> {
     if size <= 6 || count < 2 {

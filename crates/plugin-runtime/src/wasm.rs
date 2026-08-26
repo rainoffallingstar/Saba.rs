@@ -111,7 +111,7 @@ pub struct WasmCapabilities {
 }
 
 impl WasmPluginInstance {
-    /// Instantiates with no host imports: a plugin declaring any `sabaki.*`
+    /// Instantiates with no host imports: a plugin declaring any `ryusei.*`
     /// import fails to link (design: WASM runtime defaults to no imports).
     pub fn instantiate(module: &WasmPluginModule) -> Result<Self, WasmError> {
         Self::instantiate_with_capabilities(module, &WasmCapabilities::default())
@@ -128,7 +128,7 @@ impl WasmPluginInstance {
         if let Some(snapshot) = capabilities.game_snapshot.clone() {
             linker
                 .func_wrap(
-                    "sabaki",
+                    "ryusei",
                     "game_snapshot",
                     move |mut caller: wasmi::Caller<'_, ()>,
                           _ptr: i32,
@@ -152,7 +152,7 @@ impl WasmPluginInstance {
             let proposals = Arc::clone(&pending_transactions);
             linker
                 .func_wrap(
-                    "sabaki",
+                    "ryusei",
                     "game_submit_transaction",
                     move |mut caller: wasmi::Caller<'_, ()>, ptr: i32, len: i32| {
                         let memory = caller
@@ -370,10 +370,10 @@ mod tests {
 
     #[test]
     fn granted_game_snapshot_capability_is_callable() {
-        // The plugin imports sabaki.game_snapshot and returns its length.
+        // The plugin imports ryusei.game_snapshot and returns its length.
         let bytes = wat::parse_str(
             r#"(module
-  (import "sabaki" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
+  (import "ryusei" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
     local.get $ptr
@@ -398,11 +398,11 @@ mod tests {
 
     #[test]
     fn ungranted_game_snapshot_capability_fails_to_link() {
-        // The plugin imports sabaki.game_snapshot but the host granted
+        // The plugin imports ryusei.game_snapshot but the host granted
         // nothing, so instantiation must fail (design: minimal imports).
         let bytes = wat::parse_str(
             r#"(module
-  (import "sabaki" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
+  (import "ryusei" "game_snapshot" (func $snapshot (param i32) (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
     local.get $ptr
@@ -429,7 +429,7 @@ mod tests {
         // returns its result length.
         let bytes = wat::parse_str(
             r#"(module
-  (import "sabaki" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
+  (import "ryusei" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
     local.get $ptr
@@ -465,7 +465,7 @@ mod tests {
     fn ungranted_game_write_fails_to_link() {
         let bytes = wat::parse_str(
             r#"(module
-  (import "sabaki" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
+  (import "ryusei" "game_submit_transaction" (func $submit (param i32) (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "invoke") (param $ptr i32) (param $len i32) (result i32)
     local.get $ptr

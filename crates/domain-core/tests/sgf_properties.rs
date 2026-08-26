@@ -8,11 +8,11 @@
 //!   board, for any game reachable through random legal moves.
 
 use proptest::prelude::*;
-use sabaki_domain_core::{Color, GameDocument, GameTransaction, GameTransactionType, Vertex};
+use ryusei_domain_core::{Color, GameDocument, GameTransaction, GameTransactionType, Vertex};
 
 fn legal_play(color: Color, vertex: Vertex) -> GameTransaction {
     GameTransaction {
-        schema_version: sabaki_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
+        schema_version: ryusei_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
         transaction_type: GameTransactionType::PlayMove,
         color: Some(color),
         vertex: Some(vertex),
@@ -27,7 +27,7 @@ fn legal_play(color: Color, vertex: Vertex) -> GameTransaction {
 
 fn pass(color: Color) -> GameTransaction {
     GameTransaction {
-        schema_version: sabaki_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
+        schema_version: ryusei_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
         transaction_type: GameTransactionType::Pass,
         color: Some(color),
         vertex: None,
