@@ -7,7 +7,6 @@ mod file_workflow;
 mod goban_view;
 mod layout;
 mod markup;
-mod mode_bar;
 mod native_text_input;
 mod navigation;
 mod node_inspector;
@@ -103,16 +102,12 @@ actions!(
         OpenAbout,
         ToggleGameGraph,
         ToggleComments,
-        ToggleWinrateGraph,
         ToggleCoordinates,
         ToggleMoveNumbers,
         SetPlayMode,
         SetEditMode,
         SetScoringMode,
         SetEstimatorMode,
-        SetFindMode,
-        SetGuessMode,
-        SetAutoplayMode,
         StartAnalysis,
         StopAnalysis,
         GenerateEngineMove,
@@ -4161,19 +4156,6 @@ impl ShellApp {
         }
     }
 
-    fn on_mode_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.mode == GameMode::Autoplay {
-            self.advance_autoplay(None, cx);
-        } else {
-            self.status = match self.mode {
-                GameMode::Find => "click an intersection to find its first occurrence".into(),
-                GameMode::Guess => "click the next move to test your guess".into(),
-                _ => self.status.clone(),
-            };
-            cx.notify();
-        }
-    }
-
     fn line_at(&mut self, vertex: Vertex, _cx: &mut Context<Self>) {
         let Some(start) = self.line_start.take() else {
             self.line_start = Some(vertex);
@@ -4349,16 +4331,6 @@ impl ShellApp {
         cx.notify();
     }
 
-    fn on_mode_selected(
-        &mut self,
-        mode: GameMode,
-        _: &MouseDownEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_mode(mode, cx);
-    }
-
     /// Toggles the scoring mode: while active, board clicks cycle scoring
     /// overrides instead of placing moves.
     #[allow(dead_code)]
@@ -4376,16 +4348,6 @@ impl ShellApp {
             },
             cx,
         );
-    }
-
-    fn on_tool_selected(&mut self, tool: MarkupTool, cx: &mut Context<Self>) {
-        self.active_tool = tool;
-        self.line_start = None;
-        if tool != MarkupTool::Play {
-            self.mode = GameMode::Edit;
-        }
-        self.status = format!("tool: {}", tool.label()).into();
-        cx.notify();
     }
 
     fn on_comment_focus(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
@@ -5541,7 +5503,6 @@ fn shell_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Game Graph", ToggleGameGraph),
                 MenuItem::action("Toggle Comments", ToggleComments),
-                MenuItem::action("Toggle Winrate Graph", ToggleWinrateGraph),
                 MenuItem::action("Toggle Coordinates", ToggleCoordinates),
                 MenuItem::action("Toggle Move Numbers", ToggleMoveNumbers),
             ],
@@ -5568,9 +5529,6 @@ fn shell_menus() -> Vec<Menu> {
                 MenuItem::action("Edit", SetEditMode),
                 MenuItem::action("Score", SetScoringMode),
                 MenuItem::action("Estimate", SetEstimatorMode),
-                MenuItem::action("Find", SetFindMode),
-                MenuItem::action("Guess", SetGuessMode),
-                MenuItem::action("Autoplay", SetAutoplayMode),
             ],
         },
         Menu {
@@ -5846,12 +5804,6 @@ fn main() {
                 shell.toggle_sidebar_setting("view.show_comments", "comments", cx)
             });
         });
-        let shell_toggle_winrate = shell.clone();
-        cx.on_action(move |_: &ToggleWinrateGraph, cx| {
-            shell_toggle_winrate.update(cx, |shell, cx| {
-                shell.toggle_sidebar_setting("view.show_winrategraph", "winrate graph", cx)
-            });
-        });
         let shell_toggle_coords = shell.clone();
         cx.on_action(move |_: &ToggleCoordinates, cx| {
             shell_toggle_coords.update(cx, |shell, cx| {
@@ -5879,18 +5831,6 @@ fn main() {
         let shell_estimator_mode = shell.clone();
         cx.on_action(move |_: &SetEstimatorMode, cx| {
             shell_estimator_mode.update(cx, |shell, cx| shell.set_mode(GameMode::Estimator, cx));
-        });
-        let shell_find_mode = shell.clone();
-        cx.on_action(move |_: &SetFindMode, cx| {
-            shell_find_mode.update(cx, |shell, cx| shell.set_mode(GameMode::Find, cx));
-        });
-        let shell_guess_mode = shell.clone();
-        cx.on_action(move |_: &SetGuessMode, cx| {
-            shell_guess_mode.update(cx, |shell, cx| shell.set_mode(GameMode::Guess, cx));
-        });
-        let shell_autoplay_mode = shell.clone();
-        cx.on_action(move |_: &SetAutoplayMode, cx| {
-            shell_autoplay_mode.update(cx, |shell, cx| shell.set_mode(GameMode::Autoplay, cx));
         });
         let shell_start_analysis = shell.clone();
         cx.on_action(move |_: &StartAnalysis, cx| {

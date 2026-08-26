@@ -1,14 +1,7 @@
-use std::rc::Rc;
-
-use gpui::{App, Div, ParentElement, Styled, Window, div};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Selectable, Sizable};
 use sabaki_domain_core::{
     CURRENT_TRANSACTION_SCHEMA_VERSION, GameTransaction, GameTransactionType, MarkerSnapshot,
     NodeId, Vertex,
 };
-
-use crate::theme::UiPalette;
 
 /// The markup tools exposed by the shell toolbar. `Play` falls through to the
 /// normal board interaction; the markup tools attach a marker to the clicked
@@ -28,20 +21,6 @@ pub enum MarkupTool {
     SetupWhite,
     SetupClear,
 }
-
-pub const MARKUP_TOOLS: &[MarkupTool] = &[
-    MarkupTool::Play,
-    MarkupTool::Circle,
-    MarkupTool::Square,
-    MarkupTool::Triangle,
-    MarkupTool::Cross,
-    MarkupTool::Label,
-    MarkupTool::Line,
-    MarkupTool::Arrow,
-    MarkupTool::SetupBlack,
-    MarkupTool::SetupWhite,
-    MarkupTool::SetupClear,
-];
 
 impl MarkupTool {
     pub fn label(self) -> &'static str {
@@ -259,51 +238,6 @@ pub fn markup_symbol(marker_type: &str, label: Option<&str>) -> String {
             .unwrap_or_else(|| "?".to_owned()),
         _ => "•".to_owned(),
     }
-}
-
-/// Renders the tool picker row. Clicking a tool invokes `on_tool_clicked` with
-/// that tool; the active tool is highlighted.
-pub fn render_markup_toolbar<F>(
-    active_tool: MarkupTool,
-    _palette: UiPalette,
-    on_tool_clicked: F,
-) -> Div
-where
-    F: Fn(&MarkupTool, &mut Window, &mut App) + 'static,
-{
-    let on_tool_clicked = Rc::new(on_tool_clicked);
-
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .children(MARKUP_TOOLS.iter().enumerate().map(|(idx, tool)| {
-            let handler = on_tool_clicked.clone();
-            let tool = *tool;
-            let is_active = tool == active_tool;
-            let icon_str = match tool {
-                MarkupTool::Play => "●",
-                MarkupTool::Circle => "◯",
-                MarkupTool::Square => "□",
-                MarkupTool::Triangle => "△",
-                MarkupTool::Cross => "✕",
-                MarkupTool::Label => "A",
-                MarkupTool::Line => "╱",
-                MarkupTool::Arrow => "→",
-                MarkupTool::SetupBlack => "B",
-                MarkupTool::SetupWhite => "W",
-                MarkupTool::SetupClear => "✖",
-            };
-            Button::new(("markup-tool", idx))
-                .small()
-                .ghost()
-                .selected(is_active)
-                .tooltip(tool.label())
-                .label(icon_str)
-                .on_click(move |_, window, cx| {
-                    handler(&tool, window, cx);
-                })
-        }))
 }
 
 /// Computes the scoring summary line for the status area: territory,
