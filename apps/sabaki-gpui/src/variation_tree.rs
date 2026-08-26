@@ -4,19 +4,22 @@ use gpui::{
     App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Stateful,
     Styled, Window, div, px, rgb,
 };
-use sabaki_domain_core::{GameSnapshot, NodeId};
+use sabaki_domain_core::{Color, GameSnapshot, NodeId, NodeSnapshot};
+use sabaki_host::MoveQuality;
 
 use crate::theme::UiPalette;
 
-/// Default GameGraph grid spacing when no persisted value exists.
-const HORIZONTAL_SPACING_PX: f32 = 26.0;
-const VERTICAL_SPACING_PX: f32 = 30.0;
-/// Total size of the rendered variation tree.
+/// KaTrain-style GameGraph grid spacing:
+/// Moves progress horizontally from Left to Right along the X-axis.
+/// Alternate variations diverge downwards along the Y-axis.
+pub const HORIZONTAL_SPACING_PX: f32 = 34.0;
+pub const VERTICAL_SPACING_PX: f32 = 30.0;
+
+/// Total base size of the rendered variation tree.
 pub const VARIATION_TREE_WIDTH_PX: f32 = 260.0;
 pub const VARIATION_TREE_HEIGHT_PX: f32 = 240.0;
 
-/// A single node positioned by the layout algorithm. Parent coordinates let
-/// the renderer draw connectors between a node and its parent.
+/// A single node positioned by the KaTrain horizontal layout algorithm.
 #[derive(Clone, Debug)]
 pub struct LayoutedNode {
     pub node_id: NodeId,
@@ -27,6 +30,9 @@ pub struct LayoutedNode {
     pub is_current_path: bool,
     pub kind: GameGraphNodeKind,
     pub color: GameGraphNodeColor,
+    pub move_number: usize,
+    pub stone_color: Option<Color>,
+    pub ai_quality: Option<MoveQuality>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,10 +65,7 @@ impl VariationTreeLayout {
     }
 }
 
-/// Computes the GameGraph matrix. Rows are move depth and the preferred child
-/// remains in its parent's column; alternate variations consume collision-free
-/// columns to the right. This mirrors Sabaki's matrix contract while keeping the
-/// result as ordinary pixel coordinates for GPUI.
+/// Identifies the sequence of nodes leading from root to the current active node.
 fn current_path(snapshot: &GameSnapshot) -> BTreeSet<NodeId> {
     let mut path = BTreeSet::new();
     let mut cursor = Some(snapshot.current_node_id.clone());
@@ -117,24 +120,105 @@ fn node_color(properties: &sabaki_domain_core::Properties) -> GameGraphNodeColor
     })
 }
 
+/// Calculates KaTrain AI move quality from explicit SGF marks or engine winrate/score drop.
+fn compute_node_quality(node: &NodeSnapshot, parent: Option<&NodeSnapshot>) -> Option<MoveQuality> {
+    let properties = &node.properties;
+
+    // 1. Explicit SGF move quality marks
+    if properties.contains_key("TE") {
+        return Some(MoveQuality::Best);
+    }
+    if properties.contains_key("IT") {
+        return Some(MoveQuality::Good);
+    }
+    if properties.contains_key("DO") {
+        return Some(MoveQuality::Mistake);
+    }
+    if properties.contains_key("BM") {
+        return Some(MoveQuality::Blunder);
+    }
+
+    // 2. Winrate & Score Lead evaluation (SBKV / SBKS) relative to previous state
+    let curr_wr = properties
+        .get("SBKV")
+        .and_then(|v| v.first())
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|s| (s / 100.0).clamp(0.0, 1.0));
+    let curr_score = properties
+        .get("SBKS")
+        .and_then(|v| v.first())
+        .and_then(|s| s.parse::<f64>().ok());
+
+    if let (Some(curr_wr), Some(parent_node)) = (curr_wr, parent) {
+        let prev_wr = parent_node
+            .properties
+            .get("SBKV")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|s| (s / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(0.50);
+        let prev_score = parent_node
+            .properties
+            .get("SBKS")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let is_black = properties.contains_key("B");
+        let (wr_drop, score_drop) = if is_black {
+            (
+                prev_wr - curr_wr,
+                prev_score - curr_score.unwrap_or(prev_score),
+            )
+        } else {
+            (
+                curr_wr - prev_wr,
+                curr_score.unwrap_or(prev_score) - prev_score,
+            )
+        };
+
+        return Some(MoveQuality::classify(score_drop, wr_drop));
+    }
+
+    None
+}
+
+/// Recursively lays out the game tree from left (depth) to right, with alternate
+/// branches placed on subsequent rows downwards.
 fn layout_subtree(
     snapshot: &GameSnapshot,
     path: &BTreeSet<NodeId>,
     node_id: &str,
-    column: usize,
     depth: usize,
+    row: usize,
     parent_position: Option<(f32, f32)>,
     nodes: &mut Vec<LayoutedNode>,
 ) -> usize {
-    let x = column as f32 * HORIZONTAL_SPACING_PX;
-    let y = depth as f32 * VERTICAL_SPACING_PX;
+    let x = depth as f32 * HORIZONTAL_SPACING_PX;
+    let y = row as f32 * VERTICAL_SPACING_PX;
     let is_current = snapshot.current_node_id == node_id;
-    let properties = snapshot
+    let node_obj = snapshot
         .nodes
         .iter()
         .find(|node| node.id == node_id)
-        .map(|node| &node.properties)
         .expect("layout nodes come from the snapshot");
+    let properties = &node_obj.properties;
+
+    let parent_node = node_obj
+        .parent_id
+        .as_deref()
+        .and_then(|pid| snapshot.nodes.iter().find(|n| n.id == pid));
+
+    let stone_color = if properties.contains_key("B") {
+        Some(Color::Black)
+    } else if properties.contains_key("W") {
+        Some(Color::White)
+    } else {
+        None
+    };
+
+    let ai_quality = compute_node_quality(node_obj, parent_node);
+
     nodes.push(LayoutedNode {
         node_id: node_id.to_owned(),
         x,
@@ -144,6 +228,9 @@ fn layout_subtree(
         is_current_path: path.contains(node_id),
         kind: node_kind(properties),
         color: node_color(properties),
+        move_number: depth,
+        stone_color,
+        ai_quality,
     });
 
     let preferred = preferred_child(snapshot, node_id);
@@ -153,28 +240,27 @@ fn layout_subtree(
         children.insert(0, preferred.clone());
     }
 
-    // The first/preferred branch inherits this column. Its occupied columns are
-    // reserved before alternate subtrees get their own starts.
-    let mut next_column = column + 1;
+    // The preferred branch continues horizontally on the same row.
+    // Subsequent variation branches consume free rows below.
+    let mut next_row = row + 1;
     for (index, child) in children.iter().enumerate() {
-        let child_column = if index == 0 { column } else { next_column };
+        let child_row = if index == 0 { row } else { next_row };
         let consumed_to = layout_subtree(
             snapshot,
             path,
             child,
-            child_column,
             depth + 1,
+            child_row,
             Some((x, y)),
             nodes,
         );
-        next_column = next_column.max(consumed_to);
+        next_row = next_row.max(consumed_to);
     }
 
-    next_column
+    next_row
 }
 
-/// Builds the tree layout for a snapshot. The layout is a pure function of the
-/// snapshot so it can be unit-tested without a view.
+/// Builds the KaTrain-style horizontal variation tree layout for a game snapshot.
 pub fn build_variation_tree_layout(snapshot: &GameSnapshot) -> VariationTreeLayout {
     let mut nodes = Vec::new();
     let path = current_path(snapshot);
@@ -206,33 +292,54 @@ fn preferred_child(snapshot: &GameSnapshot, node_id: &str) -> Option<NodeId> {
     children_of(snapshot, node_id).into_iter().next()
 }
 
-fn connector(from: (f32, f32), to: (f32, f32), color: u32) -> Div {
-    let horizontal = (from.1 - to.1).abs() < 0.001;
-    if horizontal {
-        div()
-            .absolute()
-            .left(px(from.0.min(to.0)))
-            .top(px(from.1 - 0.5))
-            .w(px((to.0 - from.0).abs()))
-            .h(px(1.0))
-            .bg(rgb(color))
+/// Draws KaTrain-style step connectors between parent and child nodes flowing left-to-right.
+fn connector(from: (f32, f32), to: (f32, f32), color: u32) -> Vec<Div> {
+    let is_horizontal = (from.1 - to.1).abs() < 0.001;
+    if is_horizontal {
+        vec![
+            div()
+                .absolute()
+                .left(px(from.0.min(to.0)))
+                .top(px(from.1 - 0.75))
+                .w(px((to.0 - from.0).abs()))
+                .h(px(1.5))
+                .bg(rgb(color)),
+        ]
     } else {
-        div()
-            .absolute()
-            .left(px(from.0 - 0.5))
-            .top(px(from.1.min(to.1)))
-            .w(px(1.0))
-            .h(px((to.1 - from.1).abs()))
-            .bg(rgb(color))
+        // Step branch connector: horizontal out -> vertical drop -> horizontal in
+        let branch_x = from.0 + (to.0 - from.0).max(12.0) * 0.45;
+        vec![
+            div()
+                .absolute()
+                .left(px(from.0))
+                .top(px(from.1 - 0.75))
+                .w(px(branch_x - from.0))
+                .h(px(1.5))
+                .bg(rgb(color)),
+            div()
+                .absolute()
+                .left(px(branch_x - 0.75))
+                .top(px(from.1.min(to.1)))
+                .w(px(1.5))
+                .h(px((to.1 - from.1).abs()))
+                .bg(rgb(color)),
+            div()
+                .absolute()
+                .left(px(branch_x))
+                .top(px(to.1 - 0.75))
+                .w(px(to.0 - branch_x))
+                .h(px(1.5))
+                .bg(rgb(color)),
+        ]
     }
 }
 
-/// Renders the variation tree as a flat node graph. Clicking a node invokes
-/// `on_node_clicked` with that node's id.
+/// Renders the KaTrain-style horizontal variation tree graph.
+/// Each node shows its move number (手数) and KaTrain AI move quality colored border/ring.
 pub fn render_variation_tree<F, G>(
     layout: &VariationTreeLayout,
     grid_size: f32,
-    node_size: f32,
+    _node_size: f32,
     palette: UiPalette,
     on_node_clicked: F,
     on_node_context_requested: G,
@@ -241,57 +348,81 @@ where
     F: Fn(&NodeId, &mut Window, &mut App) + 'static,
     G: Fn(&NodeId, &mut Window, &mut App) + 'static,
 {
-    let line_color = palette.accent;
-    let grid_size = grid_size.max(12.0);
-    let node_size = node_size.max(3.0);
-    let scale_x = grid_size / HORIZONTAL_SPACING_PX;
-    let scale_y = grid_size / VERTICAL_SPACING_PX;
+    let line_color = 0x3f3f46; // Dark slate connector line
+    let active_line_color = palette.accent;
+    let grid_size = grid_size.max(14.0);
+    let scale_x = (grid_size / HORIZONTAL_SPACING_PX).clamp(0.8, 1.4);
+    let scale_y = (grid_size / VERTICAL_SPACING_PX).clamp(0.8, 1.4);
     let on_node_clicked = Rc::new(on_node_clicked);
     let on_node_context_requested = Rc::new(on_node_context_requested);
 
     let mut children: Vec<Stateful<Div>> = Vec::new();
+    let padding = 20.0_f32;
 
-    let padding = 16.0_f32;
+    // Render tree branch connectors
     for (edge_index, node) in layout.nodes.iter().enumerate() {
         if let Some((parent_x, parent_y)) = node.parent_position {
-            children.push(
-                connector(
-                    (parent_x * scale_x + padding, parent_y * scale_y + padding),
-                    (node.x * scale_x + padding, node.y * scale_y + padding),
-                    line_color,
-                )
-                .id(("game-graph-edge", edge_index)),
+            let color = if node.is_current_path {
+                active_line_color
+            } else {
+                line_color
+            };
+            let segments = connector(
+                (parent_x * scale_x + padding, parent_y * scale_y + padding),
+                (node.x * scale_x + padding, node.y * scale_y + padding),
+                color,
             );
+            for (seg_idx, segment) in segments.into_iter().enumerate() {
+                children.push(segment.id(("game-graph-edge", edge_index * 10 + seg_idx)));
+            }
         }
     }
 
+    // Render KaTrain circular nodes with move numbers & AI evaluation quality colors
     for (node_index, node) in layout.nodes.iter().enumerate() {
         let handler = on_node_clicked.clone();
         let context_handler = on_node_context_requested.clone();
         let node_id = node.node_id.clone();
         let context_node_id = node.node_id.clone();
-        let color = if node.is_current {
-            0x0284c7 // KaTrain active node cyan
+
+        // Determine AI evaluation quality color (KaTrain color coding)
+        let ai_quality_color = if let Some(quality) = node.ai_quality {
+            quality.color_u32()
         } else {
             match node.color {
-                GameGraphNodeColor::Neutral => palette.text,
-                GameGraphNodeColor::Comment => palette.subtle,
-                GameGraphNodeColor::BadMove => 0xef4444, // KaTrain Blunder Red
-                GameGraphNodeColor::DoubtfulMove => 0xf97316, // KaTrain Inaccuracy/Mistake Orange
-                GameGraphNodeColor::InterestingMove => 0x0ea5e9, // KaTrain Good/Interesting Teal
-                GameGraphNodeColor::GoodMove => 0x10b981, // KaTrain Best Move Green
+                GameGraphNodeColor::Neutral => 0x52525b,
+                GameGraphNodeColor::Comment => 0x71717a,
+                GameGraphNodeColor::BadMove => 0xef4444, // Blunder (Red)
+                GameGraphNodeColor::DoubtfulMove => 0xf43f5e, // Mistake (Rose)
+                GameGraphNodeColor::InterestingMove => 0x0ea5e9, // Good (Blue)
+                GameGraphNodeColor::GoodMove => 0x10b981, // Best (Green)
             }
         };
-        let (shape_scale, label) = match node.kind {
-            GameGraphNodeKind::Circle => (1.0, ""),
-            GameGraphNodeKind::Square => (1.0, "P"),
-            GameGraphNodeKind::Diamond => (1.0, "+"),
-            GameGraphNodeKind::Bookmark => (1.2, "★"),
+
+        // Determine stone body & text color
+        let (bg_color, text_color) = match node.stone_color {
+            Some(Color::Black) => (0x18181b, 0xf4f4f5),
+            Some(Color::White) => (0xf4f4f5, 0x18181b),
+            None => (0x27272a, 0xa1a1aa), // Root or non-move node
         };
-        let visual_node_size = (node_size * shape_scale * 2.0).clamp(10.0, 18.0);
-        let hitbox_size = grid_size.max(22.0);
+
+        let move_label = match node.kind {
+            GameGraphNodeKind::Bookmark => "★".to_owned(),
+            GameGraphNodeKind::Square => "P".to_owned(),
+            _ => {
+                if node.move_number == 0 {
+                    "0".to_owned()
+                } else {
+                    node.move_number.to_string()
+                }
+            }
+        };
+
+        let visual_node_size = if node.is_current { 22.0 } else { 19.0 };
+        let hitbox_size = (HORIZONTAL_SPACING_PX * scale_x).max(24.0);
         let x = node.x * scale_x + padding;
         let y = node.y * scale_y + padding;
+
         children.push(
             div()
                 .id(("game-graph-node", node_index))
@@ -304,28 +435,26 @@ where
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(|style| style.rounded_full().bg(rgb(palette.button)))
+                .hover(|style| style.rounded_full().bg(rgb(0x27272a)))
                 .child(
                     div()
                         .size(px(visual_node_size))
                         .rounded_full()
                         .border_2()
                         .border_color(rgb(if node.is_current {
-                            0xffffff
-                        } else if node.is_current_path {
-                            palette.accent
+                            0x38bdf8 // Active glowing cyan ring
                         } else {
-                            palette.border
+                            ai_quality_color // KaTrain move quality border
                         }))
-                        .bg(rgb(color))
+                        .bg(rgb(bg_color))
                         .shadow_sm()
                         .flex()
                         .items_center()
                         .justify_center()
                         .text_xs()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(0xffffff))
-                        .child(label),
+                        .text_color(rgb(text_color))
+                        .child(move_label),
                 )
                 .on_mouse_down(
                     MouseButton::Left,
@@ -354,6 +483,7 @@ where
         .map(|node| node.y)
         .fold(0.0_f32, f32::max)
         * scale_y;
+
     div()
         .relative()
         .w(px(
@@ -375,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn linear_game_layouts_nodes_along_the_preferred_chain() {
+    fn linear_game_layouts_nodes_horizontally_along_x_axis() {
         let snapshot = snapshot_of("(;SZ[5];B[aa];W[bb];B[cc])");
         let layout = build_variation_tree_layout(&snapshot);
 
@@ -389,30 +519,42 @@ mod tests {
             if node.node_id != "root" {
                 assert_eq!(
                     node.parent_position,
-                    Some((node.x, node.y - super::VERTICAL_SPACING_PX)),
-                    "linear children stay in their column and advance one row"
+                    Some((node.x - super::HORIZONTAL_SPACING_PX, node.y)),
+                    "linear children stay in their row and advance horizontally along x-axis"
                 );
             }
         }
 
         assert!(layout.node("node-3").unwrap().is_current);
+        assert_eq!(layout.node("node-1").unwrap().move_number, 1);
+        assert_eq!(layout.node("node-2").unwrap().move_number, 2);
+        assert_eq!(layout.node("node-3").unwrap().move_number, 3);
     }
 
     #[test]
-    fn branching_game_places_siblings_in_collision_free_columns() {
+    fn branching_game_places_siblings_in_collision_free_rows() {
         let snapshot = snapshot_of("(;SZ[5];B[aa](;W[bb])(;W[cc]))");
         let layout = build_variation_tree_layout(&snapshot);
 
         let node_2 = layout.node("node-2").unwrap();
         let node_3 = layout.node("node-3").unwrap();
 
-        assert_eq!(node_2.y, node_3.y, "siblings share the same depth row");
-        assert!(
-            node_3.x > node_2.x,
-            "alternate variation gets a right column"
+        assert_eq!(
+            node_2.x, node_3.x,
+            "siblings share the same depth along x-axis"
         );
-        assert_eq!(node_2.parent_position, Some((0.0, 30.0)));
-        assert_eq!(node_3.parent_position, Some((0.0, 30.0)));
+        assert!(
+            node_3.y > node_2.y,
+            "alternate variation gets a lower row along y-axis"
+        );
+        assert_eq!(
+            node_2.parent_position,
+            Some((super::HORIZONTAL_SPACING_PX, 0.0))
+        );
+        assert_eq!(
+            node_3.parent_position,
+            Some((super::HORIZONTAL_SPACING_PX, 0.0))
+        );
     }
 
     #[test]
@@ -424,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_metadata_marks_path_node_shape_and_annotation_color() {
+    fn graph_metadata_marks_path_node_move_number_and_ai_quality() {
         let snapshot = snapshot_of("(;SZ[5];B[]HO[1]TE[1](;W[bb]C[note])(;W[cc]BM[1]))");
         let layout = build_variation_tree_layout(&snapshot);
         let current = layout.node("node-2").unwrap();
@@ -439,15 +581,16 @@ mod tests {
         let bookmark = layout.node("node-1").unwrap();
         assert_eq!(bookmark.kind, super::GameGraphNodeKind::Bookmark);
         assert_eq!(bookmark.color, super::GameGraphNodeColor::GoodMove);
+        assert_eq!(bookmark.ai_quality, Some(sabaki_host::MoveQuality::Best));
     }
 
     #[test]
-    fn layout_subtree_returns_the_next_free_column() {
+    fn layout_subtree_returns_the_next_free_row() {
         let snapshot = snapshot_of("(;SZ[5];B[aa](;W[bb];B[cc])(;W[dd];B[ee]))");
         let mut nodes = Vec::new();
         let path = current_path(&snapshot);
-        let next_column = layout_subtree(&snapshot, &path, "root", 0, 0, None, &mut nodes);
-        assert!(next_column >= 2, "both branch columns are reserved");
+        let next_row = layout_subtree(&snapshot, &path, "root", 0, 0, None, &mut nodes);
+        assert!(next_row >= 2, "both branch rows are reserved");
         let occupied = nodes
             .iter()
             .map(|node| {
