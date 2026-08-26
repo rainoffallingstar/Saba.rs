@@ -4543,10 +4543,14 @@ impl ShellApp {
                 _ => {}
             }
         }
-        input.handle_key(
-            event.keystroke.key.as_str(),
-            event.keystroke.key_char.as_deref(),
-        )
+        // Printable characters are inserted exactly once by the native platform
+        // text input bridge (Window::dispatch_input -> replace_text_in_range),
+        // which is registered by NativeInputBinding. Inserting them here as well
+        // duplicates every keystroke (e.g. typing "f" produces "ff").
+        if event.keystroke.key_char.is_some() {
+            return InputKeyResult::Ignored;
+        }
+        input.handle_key(event.keystroke.key.as_str(), None)
     }
 
     #[allow(dead_code)]
