@@ -8,7 +8,7 @@
 
 Electron 版本在 GPUI 达到公开 Beta 质量前仍是行为参考、稳定发行版和回退路径。
 
-**架构决策（2026-08）：** 全力优先发展 GPUI；**永久暂停 Tauri 回退**。`apps/sabaki-gpui`
+**架构决策（2026-08）：** 全力优先发展 GPUI；**永久暂停 Tauri 回退**。`apps/ryusei-gpui`
 已从 spike 升级为正式 GPUI 主客户端，Tauri/Preact 层冻结为行为参考（不再新增开发），仅保留用于对照参考行为。GPUI 是唯一迁移主线。
 
 状态标记：✅ 已完成，◐ 部分完成，⬜ 未开始。
@@ -17,16 +17,16 @@ Electron 版本在 GPUI 达到公开 Beta 质量前仍是行为参考、稳定�
 
 当前迁移切片已具备以下可验证基础：
 
-- Rust workspace、`sabaki-domain-core`（版本化
+- Rust workspace、`ryusei-domain-core`（版本化
   `GameDocument`、完整 SGF 变化树、未知属性保留、棋盘快照、setup
   stones、标记、简单劫争、undo/redo 与 revision），以及 UI 无关的
-  `crates/sabaki-host`（typed ports： `GameFileAccess` /
+  `crates/ryusei-host`（typed ports： `GameFileAccess` /
   `HostEventSink`，`HostApplication`
   拥有open/save/save-at/事务/undo/redo/恢复/丢弃来源位置；无 Tauri/GPUI 依赖）；
 - 版本化 camelCase DTO 和命名事务。除 `applyScoringOverride`
   外，当前 schema 中的游戏树事务均已实现；
 - Tauri adapter 已接入 host：`NativeSgfFileAccess` 实现
-  `sabaki_host::GameFileAccess`，`TauriHostEventSink` 把
+  `ryusei_host::GameFileAccess`，`TauriHostEventSink` 把
   `HostEvent::GameChanged` 映射为 `game-state-changed`，`ApplicationState`
   已切换为
   `Mutex<HostApplication>`，新建/打开/保存/落子/事务/撤销重做/恢复/外部clean 重载均经 host 方法路由；
@@ -146,17 +146,17 @@ store 的 revision 保护/命令串行化，及 Goban、导航、变化树、节
 **剩余工作：**
 
 1. 过渡 Preact 层不再扩展为完整产品 UI；只保留行为参考所需的打开/保存/导航/编辑能力。
-2. **host 抽取（已完成）：** `sabaki-host`
+2. **host 抽取（已完成）：** `ryusei-host`
    已拥有游戏文档与新/开/存/事务/撤销/重做/恢复/丢弃来源位置，且autosave/recovery、recent-files、外部文件跟踪状态机与关闭决策、
    `HostPersistence` / `ExternalFileReader` ports 均已迁入 host；`HostEvent`
    已扩展为
    `GameChanged`、`AutosaveChanged`、`ExternalFileStatusChanged`；服务级 workflow 组合断言已加入
-   `crates/sabaki-host/tests/workflow.rs`。
-3. **GPUI spike（已完成）：** `apps/sabaki-gpui`
+   `crates/ryusei-host/tests/workflow.rs`。
+3. **GPUI spike（已完成）：** `apps/ryusei-gpui`
    已验证 Goban 渲染/hit-testing/overlay、theme-token 应用、声明式插件 contribution 与快照吞吐基准；结论与遗留风险见后续迭代顺序。
 4. **GPUI shell（已完成）：** app
    shell、窗口、菜单、快捷键、启动文件与文件对话框 adapter 均已在
-   `apps/sabaki-gpui` 落地，见后续迭代顺序。
+   `apps/ryusei-gpui` 落地，见后续迭代顺序。
 5. **GPUI 功能迁移：**
    按依赖顺序把 Goban、导航、变化树、节点检查器、标记、文件工作流、设置、引擎控制台、分析图和插件面板迁移到 GPUI；每完成一个组件簇即删除对应 Preact/Tauri 代码路径，避免维护平行的业务逻辑。
    - **导航组件簇（已完成）：** 新增 `navigation.rs`（纯函数导航目标计算：
@@ -189,7 +189,7 @@ store 的 revision 保护/命令串行化，及 Goban、导航、变化树、节
      分支节点的 promote/remove 按钮）。6 个单元测试覆盖
      元数据提取/标题回退/空注释删除/注释设置/变化操作映射/节点缺失占位。
    - **文件工作流组件簇（已完成）：** 新增 `file_workflow.rs`
-     （`MemoryHostPersistence` 实现 `sabaki_host::HostPersistence`，
+     （`MemoryHostPersistence` 实现 `ryusei_host::HostPersistence`，
      `record_opened_file` / `capture_autosave` / `clear_autosave`
      封装 host 的 recent-files 与 crash-recovery 工作流，持久化失败时
      host 辅助回滚内存 store）；shell 接入：打开/另存为后记录 recent-files、
@@ -213,15 +213,15 @@ store 的 revision 保护/命令串行化，及 Goban、导航、变化树、节
      握手/占位追踪/着法生成/坐标往返/日志条目。
    - **插件面板组件簇（已完成）：** 新增 `plugin_panel.rs`
      （`entry_from_manifest` / `entry_from_record` 从
-     `sabaki-plugin-runtime` 的 `PluginManifest`/`PluginRecord` 提取插件
+     `ryusei-plugin-runtime` 的 `PluginManifest`/`PluginRecord` 提取插件
      名称/版本/启用态/权限/命令/菜单贡献，`parse_manifest` 复用 host
-     的 `manifest.validate()`）；spike 依赖 `sabaki-plugin-runtime`，
+     的 `manifest.validate()`）；spike 依赖 `ryusei-plugin-runtime`，
      shell 右侧渲染已安装插件列表 + 声明式 closed-set 面板贡献。
      3 个单元测试覆盖 manifest 摘要/记录（启用态+授权权限）/非法 manifest
      拒绝。至此 **GPUI 功能迁移 8 个组件簇全部完成**。
 
 **完成条件：** GPUI 可完成打开、浏览、编辑、保存和首选项管理；视图只通过
-`sabaki-host` typed API 与 DTO 通信；过渡 Preact/Tauri UI 只作为回退存在。
+`ryusei-host` typed API 与 DTO 通信；过渡 Preact/Tauri UI 只作为回退存在。
 
 ## 阶段 5：完整 GTP 引擎服务 ⬜
 
@@ -331,17 +331,17 @@ runtime、完整设置/主题管理。这些能力依赖文件/领域边界稳�
 ### 后续迭代顺序
 
 1. **迭代 H：宿主状态迁移与 typed events 扩展 ✅。**
-   autosave/recovery、最近文件、外部文件跟踪状态机与关闭决策迁入 `sabaki-host`
+   autosave/recovery、最近文件、外部文件跟踪状态机与关闭决策迁入 `ryusei-host`
    的 `autosave` / `recent_files` / `external_file` / `persistence` /
    `close_flow` 模块；`HostEvent` 扩展为
    `GameChanged`、`AutosaveChanged`、`ExternalFileStatusChanged`；Tauri
    adapter 只保留原生文件读写与 host events 映射；新增
-   `crates/sabaki-host/tests/workflow.rs` 服务级组合断言（崩溃恢复 → Save
+   `crates/ryusei-host/tests/workflow.rs` 服务级组合断言（崩溃恢复 → Save
    As、clean 外部重载、dirty 冲突 → keep local → Save
    As、关闭决策 gate、recent-files 经 port 记录）。
 2. **迭代 Gpui-Spike：GPUI 风险退坡验证 ✅。** 已创建
-   `apps/sabaki-gpui`（workspace member，依赖 `gpui 0.2.2` +
-   `sabaki-host` + `sabaki-domain-core`）。验证结论：
+   `apps/ryusei-gpui`（workspace member，依赖 `gpui 0.2.2` +
+   `ryusei-host` + `ryusei-domain-core`）。验证结论：
    - **构建可行性：** gpui 0.2.2 在 crates.io 可用；在 macOS arm64 仅有 Command
      Line Tools（无完整 Xcode / `xcrun metal`）的环境下，通过 `macos-blade`
      feature 使用 blade/WGSL 后端可编译、可启动窗口；仅需完整 Xcode 的 CI 上可启用默认 Metal 后端。
@@ -359,9 +359,9 @@ runtime、完整设置/主题管理。这些能力依赖文件/领域边界稳�
      仍无正式语义版本；跨平台（Windows/Linux）渲染与 headless/GPU
      CI 未验证；无障碍、原生 screenshot 测试仍待搭建。
 3. **迭代 Gpui-Shell：GPUI app shell ✅。** 已升级
-   `apps/sabaki-gpui` 为正式 GPUI 应用外壳：
+   `apps/ryusei-gpui` 为正式 GPUI 应用外壳：
    - **窗口与外壳：** `ShellApp` 取代 spike 演示 app，接入
-     `sabaki_host::HostApplication` 完整工作流（新建/打开/保存/另存为/落子/撤销/重做），
+     `ryusei_host::HostApplication` 完整工作流（新建/打开/保存/另存为/落子/撤销/重做），
      并显示状态栏（status、dirty 状态、来源路径、benchmark）。
    - **菜单栏：** 通过 `gpui::actions!` + `cx.set_menus` 定义
      `Sabaki` / `File` / `Edit` 三组菜单，动作直接路由到 shell view 的 host
@@ -375,7 +375,7 @@ runtime、完整设置/主题管理。这些能力依赖文件/领域边界稳�
      无原生文件对话框，新增 `DialogService` typed port
      （`pick_open_path` / `pick_save_path`）与确定性
      `MockDialogService`；`NativeGameFileAccess` 通过 std::fs 实现
-     `sabaki_host::GameFileAccess`（UTF-8，完整 `CA` 编码策略复用 Tauri
+     `ryusei_host::GameFileAccess`（UTF-8，完整 `CA` 编码策略复用 Tauri
      adapter）。未来平台原生对话框以同一 port 实现，host 工作流不变。
    - **验证：** 17 个单元测试通过（含对话框 port 行为、原生文件访问
      round-trip、拒绝非 UTF-8 写回）；本机启动带启动文件的 shell 无 panic，

@@ -419,6 +419,10 @@ struct MacWindowState {
     /// AppKit changes window style and view frames while exiting fullscreen.
     /// Blade resource reconfiguration is unsafe in that transition.
     fullscreen_exit_in_progress: bool,
+    /// Set once the window starts closing. AppKit may keep animating a
+    /// fullscreen-exit and resizing the view after `close` is issued; Blade's
+    /// `reconfigure_surface` must not run against a dying Metal surface.
+    closing: bool,
     move_tab_to_new_window_callback: Option<Box<dyn FnMut()>>,
     merge_all_windows_callback: Option<Box<dyn FnMut()>>,
     select_next_tab_callback: Option<Box<dyn FnMut()>>,
@@ -723,6 +727,7 @@ impl MacWindow {
                 first_mouse: false,
                 fullscreen_restore_bounds: Bounds::default(),
                 fullscreen_exit_in_progress: false,
+                closing: false,
                 move_tab_to_new_window_callback: None,
                 merge_all_windows_callback: None,
                 select_next_tab_callback: None,
@@ -936,6 +941,7 @@ impl MacWindow {
 impl Drop for MacWindow {
     fn drop(&mut self) {
         let mut this = self.0.lock();
+        this.closing = true;
         this.renderer.destroy();
         let window = this.native_window;
         this.display_link.take();
@@ -2073,6 +2079,7 @@ extern "C" fn close_window(this: &Object, _: Sel) {
         let close_callback = {
             let window_state = get_window_state(this);
             let mut lock = window_state.as_ref().lock();
+            lock.closing = true;
             lock.close_callback.take()
         };
 
@@ -2104,7 +2111,7 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel) {
         ];
     }
 
-    if !lock.fullscreen_exit_in_progress {
+    if !lock.fullscreen_exit_in_progress && !lock.closing {
         lock.renderer.update_drawable_size(drawable_size);
     }
 
@@ -2137,7 +2144,7 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
 
     let scale_factor = lock.scale_factor();
     let drawable_size = new_size.to_device_pixels(scale_factor);
-    if !lock.fullscreen_exit_in_progress {
+    if !lock.fullscreen_exit_in_progress && !lock.closing {
         lock.renderer.update_drawable_size(drawable_size);
     }
 

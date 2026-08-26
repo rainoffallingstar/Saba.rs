@@ -3,7 +3,7 @@
 > 最后审查：2026-08-12。
 >
 > **最新状态（2026-08-14）：** 本文为历史迁移记录。Tauri 已**永久冻结为行为参考**，
-> `apps/sabaki-gpui` 已从 spike 升级为正式 GPUI 主客户端并成为唯一开发主线。
+> `apps/ryusei-gpui` 已从 spike 升级为正式 GPUI 主客户端并成为唯一开发主线。
 > 最新架构快照见 [`handoff.md`](handoff.md)。此后 Tauri 侧不再新增开发；
 > host 侧新能力（设置键表、引擎工作流与会话、插件注册表、全部持久化边界）均由
 > GPUI 客户端消费。
@@ -16,9 +16,9 @@
 > Electron 版本仍是正式发行版、行为参考和迁移期间的回退路径。当前 Tauri 实现是一个可构建、可测试的迁移切片，而不是功能完整的替代品。
 >
 > **迁移主线说明：** 最终原生客户端主线已确定为 **Rust +
-> GPUI**（`apps/sabaki-gpui`，原 spike 已升级为正式客户端）。Tauri/Preact
+> GPUI**（`apps/ryusei-gpui`，原 spike 已升级为正式客户端）。Tauri/Preact
 > 只保留为过渡 adapter、UI 行为参考和回退切片，不再是最终客户端架构；从
-> `sabaki-host` 到两端 UI 的所有连接都以 typed ports 为边界，GPUI 与 Tauri
+> `ryusei-host` 到两端 UI 的所有连接都以 typed ports 为边界，GPUI 与 Tauri
 > adapter 复用同一套 ports。参见
 > [`tauri-rearchitecture-design.md`](tauri-rearchitecture-design.md)
 > 的最新架构章节与 [`handoff.md`](handoff.md)。
@@ -115,11 +115,11 @@ stone 工具、箭头/线条工具、计分、偏好设置、主题管理、引�
 尚未提供 WASM runtime、capability
 imports、声明式贡献渲染、插件私有存储、完整的原生进程监督或可供第三方依赖的 SDK。
 
-### 2.5 UI 无关的 `sabaki-host` 抽取（GPUI 主线）
+### 2.5 UI 无关的 `ryusei-host` 抽取（GPUI 主线）
 
 已新增
-`crates/sabaki-host`，作为 UI 无关的应用工作流 crate，不依赖 Tauri、GPUI、浏览器或窗口 API。它复用
-`sabaki-domain-core`，并定义 host 拥有的 typed ports 与 typed events：
+`crates/ryusei-host`，作为 UI 无关的应用工作流 crate，不依赖 Tauri、GPUI、浏览器或窗口 API。它复用
+`ryusei-domain-core`，并定义 host 拥有的 typed ports 与 typed events：
 
 - `GameFileAccess`：`read_game_file` / `write_game_file`，携带 `DecodedGameFile`
   与 `SourceEncoding`（UTF-8 / Shift_JIS / EUC-JP / GBK / Big5）；
@@ -138,7 +138,7 @@ imports、声明式贡献渲染、插件私有存储、完整的原生进程监�
 
 **迭代 H 已完成（宿主状态迁移与 typed events 扩展 + 服务级 workflow 测试）：**
 
-- `sabaki-host` 新增
+- `ryusei-host` 新增
   `autosave`、`recent_files`、`external_file`、`persistence`、 `close_flow`
   五个 UI 无关模块；autosave
   recovery、recent-files 注册表、外部文件 SHA-256 内容指纹/变更决策的状态机，以及窗口关闭决策全部迁入 host；
@@ -153,14 +153,14 @@ imports、声明式贡献渲染、插件私有存储、完整的原生进程监�
 - `TauriHostEventSink` 把三个 host event 映射为既有的 `game-state-changed`、
   `autosave-changed`、`external-file-status-changed` Tauri events；
 - 旧 `SgfFileAccess::write_sgf` seam 已移除（写入统一经
-  `sabaki_host::GameFileAccess`）；
-- 新增 `crates/sabaki-host/tests/workflow.rs` 服务级组合断言：崩溃恢复 → Save
+  `ryusei_host::GameFileAccess`）；
+- 新增 `crates/ryusei-host/tests/workflow.rs` 服务级组合断言：崩溃恢复 → Save
   As（不覆盖原文件）、clean 外部变更自动重载并重建 baseline、dirty 外部冲突 →
   keep local → Save
   As、恢复/autosave 状态经关闭决策 gate 后仍保留、recent-files 经 persistence
   port 记录与解析。
 
-`sabaki-host`
+`ryusei-host`
 的确定性内存端口测试覆盖：打开→编辑→保存→重开、读/解析失败不替换当前文档、无保存路径的常规保存拒绝、丢弃来源位置、恢复文档标记、SGF 序列化 round-trip、host落子、autosave 持久化/清除/失败回滚、recent-files去重/缺失报告/上限、外部文件变更检测/clean 自动重载/dirty 冲突/解绑，以及上述服务级 workflow 组合。
 
 ## 3. 验证状态

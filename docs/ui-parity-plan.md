@@ -142,7 +142,7 @@ next/sibling ghost stones；迭代 30 已完成以下第二半项目。**
 
 **验收：**
 - fake-gtp-engine 的既有真实进程 smoke 可用于手工检查 attach、角色、日志与命令。
-- `cargo test -p sabaki-gpui` 覆盖角色分配、三栏/左栏 bounds 及纵向分栏持久化。
+- `cargo test -p ryusei-gpui` 覆盖角色分配、三栏/左栏 bounds 及纵向分栏持久化。
 - 与真实 KataGo/GNU Go 的手工验证仍需用户配置引擎和模型。
 
 ### M3：右栏胜率图 + 完整游戏树图 + 注释框（迭代 32-33，已完成）

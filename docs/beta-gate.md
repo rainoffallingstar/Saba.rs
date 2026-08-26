@@ -11,7 +11,7 @@
 | 4 | `styles.css` 与 theme-token 兼容范围有明确声明与报告 | 🟢 | 设计 §8.1 声明不承诺 CSS 运行时/二进制兼容;`analyze_legacy_styles` 在启动时生成迁移报告(可迁移颜色规则数 + 忽略规则数),GPUI 状态栏展示 |
 | 5 | 常用 GTP 引擎可对弈和分析 | 🟢 | `EngineSession`(能力探测/命令/分析/停止)、`AnalysisStream` 实时流式、`ProcessGtpTransport`;真实子进程冒烟测试(fake-gtp-engine.py);实物引擎手工验证待用户配置 |
 | 5a | 声音反馈不影响棋局确定性 | 🟢 | `SoundSink` 是 GPUI-local port；仅成功 `play_move` 后发 StonePlaced/Pass，`sound.enable` 可禁用。macOS 使用 detached `/usr/bin/afplay` 系统声音；其他平台/CI 为 Noop。捕子/终局 cue 等待 host 语义事件。 |
-| 6 | GPUI 客户端不依赖 WebView/Node/Electron 特权 | 🟢 | 纯 Rust + GPUI(blade);无 WebView、无 Node、无 Electron;`sabaki-host` UI 无关 |
+| 6 | GPUI 客户端不依赖 WebView/Node/Electron 特权 | 🟢 | 纯 Rust + GPUI(blade);无 WebView、无 Node、无 Electron;`ryusei-host` UI 无关 |
 | 7 | WASM 与原生插件边界可验证 | 🟢 | WASM 沙箱(无 host import 默认、fuel/内存/payload 限制、capability import 按授权注入、未授权 link 失败);原生进程监督(超时/崩溃/重启上限/自动禁用);插件 UI 仅 host 校验的声明式贡献 |
 | 8 | 正式支持平台可构建、安装、升级和回滚 | 🟡 | 根仓库已有三平台 CI 与 release workflow，历史上成功生成 macOS `.app/.dmg`、Linux tarball/AppImage、Windows zip/NSIS 和 Flatpak；但当前未提交候选版本尚未跑该矩阵，签名/公证、干净机器安装、升级和回滚仍待验证。 |
 | 9 | 基准结果无未解释的严重回归 | 🟢 | 大棋谱基准测试(120 手 2000ms、300 手对局)在 CI 中运行;与 Electron 的实测对比待定 |

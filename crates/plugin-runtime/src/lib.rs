@@ -242,7 +242,7 @@ pub enum PluginError {
 
 impl PluginManifest {
     pub fn load(install_path: impl AsRef<Path>) -> Result<Self, PluginError> {
-        let manifest_path = install_path.as_ref().join("sabaki-plugin.json");
+        let manifest_path = install_path.as_ref().join("ryusei-plugin.json");
         let manifest: Self = serde_json::from_slice(&fs::read(manifest_path)?)?;
         manifest.validate()?;
         Ok(manifest)
@@ -443,15 +443,15 @@ impl ProcessSpawnSpec {
         }
         let entrypoint = record.resolve_entrypoint()?;
         let mut environment = vec![
-            ("SABAKI_PLUGIN_ID".to_owned(), record.manifest.id.clone()),
+            ("RYUSEI_PLUGIN_ID".to_owned(), record.manifest.id.clone()),
             (
-                "SABAKI_PLUGIN_VERSION".to_owned(),
+                "RYUSEI_PLUGIN_VERSION".to_owned(),
                 record.manifest.version.clone(),
             ),
         ];
-        if let Some(api_version) = std::env::var_os("SABAKI_PLUGIN_API_VERSION") {
+        if let Some(api_version) = std::env::var_os("RYUSEI_PLUGIN_API_VERSION") {
             environment.push((
-                "SABAKI_PLUGIN_API_VERSION".to_owned(),
+                "RYUSEI_PLUGIN_API_VERSION".to_owned(),
                 api_version.to_string_lossy().into_owned(),
             ));
         }

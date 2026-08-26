@@ -41,6 +41,10 @@ pub enum GtpError {
     MissingStandardOutput,
     #[error("GTP engine stopped before completing a response")]
     UnexpectedEndOfStream,
+    #[error("GTP command `{command}` timed out after {timeout:?}")]
+    CommandTimeout { command: String, timeout: Duration },
+    #[error("GTP transport cannot be reused after a timed-out command")]
+    TransportPoisoned,
     #[error("this transport does not support streaming commands")]
     UnsupportedStreaming,
 }
@@ -103,10 +107,24 @@ pub struct GtpProcessSupervisor {
     stream_closed: Arc<AtomicBool>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     next_identifier: u64,
+    /// A timeout means stdout may still contain a late response for the timed
+    /// out command. Refusing reuse prevents that response being misattributed
+    /// to a later command on the shared stream.
+    poisoned: bool,
 }
 
 /// Number of trailing stderr lines retained for diagnostics.
 const STDERR_TAIL_LINES: usize = 64;
+/// Safety deadline for a normal request/response GTP command. UI callers run
+/// commands asynchronously, but a malfunctioning engine must never leave a
+/// worker blocked forever either.
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Search commands may legitimately run longer than setup/console operations on
+/// a cold model or constrained device. They remain bounded, but need their own
+/// policy rather than inheriting the short protocol deadline.
+pub const SEARCH_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+/// Process cleanup must never indefinitely retain a GPUI worker.
+pub const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl GtpProcessSupervisor {
     /// Starts the engine inheriting the caller's working directory.
@@ -196,22 +214,38 @@ impl GtpProcessSupervisor {
             stream_closed,
             stderr_tail,
             next_identifier: 1,
+            poisoned: false,
         })
     }
 
+    /// Sends a bounded GTP command with the default safety deadline.
     pub fn send(
         &mut self,
         name: impl Into<String>,
         arguments: Vec<String>,
     ) -> Result<GtpResponse, GtpError> {
+        self.send_with_timeout(name, arguments, DEFAULT_COMMAND_TIMEOUT)
+    }
+
+    /// Sends a bounded GTP command and waits only until `timeout` for its
+    /// complete, identifier-matched response. This is deliberately bounded:
+    /// an engine which writes a header but never terminates its response used
+    /// to freeze the GPUI thread forever.
+    pub fn send_with_timeout(
+        &mut self,
+        name: impl Into<String>,
+        arguments: Vec<String>,
+        timeout: Duration,
+    ) -> Result<GtpResponse, GtpError> {
+        if self.poisoned {
+            return Err(GtpError::TransportPoisoned);
+        }
         let command = GtpCommand {
             identifier: self.next_identifier,
             name: name.into(),
             arguments,
         };
         self.next_identifier += 1;
-        // A bounded command on a closed stream can never complete; fail with
-        // the documented engine-exit error instead of a confusing BrokenPipe.
         if self.is_stream_closed() {
             return Err(GtpError::UnexpectedEndOfStream);
         }
@@ -219,20 +253,27 @@ impl GtpProcessSupervisor {
             .write_all(command.format()?.as_bytes())?;
         self.standard_input.flush()?;
 
+        let deadline = Instant::now() + timeout;
         let expected_identifier = command.identifier;
         let mut response_lines = Vec::new();
         let mut header_seen = false;
         loop {
-            match self.receiver.recv() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.poisoned = true;
+                return Err(GtpError::CommandTimeout {
+                    command: command.name,
+                    timeout,
+                });
+            }
+            match self.receiver.recv_timeout(remaining) {
                 Ok(normalized_line) => {
                     if !header_seen {
-                        // Lines before the response header belong to a
-                        // still-running streaming command (e.g. `kata-analyze`
-                        // `info move` records), as does the previous command's
-                        // own `=<id>` header. Only the header matching the
-                        // identifier of THIS command opens the bounded
-                        // response; everything else is skipped so the
-                        // streaming consumer keeps exclusive ownership.
+                        // A bounded command must never consume a stream record
+                        // as its own response. We can recognize numbered GTP
+                        // headers precisely; identifier-less engines are only
+                        // safe when no stream is running and are accepted as
+                        // the current response for compatibility.
                         if !normalized_line.starts_with('=') && !normalized_line.starts_with('?') {
                             continue;
                         }
@@ -254,7 +295,16 @@ impl GtpProcessSupervisor {
                         break;
                     }
                 }
-                Err(_) => return Err(GtpError::UnexpectedEndOfStream),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    self.poisoned = true;
+                    return Err(GtpError::CommandTimeout {
+                        command: command.name,
+                        timeout,
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(GtpError::UnexpectedEndOfStream);
+                }
             }
         }
         parse_response(response_lines)
@@ -267,6 +317,9 @@ impl GtpProcessSupervisor {
         name: impl Into<String>,
         arguments: Vec<String>,
     ) -> Result<(), GtpError> {
+        if self.poisoned {
+            return Err(GtpError::TransportPoisoned);
+        }
         let command = GtpCommand {
             identifier: self.next_identifier,
             name: name.into(),
@@ -309,19 +362,57 @@ impl GtpProcessSupervisor {
         tail.iter().cloned().collect::<Vec<_>>().join("\n")
     }
 
-    pub fn stop(&mut self) -> Result<(), std::io::Error> {
-        // Kill may report InvalidInput when the child already exited; the
-        // reader and stderr threads are joined either way so shutdown is
-        // always complete and the closed flag is set.
+    pub fn stop_with_timeout(&mut self, timeout: Duration) -> Result<(), std::io::Error> {
+        // Killing the direct child closes its own descriptors, but descendants
+        // may inherit stdout/stderr. Never unconditionally join reader threads:
+        // doing so can block a GPUI worker until every descendant exits.
         let kill_result = self.child.kill();
         self.stream_closed.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.reader_thread.take() {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.child.try_wait()? {
+                Some(_) => break,
+                None if Instant::now() >= deadline => break,
+                None => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        if self
+            .reader_thread
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+            && let Some(handle) = self.reader_thread.take()
+        {
             let _ = handle.join();
         }
-        if let Some(handle) = self.stderr_thread.take() {
+        if self
+            .stderr_thread
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+            && let Some(handle) = self.stderr_thread.take()
+        {
             let _ = handle.join();
         }
-        kill_result
+        // Dropping unfinished JoinHandles detaches them. They own only the pipe
+        // readers and shared diagnostics, not the supervisor or UI state.
+        self.reader_thread.take();
+        self.stderr_thread.take();
+        match kill_result {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn stop(&mut self) -> Result<(), std::io::Error> {
+        self.stop_with_timeout(DEFAULT_STOP_TIMEOUT)
+    }
+}
+
+impl Drop for GtpProcessSupervisor {
+    fn drop(&mut self) {
+        // `Child` does not kill its subprocess on drop. A failed handshake
+        // therefore leaked a live KataGo process before this safeguard.
+        let _ = self.stop();
     }
 }
 
@@ -438,6 +529,54 @@ impl AnalysisStream {
         Ok(())
     }
 
+    /// Sends a bounded setup request and consumes its complete GTP response
+    /// before the caller enters continuous analysis mode. Fresh analysis uses
+    /// this for replay and `kata-set-param`, so setup headers cannot leak into
+    /// the later `info move` stream.
+    pub fn send_request(
+        &mut self,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<GtpResponse, GtpError> {
+        self.send_command(command)?;
+        let deadline = Instant::now() + timeout;
+        let mut response_lines = Vec::new();
+        let mut header_seen = false;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(GtpError::CommandTimeout {
+                    command: command.to_owned(),
+                    timeout,
+                });
+            }
+            match self.receiver.recv_timeout(remaining) {
+                Ok(line) if !header_seen => {
+                    if line.starts_with('=') || line.starts_with('?') {
+                        header_seen = true;
+                        response_lines.push(line);
+                    }
+                }
+                Ok(line) => {
+                    let complete = line.is_empty();
+                    response_lines.push(line);
+                    if complete {
+                        return parse_response(response_lines);
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(GtpError::CommandTimeout {
+                        command: command.to_owned(),
+                        timeout,
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(GtpError::UnexpectedEndOfStream);
+                }
+            }
+        }
+    }
+
     /// Returns the next line without blocking, or `None` when nothing is
     /// buffered yet.
     pub fn next_line(&mut self) -> Option<String> {
@@ -497,7 +636,7 @@ impl Drop for AnalysisStream {
 #[cfg(test)]
 mod stream_tests {
     use super::{AnalysisStream, GtpError, GtpProcessSupervisor};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// Resolves a Python interpreter for the subprocess fixture. Windows
     /// runners can expose an App Execution Alias named `python` that launches
@@ -572,6 +711,42 @@ sys.stdout.write('{\"id\":1,\"move\":\"D4\",\"isDuringSearch\":false}\\n'); sys.
         );
         assert!(lines[0].contains("ready"));
         stream.kill().expect("stream is killed");
+    }
+
+    #[test]
+    fn analysis_stream_reads_setup_response_before_stream_records() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping setup framing test");
+            return;
+        };
+        let script = "\
+import sys
+for line in sys.stdin:
+    command = line.strip()
+    if command == 'boardsize 9':
+        print('= setup-ok'); print(); sys.stdout.flush()
+    elif command == 'kata-analyze':
+        print('info move D4 visits 10 winrate 0.5 pv D4'); sys.stdout.flush()
+";
+        let mut stream = AnalysisStream::start(python, &["-c".to_owned(), script.to_owned()])
+            .expect("stream process starts");
+        let response = stream
+            .send_request("boardsize 9", Duration::from_secs(1))
+            .expect("setup response is framed");
+        assert!(response.success);
+        assert_eq!(response.content, "setup-ok");
+        stream.send_command("kata-analyze").expect("stream starts");
+        assert!(
+            stream
+                .recv_line_timeout(Duration::from_secs(1))
+                .is_some_and(|line| line.starts_with("info move")),
+            "the setup response must not leak into the analysis stream"
+        );
+        stream.kill().ok();
     }
 
     #[test]
@@ -729,6 +904,42 @@ for line in sys.stdin:
         supervisor.stop().ok();
     }
 
+    /// Regression for the UI-freeze path: an engine can write a response
+    /// header and then never emit the blank terminator. A bounded command must
+    /// return a typed timeout rather than block its caller forever.
+    #[test]
+    fn incomplete_response_times_out_instead_of_hanging() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping timeout test");
+            return;
+        };
+        let script = "\
+import sys, time
+for line in sys.stdin:
+    ident = line.split()[0]
+    print('=%s PartialResponse' % ident)
+    sys.stdout.flush()
+    time.sleep(60)
+";
+        let mut supervisor =
+            GtpProcessSupervisor::start(python, &["-c".to_owned(), script.to_owned()])
+                .expect("supervisor starts");
+        let timeout = Duration::from_millis(150);
+        let error = supervisor
+            .send_with_timeout("name", Vec::new(), timeout)
+            .expect_err("incomplete response must not block forever");
+        assert!(matches!(
+            error,
+            GtpError::CommandTimeout { command, timeout: observed }
+                if command == "name" && observed == timeout
+        ));
+        supervisor.stop().ok();
+    }
+
     /// Regression: when the engine exits, the transport must expose the closed
     /// state promptly (instead of an indefinite `None` timeout stream) and
     /// bounded commands must fail with the documented error.
@@ -763,5 +974,68 @@ sys.exit(0)
             Err(GtpError::UnexpectedEndOfStream)
         ));
         supervisor.stop().ok();
+    }
+
+    #[test]
+    fn timed_out_command_poisoned_transport_rejects_later_commands() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping timeout poison test");
+            return;
+        };
+        let script = "\
+import sys, time
+for line in sys.stdin:
+    ident = line.split()[0]
+    print('=%s PartialResponse' % ident)
+    sys.stdout.flush()
+    time.sleep(60)
+";
+        let mut supervisor =
+            GtpProcessSupervisor::start(python, &["-c".to_owned(), script.to_owned()])
+                .expect("supervisor starts");
+        let timeout = Duration::from_millis(150);
+        assert!(matches!(
+            supervisor.send_with_timeout("name", Vec::new(), timeout),
+            Err(GtpError::CommandTimeout { .. })
+        ));
+        assert!(matches!(
+            supervisor.send("version", Vec::new()),
+            Err(GtpError::TransportPoisoned)
+        ));
+        assert!(matches!(
+            supervisor.send_streaming("kata-analyze", Vec::new()),
+            Err(GtpError::TransportPoisoned)
+        ));
+        supervisor.stop().ok();
+    }
+
+    #[test]
+    fn stop_is_bounded_when_a_descendant_inherits_output_pipes() {
+        if cfg!(windows) {
+            eprintln!("Unix Python pipe fixture is not run on Windows");
+            return;
+        }
+        let Some(python) = python() else {
+            eprintln!("Python interpreter not found; skipping bounded stop test");
+            return;
+        };
+        let descendant = "import time; time.sleep(2)";
+        let script = format!(
+            "import subprocess, sys\nsubprocess.Popen([{python:?}, '-c', {descendant:?}])\nfor _ in sys.stdin: pass\n"
+        );
+        let mut supervisor = GtpProcessSupervisor::start(python, &["-c".to_owned(), script])
+            .expect("supervisor starts");
+        let started = Instant::now();
+        supervisor
+            .stop_with_timeout(Duration::from_millis(150))
+            .expect("direct child stops within deadline");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "reader joins must not wait for inherited descendant pipes"
+        );
     }
 }

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "org.ryusei.sgf-exporter",
+  "name": "SGF Exporter",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "runtime": "native",
+  "entrypoint": "bin/ryusei-sgf-exporter",
+  "activationEvents": ["onCommand:org.ryusei.sgf-exporter.export"],
+  "permissions": ["gameRead", "fileWrite"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "org.ryusei.sgf-exporter.export",
+        "title": "Export Current SGF"
+      }
+    ]
+  }
+}

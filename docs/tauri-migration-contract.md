@@ -8,7 +8,7 @@ equivalent Rust command is covered by differential tests.
 The Tauri/Preact layer is a **transitional adapter** only: it is the UI behavior
 reference and fallback slice until GPUI reaches Beta quality, and it will be
 removed once the GPUI client achieves parity. The final contract is between the
-UI-independent `sabaki-host` crate and its GPUI adapter.
+UI-independent `ryusei-host` crate and its GPUI adapter.
 
 ## User-data compatibility
 
@@ -46,7 +46,7 @@ including:
 - `plugins_list`, `plugins_install`, `plugins_enable`, and
   `plugins_authorize_native_execution`.
 
-The final GPUI UI calls `sabaki-host` typed methods directly and receives typed
+The final GPUI UI calls `ryusei-host` typed methods directly and receives typed
 `HostEvent`s (e.g. `GameChanged { snapshot }`); the Tauri command/event layer is
 an adapter projection of the same host API and will be removed with Tauri.
 
@@ -94,7 +94,7 @@ Rust/GPUI components or GPU contexts).
   `crates/domain-core/tests/differential_fixture.rs`.
 - `test/tauri*Tests.js` validates the frontend DTO, store, board adapter,
   navigation, variation-tree, markup, and node-metadata boundaries.
-- `crates/sabaki-host` tests validate the UI-independent host workflow through
+- `crates/ryusei-host` tests validate the UI-independent host workflow through
   typed ports (open/edit/save/reopen, failed open, save-location enforcement,
   recovery restore, source-location discard).
 - `e2e/` remains the user-visible Electron regression suite during the

@@ -5,6 +5,6 @@
 /// demonstrates the safe default: a WASM plugin cannot read files, access the
 /// network, or start processes.
 #[unsafe(no_mangle)]
-pub extern "C" fn sabaki_activate() -> i32 {
+pub extern "C" fn ryusei_activate() -> i32 {
     0
 }

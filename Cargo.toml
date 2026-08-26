@@ -2,8 +2,8 @@
 members = [
   "crates/domain-core",
   "crates/plugin-runtime",
-  "crates/sabaki-host",
-  "apps/sabaki-gpui",
+  "crates/ryusei-host",
+  "apps/ryusei-gpui",
 ]
 resolver = "2"
 exclude = ["vendor/gpui"]
@@ -11,9 +11,9 @@ exclude = ["vendor/gpui"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-authors = ["Saba.rs Contributors"]
+authors = ["Ryusei Contributors"]
 license = "MIT"
-repository = "https://github.com/rainoffallingstar/Saba.rs"
+repository = "https://github.com/rainoffallingstar/ryusei"
 
 # Local GPUI 0.2.2 patch: defer a transparent-titlebar mutation while macOS
 # exits fullscreen. On macOS 26 this mutation re-enters AppKit frame resizing

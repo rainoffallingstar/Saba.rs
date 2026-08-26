@@ -16,7 +16,7 @@
 gtp_logs/
 
 # Example plugin build artifacts
-/examples/plugins/*/org.sabaki.sgf-exporter
+/examples/plugins/*/org.ryusei.sgf-exporter
 
 # KataGo runtime logs created when tests spawn the real engine
 katago_logs/

@@ -1,11 +1,11 @@
-# Saba.rs GPUI Release Readiness
+# Ryusei GPUI Release Readiness
 
 This document is the release-candidate source of truth for the Rust/GPUI
 mainline. Detailed findings and the execution plan are in
 [`architecture-release-audit-2026-08-21.md`](architecture-release-audit-2026-08-21.md)
 and [`release-remediation-plan.md`](release-remediation-plan.md).
 
-The repository root is the active Saba.rs mainline. The legacy Electron/Tauri
+The repository root is the active Ryusei mainline. The legacy Electron/Tauri
 Sabaki checkout lives in the Git-ignored `refer-repo/` directory and is used
 only for behavior and UI comparison.
 
@@ -17,25 +17,25 @@ Run from the repository root:
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo build --release --locked -p sabaki-gpui --bin saba-rs
+cargo build --release --locked -p ryusei-gpui --bin ryusei
 ```
 
 The full locked gate is **locally green**. The four commands above were run
 serially as one gate twice consecutively, covering 34 domain unit tests, 8
-shared fixtures, 5 legacy fixtures, 5 property tests, 141 `sabaki-gpui` tests,
-125 `sabaki-host` tests, 26 plugin-runtime tests, integration tests, real
+shared fixtures, 5 legacy fixtures, 5 property tests, 141 `ryusei-gpui` tests,
+125 `ryusei-host` tests, 26 plugin-runtime tests, integration tests, real
 subprocess smoke tests, and all three doctest crates. The latest gate also
 covers `PluginController` lifecycle tests, the built-in command registry,
 `EngineController` lifecycle/role tests, `AnalysisRunController` ticket-state
 tests, and the KataGo model resource seam. The workspace volume ran out of
 space during an initial link (`errno=28`); the same serialized gate passed
-using the isolated, regenerable `CARGO_TARGET_DIR=/tmp/sabaki-cargo-target`.
+using the isolated, regenerable `CARGO_TARGET_DIR=/tmp/ryusei-cargo-target`.
 
 The final candidate commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed the
 three-platform CI matrix in run
-[`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577).
+[`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577).
 The final release workflow in run
-[`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374)
+[`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374)
 passed macOS, Windows, Ubuntu and Flatpak packaging for that same commit. The
 workflow artifacts were downloaded and their archive formats were locally
 validated; SHA-256 values are recorded below.
@@ -57,12 +57,12 @@ commit `8880412e`:
 
 | Artifact | SHA-256 |
 |---|---|
-| `saba-rs-v0.1.0-macos.dmg` | `98ee3e8f94a592553693b725aca3938f10bf2b245a635dca68d4d1717408af25` |
-| `saba-rs-v0.1.0-linux-x86_64.tar.gz` | `e9639f9014c8bf7c23f2804d4e2a3fa76370913ef2d90ec964f4f282064bd245` |
-| `saba-rs-v0.1.0-linux-x86_64.AppImage` | `a3261f451777744c912f3f28ec46ec5574b738783dc4a545b30756b78580f693` |
-| `saba-rs-v0.1.0-linux-x86_64.flatpak` | `9c3a109705b2b48a06a0ddce1516760e512851a914a0821c97110228fd9a7f08` |
-| `saba-rs-v0.1.0-windows-x86_64.zip` | `e9d87a962625f1e6b5e4c9831c0ba5326eb7ca37593f4485e91d6b1232b613bd` |
-| `saba-rs-v0.1.0-windows-x86_64-setup.exe` | `c45b8280d2e703013507c8acd4a1b495a89aba59315924e9c6acf7677340cb48` |
+| `ryusei-v0.1.0-macos.dmg` | `98ee3e8f94a592553693b725aca3938f10bf2b245a635dca68d4d1717408af25` |
+| `ryusei-v0.1.0-linux-x86_64.tar.gz` | `e9639f9014c8bf7c23f2804d4e2a3fa76370913ef2d90ec964f4f282064bd245` |
+| `ryusei-v0.1.0-linux-x86_64.AppImage` | `a3261f451777744c912f3f28ec46ec5574b738783dc4a545b30756b78580f693` |
+| `ryusei-v0.1.0-linux-x86_64.flatpak` | `9c3a109705b2b48a06a0ddce1516760e512851a914a0821c97110228fd9a7f08` |
+| `ryusei-v0.1.0-windows-x86_64.zip` | `e9d87a962625f1e6b5e4c9831c0ba5326eb7ca37593f4485e91d6b1232b613bd` |
+| `ryusei-v0.1.0-windows-x86_64-setup.exe` | `c45b8280d2e703013507c8acd4a1b495a89aba59315924e9c6acf7677340cb48` |
 
 The ZIP passed `unzip -t`; the Linux tarball passed `tar -tzf`; `file`
 identified the expected ELF, PE, Flatpak data and DMG payload types. This is
@@ -85,15 +85,15 @@ candidate builds on every runner. There is no published GitHub Release yet.
 
 | Gate | Status | Required next evidence |
 |---|---|---|
-| Repository authority | Ready | Root is Saba.rs mainline; `refer-repo/` is ignored. Keep CI/Tag/Release here. |
+| Repository authority | Ready | Root is Ryusei mainline; `refer-repo/` is ignored. Keep CI/Tag/Release here. |
 | Formatting, tests, clippy, locked release build | Locally ready | All four commands passed serially; keep CI gates serial. CI now also runs the vendored GPUI patch-contract guard on all three runners. |
-| Current commit three-platform CI | Passed | Commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed Ubuntu/macOS/Windows in run [`32693487577`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693487577). |
-| Current commit packaging | Passed | Same commit passed macOS/Windows/Ubuntu/Flatpak release packaging in run [`32693823374`](https://github.com/rainoffallingstar/Saba.rs/actions/runs/32693823374); artifact hashes are recorded above. |
+| Current commit three-platform CI | Passed | Commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed Ubuntu/macOS/Windows in run [`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577). |
+| Current commit packaging | Passed | Same commit passed macOS/Windows/Ubuntu/Flatpak release packaging in run [`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374); artifact hashes are recorded above. |
 | macOS fullscreen and file-dialog regressions | Passed once, candidate retest required | Re-run `release-qa.md` for every candidate and GPUI upgrade. |
 | Application packages | Structure verified; unsigned | Final workflow artifacts passed ZIP and tar listings, executable/file-type checks, plus DMG attach. Mounted `.app` passed `plutil` and `codesign --verify --deep --strict`. AppImage and Flatpak cannot execute/import on this ARM macOS host; CI built them successfully. |
 | macOS signing, hardened runtime, notarization | Not started | The DMG app is ad-hoc-valid but `spctl --assess` rejects it, as expected for an unsigned candidate. Provide Developer ID credentials; notarize, staple and test on a clean Mac. |
 | Windows signing | Not started | Provide Authenticode identity and verify SmartScreen behavior. |
-| Version and application identity | Implemented and artifact-checked | Workspace version source, `saba-rs` binary, platform IDs, configuration migration and versioned artifact names are aligned; downloaded candidate artifacts use `v0.1.0` consistently. |
+| Version and application identity | Implemented and artifact-checked | Workspace version source, `ryusei` binary, platform IDs, configuration migration and versioned artifact names are aligned; downloaded candidate artifacts use `v0.1.0` consistently. |
 | File associations | Implemented, package declarations checked | macOS/Windows/Linux declarations cover SGF/NGF/GIB/UGF. Real double-click behavior remains an installed-platform test. |
 | Install, upgrade, rollback and uninstall | Not tested | Test candidate artifacts on clean macOS, Windows and Linux systems. |
 | Native screenshot / GPU CI | Partial | Keep full-window test-platform smoke plus manual visual QA; track upstream snapshot support. |

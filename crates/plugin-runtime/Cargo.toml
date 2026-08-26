@@ -1,5 +1,5 @@
 [package]
-name = "sabaki-plugin-runtime"
+name = "ryusei-plugin-runtime"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

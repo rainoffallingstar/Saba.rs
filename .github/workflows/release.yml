@@ -41,7 +41,7 @@ jobs:
             target/
           key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Build release binary
-        run: cargo build --release --locked -p sabaki-gpui --bin saba-rs
+        run: cargo build --release --locked -p ryusei-gpui --bin ryusei
 
       - name: Package macOS app and dmg
         if: runner.os == 'macOS'
@@ -50,7 +50,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: saba-rs-macos
+          name: ryusei-macos
           path: |
             dist/macos/*.app
             dist/macos/*.dmg
@@ -59,9 +59,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist/linux
-          cp target/release/saba-rs dist/linux/saba-rs
+          cp target/release/ryusei dist/linux/ryusei
           cp README.md LICENSE.md dist/linux/
-          tar -czf "dist/linux/saba-rs-v${APP_VERSION}-linux-x86_64.tar.gz" -C dist/linux saba-rs README.md LICENSE.md
+          tar -czf "dist/linux/ryusei-v${APP_VERSION}-linux-x86_64.tar.gz" -C dist/linux ryusei README.md LICENSE.md
       - name: Package Linux AppImage
         if: runner.os == 'Linux'
         run: ./scripts/bundle-linux-appimage.sh
@@ -69,7 +69,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: saba-rs-linux
+          name: ryusei-linux
           path: dist/linux/*
 
       - name: Package Windows zip
@@ -77,9 +77,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist/windows | Out-Null
-          Copy-Item target/release/saba-rs.exe dist/windows/saba-rs.exe
+          Copy-Item target/release/ryusei.exe dist/windows/ryusei.exe
           Copy-Item README.md, LICENSE.md dist/windows/
-          Compress-Archive -Path dist/windows/saba-rs.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath "dist/windows/saba-rs-v$env:APP_VERSION-windows-x86_64.zip" -Force
+          Compress-Archive -Path dist/windows/ryusei.exe, dist/windows/README.md, dist/windows/LICENSE.md -DestinationPath "dist/windows/ryusei-v$env:APP_VERSION-windows-x86_64.zip" -Force
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -99,7 +99,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: saba-rs-windows
+          name: ryusei-windows
           path: dist/windows/*
 
   flatpak:
@@ -128,13 +128,13 @@ jobs:
             org.freedesktop.Sdk.Extension.rust-stable//24.08
       - name: Build Flatpak bundle
         run: |
-          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.sabars.app.yml
-          flatpak build-bundle flatpak-repo "saba-rs-v${APP_VERSION}-linux-x86_64.flatpak" dev.sabars.app
+          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/dev.ryusei.app.yml
+          flatpak build-bundle flatpak-repo "ryusei-v${APP_VERSION}-linux-x86_64.flatpak" dev.ryusei.app
       - name: Upload Flatpak artifact
         uses: actions/upload-artifact@v4
         with:
-          name: saba-rs-flatpak
-          path: saba-rs-v*-linux-x86_64.flatpak
+          name: ryusei-flatpak
+          path: ryusei-v*-linux-x86_64.flatpak
 
   publish:
     needs: [release, flatpak]

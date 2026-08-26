@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use sabaki_domain_core::{
+use ryusei_domain_core::{
     CURRENT_TRANSACTION_SCHEMA_VERSION, Color, GameDocument, GameTransaction, GameTransactionType,
     Vertex,
 };
@@ -99,7 +99,7 @@ struct HistoryOperation {
     property: Option<String>,
     values: Option<Vec<String>>,
     vertex: Option<Vertex>,
-    marker: Option<sabaki_domain_core::MarkerSnapshot>,
+    marker: Option<ryusei_domain_core::MarkerSnapshot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,7 +134,7 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 fn assert_moves_match(
-    actual_moves: &[sabaki_domain_core::MoveDto],
+    actual_moves: &[ryusei_domain_core::MoveDto],
     expected_moves: &[ExpectedMove],
 ) {
     assert_eq!(
@@ -149,7 +149,7 @@ fn assert_moves_match(
 }
 
 fn assert_board_matches(
-    actual_board: &sabaki_domain_core::BoardSnapshot,
+    actual_board: &ryusei_domain_core::BoardSnapshot,
     expected_board: &ExpectedBoard,
 ) {
     assert_eq!(actual_board.width, expected_board.width);
@@ -160,7 +160,7 @@ fn assert_board_matches(
 }
 
 fn assert_markup_matches(
-    actual_board: &sabaki_domain_core::BoardSnapshot,
+    actual_board: &ryusei_domain_core::BoardSnapshot,
     expected_markup: &ExpectedMarkup,
 ) {
     for expected_marker in &expected_markup.markers {
@@ -186,7 +186,7 @@ fn format_sgf_vertex(vertex: Vertex) -> String {
     format!("{column}{row}")
 }
 
-fn node_matches_move(node: &sabaki_domain_core::NodeSnapshot, target: &ExpectedMove) -> bool {
+fn node_matches_move(node: &ryusei_domain_core::NodeSnapshot, target: &ExpectedMove) -> bool {
     let property = match target.color {
         Color::Black => "B",
         Color::White => "W",
@@ -226,8 +226,8 @@ fn create_node_transaction(
 }
 
 fn collect_main_line_nodes(
-    snapshot: &sabaki_domain_core::GameSnapshot,
-) -> Vec<sabaki_domain_core::NodeSnapshot> {
+    snapshot: &ryusei_domain_core::GameSnapshot,
+) -> Vec<ryusei_domain_core::NodeSnapshot> {
     let nodes_by_id = snapshot
         .nodes
         .iter()
@@ -248,8 +248,8 @@ fn collect_main_line_nodes(
 }
 
 fn node_snapshot_move(
-    node: &sabaki_domain_core::NodeSnapshot,
-) -> Option<sabaki_domain_core::MoveDto> {
+    node: &ryusei_domain_core::NodeSnapshot,
+) -> Option<ryusei_domain_core::MoveDto> {
     for (property, color) in [("B", Color::Black), ("W", Color::White)] {
         let Some(value) = node
             .properties
@@ -270,13 +270,13 @@ fn node_snapshot_move(
                 row: usize::from(bytes[1] - b'a'),
             })
         };
-        return Some(sabaki_domain_core::MoveDto { color, vertex });
+        return Some(ryusei_domain_core::MoveDto { color, vertex });
     }
     None
 }
 
 fn assert_history_checkpoint_matches(
-    snapshot: &sabaki_domain_core::GameSnapshot,
+    snapshot: &ryusei_domain_core::GameSnapshot,
     expected: &ExpectedHistoryCheckpoint,
 ) {
     let main_line_nodes = collect_main_line_nodes(snapshot);

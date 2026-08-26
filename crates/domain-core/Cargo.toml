@@ -1,5 +1,5 @@
 [package]
-name = "sabaki-domain-core"
+name = "ryusei-domain-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
