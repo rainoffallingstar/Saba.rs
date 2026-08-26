@@ -4518,59 +4518,6 @@ pub fn render_node_inspector_panel(
         .gap_2()
         .p_3()
         .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("NODE INSPECTOR"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_0p5()
-                        .rounded_sm()
-                        .bg(rgb(shell.palette.input))
-                        .text_xs()
-                        .text_color(rgb(shell.palette.accent))
-                        .child("✏️"),
-                ),
-        )
-        .child(
-            div()
-                .track_focus(&shell.node_title_focus_handle)
-                .px_3()
-                .py_1p5()
-                .border_1()
-                .border_color(rgb(shell.palette.border))
-                .rounded_md()
-                .bg(rgb(shell.palette.input))
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(shell.palette.text))
-                .child(if shell.node_title_input.text().is_empty() {
-                    metadata.title.clone()
-                } else {
-                    shell.node_title_input.text().to_owned()
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(ShellApp::on_node_title_focus),
-                )
-                .on_key_down(cx.listener(ShellApp::on_node_title_key_down))
-                .child(NativeInputBinding::new(
-                    shell.node_title_focus_handle.clone(),
-                    cx.entity(),
-                )),
-        )
-        .child(
             if shell
                 .settings
                 .get_bool("view.show_comments")
@@ -4602,10 +4549,12 @@ pub fn render_node_inspector_panel(
                     )
                     .child(
                         div()
+                            .id("node-comment-input-box")
                             .track_focus(&shell.comment_focus_handle)
+                            .key_context("CommentInput")
                             .px_3()
                             .py_2()
-                            .min_h(px(80.0))
+                            .min_h(px(90.0))
                             .border_1()
                             .border_color(rgb(
                                 if shell.active_text_input == Some(crate::ActiveTextInput::Comment)
@@ -5275,6 +5224,7 @@ pub fn render_settings_panel(
         )
 }
 
+#[allow(dead_code)]
 fn vertex_label(vertex: Option<Vertex>, board_width: usize) -> String {
     vertex.map_or_else(
         || "pass".to_owned(),
@@ -5305,12 +5255,7 @@ pub fn render_analysis_preview_panel(
                 .iter()
                 .find(|entry| entry.vertex.as_deref() == Some(vertex))
         });
-    let response_entry = selected.or_else(|| {
-        shell
-            .trial_move
-            .as_ref()
-            .and_then(|_| crate::engine_console::best_analysis_entry(&shell.analysis))
-    });
+    let response_entry = selected;
     let preview = response_entry.map(|entry| {
         let mut pv_preview = if let Some(trial_move) = shell.trial_move.as_ref() {
             trial_move
@@ -5337,14 +5282,7 @@ pub fn render_analysis_preview_panel(
                 .map(|(index, (vertex, color, _))| (vertex, color, offset + index + 1)),
         );
         (
-            if let Some(trial_move) = shell.trial_move.as_ref() {
-                format!(
-                    "试下 {}",
-                    vertex_label(trial_move.vertex, snapshot.board.width)
-                )
-            } else {
-                entry.vertex.clone().unwrap_or_else(|| "pass".to_owned())
-            },
+            entry.vertex.clone().unwrap_or_else(|| "pass".to_owned()),
             pv_preview,
         )
     });

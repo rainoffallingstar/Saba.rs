@@ -165,6 +165,7 @@ enum ActiveDrawer {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ActiveTextInput {
     Comment,
+    #[allow(dead_code)]
     NodeTitle,
     FoxQuery,
     GtpInput,
@@ -266,6 +267,7 @@ struct ShellApp {
     hovered_vertex: Option<Vertex>,
     comment_focus_handle: FocusHandle,
     comment_input: NativeTextInput,
+    #[allow(dead_code)]
     node_title_focus_handle: FocusHandle,
     node_title_input: NativeTextInput,
     active_text_input: Option<ActiveTextInput>,
@@ -4492,6 +4494,7 @@ impl ShellApp {
         self.comment_input.set_text(metadata.comment);
     }
 
+    #[allow(dead_code)]
     fn on_node_title_focus(
         &mut self,
         _: &MouseDownEvent,
@@ -4546,6 +4549,7 @@ impl ShellApp {
         )
     }
 
+    #[allow(dead_code)]
     fn on_node_title_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -5836,6 +5840,7 @@ fn main() {
     let startup_file = std::env::args().nth(1).map(PathBuf::from);
     Application::new().run(move |cx: &mut App| {
         gpui_component::init(cx);
+        gpui_component::Theme::sync_system_appearance(None, cx);
 
         let settings_persistence = match NativeSettingsPersistence::for_current_user() {
             Ok(persistence) => persistence,
