@@ -64,9 +64,7 @@ use crate::navigation::{
     NavigationDirection, navigation_availability, navigation_target, position_label,
 };
 use crate::node_inspector::{
-    AnnotationGroup, NodeAnnotation, VariationAction, create_annotation_transactions,
-    create_comment_transaction, create_hotspot_transaction, create_variation_transaction,
-    current_node_metadata,
+    create_comment_transaction, create_hotspot_transaction, current_node_metadata,
 };
 use crate::plugin_panel::{PluginPanelEntry, apply_process_info, entry_from_record};
 use crate::settings::{
@@ -4525,54 +4523,6 @@ impl ShellApp {
         cx.notify();
     }
 
-    fn on_node_annotation(&mut self, annotation: NodeAnnotation, cx: &mut Context<Self>) {
-        let metadata = current_node_metadata(&self.host.snapshot());
-        let active = match annotation.group() {
-            AnnotationGroup::Move => metadata.move_annotation,
-            AnnotationGroup::Position => metadata.position_annotation,
-        };
-        let selected = (active != Some(annotation)).then_some(annotation);
-        let transactions =
-            create_annotation_transactions(&metadata.node_id, selected, annotation.group());
-        let mut events = RecordingSink;
-        for transaction in transactions {
-            if let Err(error) = self.host.apply_transaction(transaction, &mut events) {
-                self.status = format!("annotation failed: {error}").into();
-                cx.notify();
-                return;
-            }
-        }
-        self.status = format!(
-            "{} annotation {}",
-            annotation.label(),
-            if selected.is_some() { "set" } else { "cleared" }
-        )
-        .into();
-        self.synchronize_recovery();
-        cx.notify();
-    }
-
-    fn on_hotspot_toggle(&mut self, cx: &mut Context<Self>) {
-        let metadata = current_node_metadata(&self.host.snapshot());
-        let mut events = RecordingSink;
-        match self.host.apply_transaction(
-            create_hotspot_transaction(&metadata.node_id, !metadata.hotspot),
-            &mut events,
-        ) {
-            Ok(_) => {
-                self.status = if metadata.hotspot {
-                    "hotspot cleared"
-                } else {
-                    "hotspot set"
-                }
-                .into();
-                self.synchronize_recovery();
-            }
-            Err(error) => self.status = format!("hotspot failed: {error}").into(),
-        }
-        cx.notify();
-    }
-
     fn save_comment(&mut self, comment: &str, cx: &mut Context<Self>) {
         let metadata = current_node_metadata(&self.host.snapshot());
         let transaction = create_comment_transaction(&metadata.node_id, comment);
@@ -4584,34 +4534,6 @@ impl ShellApp {
                 self.synchronize_recovery();
             }
             Err(error) => self.status = format!("comment failed: {error}").into(),
-        }
-        cx.notify();
-    }
-
-    fn on_variation_promote(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let metadata = current_node_metadata(&self.host.snapshot());
-        let transaction = create_variation_transaction(&metadata.node_id, VariationAction::Promote);
-        let mut events = RecordingSink;
-        match self.host.apply_transaction(transaction, &mut events) {
-            Ok(_) => {
-                self.status = "variation promoted".into();
-                self.synchronize_recovery();
-            }
-            Err(error) => self.status = format!("promote failed: {error}").into(),
-        }
-        cx.notify();
-    }
-
-    fn on_variation_remove(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let metadata = current_node_metadata(&self.host.snapshot());
-        let transaction = create_variation_transaction(&metadata.node_id, VariationAction::Remove);
-        let mut events = RecordingSink;
-        match self.host.apply_transaction(transaction, &mut events) {
-            Ok(_) => {
-                self.status = "variation removed".into();
-                self.synchronize_recovery();
-            }
-            Err(error) => self.status = format!("remove failed: {error}").into(),
         }
         cx.notify();
     }
@@ -6908,9 +6830,9 @@ mod frontend_smoke {
         let properties_splitter = vcx
             .debug_bounds("properties-splitter")
             .expect("properties internal splitter must render");
-        let comment_annotations = vcx
-            .debug_bounds("commentbox-annotations")
-            .expect("enabled CommentBox annotations must render");
+        let comment_box = vcx
+            .debug_bounds("node-comment-input-box")
+            .expect("enabled CommentBox must render");
         assert!(
             game_graph_region.origin.y <= properties_splitter.origin.y
                 && properties_splitter.origin.y <= properties_region.origin.y,
@@ -6920,11 +6842,10 @@ mod frontend_smoke {
             properties_region
         );
         assert!(
-            f32::from(comment_annotations.origin.x) >= f32::from(properties_region.origin.x) - 0.5
-                && f32::from(comment_annotations.right())
-                    <= f32::from(properties_region.right()) + 0.5,
-            "CommentBox annotation controls {:?} must stay inside properties {:?}",
-            comment_annotations,
+            f32::from(comment_box.origin.x) >= f32::from(properties_region.origin.x) - 0.5
+                && f32::from(comment_box.right()) <= f32::from(properties_region.right()) + 0.5,
+            "CommentBox {:?} must stay inside properties {:?}",
+            comment_box,
             properties_region
         );
 

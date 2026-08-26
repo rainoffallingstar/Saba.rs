@@ -23,7 +23,7 @@ use crate::goban_view::{
 };
 use crate::layout::SplitPane;
 use crate::native_text_input::NativeInputBinding;
-use crate::node_inspector::{NodeAnnotation, NodeInspectorMetadata};
+use crate::node_inspector::NodeInspectorMetadata;
 use crate::plugin_panel::PluginPanelEntry;
 use crate::theme::UiPalette;
 use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
@@ -2942,6 +2942,7 @@ pub fn render_node_inspector_panel(
                     .child(
                         div()
                             .id("node-comment-input-box")
+                            .debug_selector(|| "node-comment-input-box".to_owned())
                             .track_focus(&shell.comment_focus_handle)
                             .key_context("CommentInput")
                             .px_3()
@@ -2992,133 +2993,6 @@ pub fn render_node_inspector_panel(
                     .child("comments hidden — enable view.show_comments to edit")
             },
         )
-        .child(
-            div()
-                .id("commentbox-annotations")
-                .debug_selector(|| "commentbox-annotations".to_owned())
-                .flex()
-                .flex_col()
-                .gap_1p5()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("Move Evaluation"),
-                )
-                .child(
-                    div().flex().flex_wrap().gap_1().children(
-                        NodeAnnotation::MOVE
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, annotation)| {
-                                let ann = *annotation;
-                                let active = metadata.move_annotation == Some(ann);
-                                Button::new(("move-eval", idx))
-                                    .small()
-                                    .ghost()
-                                    .selected(active)
-                                    .label(ann.label())
-                                    .on_click(cx.listener(move |shell, _, _, cx| {
-                                        shell.on_node_annotation(ann, cx)
-                                    }))
-                            }),
-                    ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("Position Evaluation"),
-                )
-                .child(
-                    div().flex().flex_wrap().gap_1().children(
-                        NodeAnnotation::POSITION
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, annotation)| {
-                                let ann = *annotation;
-                                let active = metadata.position_annotation == Some(ann);
-                                Button::new(("pos-eval", idx))
-                                    .small()
-                                    .ghost()
-                                    .selected(active)
-                                    .label(ann.label())
-                                    .on_click(cx.listener(move |shell, _, _, cx| {
-                                        shell.on_node_annotation(ann, cx)
-                                    }))
-                            }),
-                    ),
-                )
-                .child(
-                    Button::new("commentbox-hotspot")
-                        .small()
-                        .ghost()
-                        .selected(metadata.hotspot)
-                        .label(if metadata.hotspot {
-                            "⭐ Hotspot"
-                        } else {
-                            "☆ Hotspot"
-                        })
-                        .on_click(cx.listener(|shell, _, _, cx| shell.on_hotspot_toggle(cx))),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .text_xs()
-                .children(metadata.properties.iter().map(|row| {
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(shell.palette.subtle))
-                                .child(format!("{}:", row.name)),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(shell.palette.text))
-                                .child(row.value.clone()),
-                        )
-                }))
-                .child(if metadata.properties.is_empty() {
-                    div()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("no other properties")
-                } else {
-                    div()
-                }),
-        )
-        .child(if metadata.can_edit_variation {
-            div()
-                .flex()
-                .gap_2()
-                .child(
-                    Button::new("variation-promote")
-                        .small()
-                        .outline()
-                        .label("Promote")
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.on_variation_promote(&MouseDownEvent::default(), window, cx);
-                        })),
-                )
-                .child(
-                    Button::new("variation-remove")
-                        .small()
-                        .danger()
-                        .label("Remove")
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.on_variation_remove(&MouseDownEvent::default(), window, cx);
-                        })),
-                )
-        } else {
-            div()
-        })
 }
 
 /// Compact right-sidebar board for the currently hovered engine candidate.
