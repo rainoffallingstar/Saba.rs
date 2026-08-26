@@ -1601,9 +1601,10 @@ mod tests {
             std::env::temp_dir().join(format!("ryusei-katago-preflight-{}", std::process::id()));
         std::fs::remove_dir_all(&base).ok();
         std::fs::create_dir_all(&base).expect("preflight directory exists");
+        let executable = std::env::current_exe().expect("test executable exists");
         let record = EngineRecord::new(
             "KataGo",
-            "/opt/homebrew/bin/katago",
+            executable.display().to_string(),
             format!(
                 "gtp -model \"{}\" -config \"{}\"",
                 base.join("missing-model.bin.gz").display(),
