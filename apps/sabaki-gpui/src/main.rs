@@ -5118,7 +5118,7 @@ impl Render for ShellApp {
         );
         let winrate_metric =
             WinrateGraphMetric::from_setting(self.settings.get_str("board.analysis_type"));
-        let winrate_plot_points = graph_plot_points(
+        let _winrate_plot_points = graph_plot_points(
             &winrate_points,
             winrate_metric,
             self.settings
@@ -5148,7 +5148,7 @@ impl Render for ShellApp {
                 (idx, node_id, player, None, winrate, score, None, vec![])
             })
             .collect();
-        let blunders = sabaki_host::find_blunders(
+        let _blunders = sabaki_host::find_blunders(
             &blunder_evals,
             10.0,
             self.settings
@@ -5320,43 +5320,7 @@ impl Render for ShellApp {
                             } else {
                                 div().id("analysis-preview-panel-hidden")
                             })
-                            .child(
-                                if self
-                                    .settings
-                                    .get_bool("view.show_winrategraph")
-                                    .unwrap_or(true)
-                                {
-                                    panels::render_winrate_graph_panel(
-                                        &winrate_plot_points,
-                                        winrate_metric,
-                                        self.winrate_graph_height,
-                                        palette,
-                                        {
-                                            let handler = on_node_clicked.clone();
-                                            move |node_id, window, cx| handler(node_id, window, cx)
-                                        },
-                                        cx,
-                                    )
-                                } else {
-                                    div().id("winrate-graph-panel-hidden")
-                                },
-                            )
-                            .child(panels::render_blunder_list_panel(&blunders, palette, cx))
-                            .child(
-                                if self
-                                    .settings
-                                    .get_bool("view.show_winrategraph")
-                                    .unwrap_or(true)
-                                {
-                                    panels::render_right_sidebar_split_handle(
-                                        SplitPane::WinrateGraph,
-                                        palette,
-                                        cx,
-                                    )
-                                } else {
-                                    div().id("winrate-graph-splitter-hidden")
-                                },
-                            )
+                            .child(div().id("winrate-graph-panel-hidden"))
                             .child(
                                 div()
                                     .id("game-graph-region")
@@ -7025,26 +6989,12 @@ mod frontend_smoke {
             game_graph_region,
             properties_region
         );
-        let winrate_graph = vcx
-            .debug_bounds("winrate-graph-panel")
-            .expect("enabled WinrateGraph must render");
-        let winrate_splitter = vcx
-            .debug_bounds("winrate-graph-splitter")
-            .expect("WinrateGraph internal splitter must render");
         let properties_splitter = vcx
             .debug_bounds("properties-splitter")
             .expect("properties internal splitter must render");
         let comment_annotations = vcx
             .debug_bounds("commentbox-annotations")
             .expect("enabled CommentBox annotations must render");
-        assert!(
-            winrate_graph.bottom() <= winrate_splitter.origin.y
-                && winrate_splitter.bottom() <= game_graph_region.origin.y,
-            "winrate graph {:?}, splitter {:?}, and GameGraph {:?} must be vertically ordered",
-            winrate_graph,
-            winrate_splitter,
-            game_graph_region
-        );
         assert!(
             game_graph_region.origin.y <= properties_splitter.origin.y
                 && properties_splitter.origin.y <= properties_region.origin.y,

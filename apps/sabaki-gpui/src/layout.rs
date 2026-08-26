@@ -12,6 +12,7 @@ pub enum SplitPane {
     Right,
     #[allow(dead_code)]
     PeerList,
+    #[allow(dead_code)]
     WinrateGraph,
     Properties,
 }

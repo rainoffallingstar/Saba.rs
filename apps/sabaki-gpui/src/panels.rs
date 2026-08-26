@@ -585,6 +585,16 @@ pub fn render_player_bar(
                         })),
                 )
                 .child(
+                    Button::new("export-gif-toolbar-button")
+                        .small()
+                        .ghost()
+                        .label("🎬 导出 GIF")
+                        .tooltip("导出当前对局为动画 GIF 棋谱 (Cmd+Shift+G)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                        })),
+                )
+                .child(
                     Button::new("drawer-menu-button")
                         .small()
                         .ghost()
@@ -1387,18 +1397,31 @@ fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                             div()
                                 .flex_1()
                                 .track_focus(&shell.fox_query_focus_handle)
+                                .key_context("FoxQueryInput")
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()
                                 .border_1()
-                                .border_color(rgb(shell.palette.accent))
-                                .bg(rgb(shell.palette.panel))
+                                .border_color(rgb(
+                                    if shell.active_text_input
+                                        == Some(crate::ActiveTextInput::FoxQuery)
+                                    {
+                                        0x38bdf8
+                                    } else {
+                                        0x26262c
+                                    },
+                                ))
+                                .bg(rgb(0x121214))
                                 .text_xs()
-                                .text_color(rgb(shell.palette.text))
+                                .text_color(rgb(0xf4f4f5))
                                 .child(if shell.fox_query_input.text().is_empty() {
-                                    "输入野狐用户名或用户 ID".to_owned()
+                                    div()
+                                        .text_color(rgb(0x71717a))
+                                        .child("输入野狐用户名或用户 ID (按 Enter 搜索)")
                                 } else {
-                                    shell.fox_query_input.text().to_owned()
+                                    div()
+                                        .text_color(rgb(0xf4f4f5))
+                                        .child(shell.fox_query_input.text().to_owned())
                                 })
                                 .child(NativeInputBinding::new(
                                     shell.fox_query_focus_handle.clone(),
@@ -1762,8 +1785,8 @@ fn render_pinned_plugins_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Di
 }
 
 /// Renders a compact WinrateGraph from the current variation's persisted and
-/// live analysis values. The point handlers route only node ids back to the
-/// shell, keeping this view independent of engine sessions.
+/// Renders an OGS-style Winrate & Score Lead Graph with coordinate ticks,
+/// reference baselines, split advantage shading, and move number markers.
 pub fn render_winrate_graph_panel(
     points: &[GraphPlotPoint],
     metric: WinrateGraphMetric,
@@ -1774,9 +1797,25 @@ pub fn render_winrate_graph_panel(
 ) -> Stateful<Div> {
     let on_node_clicked = Rc::new(on_node_clicked);
     let has_values = points.iter().any(|point| point.y.is_some());
-    // The plot is fluid with the right sidebar. The previous fixed 236px
-    // coordinate placed the live endpoint outside the default ~200px pane.
     let last_index = points.len().saturating_sub(1).max(1) as f32;
+    let total_moves = points.len();
+
+    let y_labels = match metric {
+        WinrateGraphMetric::Winrate => ["100%", "75%", "50%", "25%", "0%"],
+        WinrateGraphMetric::ScoreLead => ["+30", "+15", "0.0", "-15", "-30"],
+    };
+
+    // Calculate move number ticks along X-axis
+    let x_step = if total_moves <= 50 {
+        10
+    } else if total_moves <= 150 {
+        25
+    } else if total_moves <= 300 {
+        50
+    } else {
+        100
+    };
+
     div()
         .id("winrate-graph-panel")
         .debug_selector(|| "winrate-graph-panel".to_owned())
@@ -1785,8 +1824,12 @@ pub fn render_winrate_graph_panel(
         .min_h_0()
         .flex()
         .flex_col()
-        .gap_2()
-        .p_3()
+        .gap_1p5()
+        .p_2p5()
+        .rounded_md()
+        .bg(rgb(palette.panel))
+        .border_1()
+        .border_color(rgb(palette.border))
         .child(
             div()
                 .flex()
@@ -1802,7 +1845,7 @@ pub fn render_winrate_graph_panel(
                                 .xsmall()
                                 .ghost()
                                 .selected(metric == WinrateGraphMetric::Winrate)
-                                .label("胜率走势")
+                                .label("胜率走势 (%)")
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.set_winrate_metric(WinrateGraphMetric::Winrate, cx);
                                 })),
@@ -1812,186 +1855,368 @@ pub fn render_winrate_graph_panel(
                                 .xsmall()
                                 .ghost()
                                 .selected(metric == WinrateGraphMetric::ScoreLead)
-                                .label("目差走势")
+                                .label("目差走势 (目)")
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.set_winrate_metric(WinrateGraphMetric::ScoreLead, cx);
                                 })),
                         ),
                 )
-                .children(has_values.then(|| {
-                    Badge::new()
-                        .small()
-                        .child(format!("{} 手记录", points.len()))
-                })),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(0x0ea5e9))
+                                .child(if metric == WinrateGraphMetric::Winrate {
+                                    "黑优 ↑ / 白优 ↓"
+                                } else {
+                                    "+黑领先 / -白领先"
+                                }),
+                        )
+                        .children(
+                            has_values
+                                .then(|| Badge::new().small().child(format!("{} 手", total_moves))),
+                        ),
+                ),
         )
         .child(if has_values {
             let graph_points = points.to_vec();
-            let graph_accent = 0x0ea5e9; // KaTrain cyan/sky blue
-            let graph_danger = 0xef4444; // KaTrain blunder red
+            let graph_accent = 0x0ea5e9; // OGS / KaTrain sky blue
+            let graph_danger = 0xef4444; // Blunder red
+
             div()
-                .id("winrate-graph-plot")
-                .relative()
-                .w_full()
                 .flex_1()
                 .min_h_0()
-                .rounded_md()
-                .bg(rgb(palette.input))
-                .child(
-                    canvas(
-                        |_, _, _| (),
-                        move |bounds, (), window, _cx| {
-                            // 50% even-game centerline
-                            let mut baseline =
-                                PathBuilder::stroke(px(1.0)).dash_array(&[px(3.0), px(3.0)]);
-                            baseline.move_to(point(
-                                bounds.origin.x,
-                                bounds.origin.y + bounds.size.height * 0.5,
-                            ));
-                            baseline.line_to(point(
-                                bounds.origin.x + bounds.size.width,
-                                bounds.origin.y + bounds.size.height * 0.5,
-                            ));
-                            if let Ok(path) = baseline.build() {
-                                window.paint_path(path, hsla(0.0, 0.0, 1.0, 0.12));
-                            }
-
-                            let valid: Vec<(f32, f32, u32, bool, bool)> = graph_points
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, point)| {
-                                    let y = point.y? as f32;
-                                    let x = if graph_points.len() <= 1 {
-                                        0.5
-                                    } else {
-                                        index as f32 / last_index
-                                    };
-                                    let color = if point.is_blunder {
-                                        graph_danger
-                                    } else {
-                                        graph_accent
-                                    };
-                                    Some((x, y, color, point.is_current, point.is_blunder))
-                                })
-                                .collect();
-
-                            if valid.len() >= 2 {
-                                // Shaded area fill under the curve (KaTrain smooth area)
-                                let mut area = PathBuilder::fill();
-                                if let Some(&(first_x, _, _, _, _)) = valid.first() {
-                                    area.move_to(point(
-                                        bounds.origin.x + bounds.size.width * first_x,
-                                        bounds.origin.y + bounds.size.height,
-                                    ));
-                                    for &(x, y, _, _, _) in &valid {
-                                        area.line_to(point(
-                                            bounds.origin.x + bounds.size.width * x,
-                                            bounds.origin.y + bounds.size.height * y,
-                                        ));
-                                    }
-                                    if let Some(&(last_x, _, _, _, _)) = valid.last() {
-                                        area.line_to(point(
-                                            bounds.origin.x + bounds.size.width * last_x,
-                                            bounds.origin.y + bounds.size.height,
-                                        ));
-                                    }
-                                    area.close();
-                                    if let Ok(path) = area.build() {
-                                        window.paint_path(path, hsla(0.55, 0.85, 0.45, 0.16));
-                                    }
-                                }
-
-                                // Main winrate stroke line
-                                let mut path = PathBuilder::stroke(px(2.0));
-                                for (index, (x, y, _, _, _)) in valid.iter().enumerate() {
-                                    let position = point(
-                                        bounds.origin.x + bounds.size.width * *x,
-                                        bounds.origin.y + bounds.size.height * *y,
-                                    );
-                                    if index == 0 {
-                                        path.move_to(position);
-                                    } else {
-                                        path.line_to(position);
-                                    }
-                                }
-                                if let Ok(path) = path.build() {
-                                    window.paint_path(path, rgb(graph_accent));
-                                }
-                            }
-
-                            // KaTrain-style node dots & blunder indicators
-                            for (x, y, color, is_current, is_blunder) in valid {
-                                let center = point(
-                                    bounds.origin.x + bounds.size.width * x,
-                                    bounds.origin.y + bounds.size.height * y,
-                                );
-                                let dot_radius = if is_current {
-                                    px(4.5)
-                                } else if is_blunder {
-                                    px(3.5)
-                                } else {
-                                    px(2.0)
-                                };
-                                window.paint_quad(gpui::quad(
-                                    gpui::Bounds {
-                                        origin: point(center.x - dot_radius, center.y - dot_radius),
-                                        size: gpui::size(dot_radius * 2.0, dot_radius * 2.0),
-                                    },
-                                    dot_radius,
-                                    rgb(color),
-                                    if is_current { px(1.5) } else { px(0.0) },
-                                    rgb(0xffffff),
-                                    gpui::BorderStyle::default(),
-                                ));
-                            }
-                        },
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w_full()
-                    .h_full(),
-                )
+                .flex()
+                .flex_col()
+                .gap_1()
                 .child(
                     div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .w_full()
-                        .h_full()
+                        .flex_1()
+                        .min_h_0()
                         .flex()
-                        .children(points.iter().enumerate().map(|(index, _)| {
-                            let handler = on_node_clicked.clone();
-                            let node_id = points[index].node_id.clone();
+                        .gap_1()
+                        .child(
+                            // Y-Axis Coordinate Labels (Left Column)
                             div()
-                                .id(("winrate-scrub-cell", index))
+                                .w(px(32.0))
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .justify_between()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(0x9a9a9a))
+                                .child(div().text_color(rgb(0x0ea5e9)).child(y_labels[0]))
+                                .child(div().child(y_labels[1]))
+                                .child(div().text_color(rgb(0xd4d4d8)).child(y_labels[2]))
+                                .child(div().child(y_labels[3]))
+                                .child(div().text_color(rgb(0xf59e0b)).child(y_labels[4])),
+                        )
+                        .child(
+                            // Graph Plot Canvas & Scrub Area
+                            div()
+                                .id("winrate-graph-plot")
+                                .relative()
                                 .flex_1()
                                 .h_full()
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-                                        handler(&node_id, window, cx);
-                                    },
+                                .rounded_md()
+                                .bg(rgb(0x121214))
+                                .border_1()
+                                .border_color(rgb(0x26262c))
+                                .child(
+                                    canvas(
+                                        |_, _, _| (),
+                                        move |bounds, (), window, _cx| {
+                                            // 25% and 75% reference dashed grid lines
+                                            let mut grid_25 = PathBuilder::stroke(px(1.0))
+                                                .dash_array(&[px(2.0), px(4.0)]);
+                                            grid_25.move_to(point(
+                                                bounds.origin.x,
+                                                bounds.origin.y + bounds.size.height * 0.25,
+                                            ));
+                                            grid_25.line_to(point(
+                                                bounds.origin.x + bounds.size.width,
+                                                bounds.origin.y + bounds.size.height * 0.25,
+                                            ));
+                                            if let Ok(path) = grid_25.build() {
+                                                window.paint_path(path, hsla(0.0, 0.0, 1.0, 0.07));
+                                            }
+
+                                            let mut grid_75 = PathBuilder::stroke(px(1.0))
+                                                .dash_array(&[px(2.0), px(4.0)]);
+                                            grid_75.move_to(point(
+                                                bounds.origin.x,
+                                                bounds.origin.y + bounds.size.height * 0.75,
+                                            ));
+                                            grid_75.line_to(point(
+                                                bounds.origin.x + bounds.size.width,
+                                                bounds.origin.y + bounds.size.height * 0.75,
+                                            ));
+                                            if let Ok(path) = grid_75.build() {
+                                                window.paint_path(path, hsla(0.0, 0.0, 1.0, 0.07));
+                                            }
+
+                                            // 50% / 0.0 Center Baseline
+                                            let mut baseline = PathBuilder::stroke(px(1.2));
+                                            baseline.move_to(point(
+                                                bounds.origin.x,
+                                                bounds.origin.y + bounds.size.height * 0.5,
+                                            ));
+                                            baseline.line_to(point(
+                                                bounds.origin.x + bounds.size.width,
+                                                bounds.origin.y + bounds.size.height * 0.5,
+                                            ));
+                                            if let Ok(path) = baseline.build() {
+                                                window.paint_path(path, hsla(0.0, 0.0, 1.0, 0.22));
+                                            }
+
+                                            let valid: Vec<(f32, f32, u32, bool, bool)> =
+                                                graph_points
+                                                    .iter()
+                                                    .enumerate()
+                                                    .filter_map(|(index, point)| {
+                                                        let y = point.y? as f32;
+                                                        let x = if graph_points.len() <= 1 {
+                                                            0.5
+                                                        } else {
+                                                            index as f32 / last_index
+                                                        };
+                                                        let color = if point.is_blunder {
+                                                            graph_danger
+                                                        } else {
+                                                            graph_accent
+                                                        };
+                                                        Some((
+                                                            x,
+                                                            y,
+                                                            color,
+                                                            point.is_current,
+                                                            point.is_blunder,
+                                                        ))
+                                                    })
+                                                    .collect();
+
+                                            if valid.len() >= 2 {
+                                                // OGS-style shaded area fills relative to center baseline (y = 0.5)
+                                                // Upper Black advantage area
+                                                let mut upper_area = PathBuilder::fill();
+                                                if let Some(&(first_x, _, _, _, _)) = valid.first()
+                                                {
+                                                    upper_area.move_to(point(
+                                                        bounds.origin.x
+                                                            + bounds.size.width * first_x,
+                                                        bounds.origin.y + bounds.size.height * 0.5,
+                                                    ));
+                                                    for &(x, y, _, _, _) in &valid {
+                                                        let clamped_y = y.min(0.5);
+                                                        upper_area.line_to(point(
+                                                            bounds.origin.x + bounds.size.width * x,
+                                                            bounds.origin.y
+                                                                + bounds.size.height * clamped_y,
+                                                        ));
+                                                    }
+                                                    if let Some(&(last_x, _, _, _, _)) =
+                                                        valid.last()
+                                                    {
+                                                        upper_area.line_to(point(
+                                                            bounds.origin.x
+                                                                + bounds.size.width * last_x,
+                                                            bounds.origin.y
+                                                                + bounds.size.height * 0.5,
+                                                        ));
+                                                    }
+                                                    upper_area.close();
+                                                    if let Ok(path) = upper_area.build() {
+                                                        window.paint_path(
+                                                            path,
+                                                            hsla(0.55, 0.85, 0.5, 0.18),
+                                                        );
+                                                    }
+                                                }
+
+                                                // Lower White advantage area
+                                                let mut lower_area = PathBuilder::fill();
+                                                if let Some(&(first_x, _, _, _, _)) = valid.first()
+                                                {
+                                                    lower_area.move_to(point(
+                                                        bounds.origin.x
+                                                            + bounds.size.width * first_x,
+                                                        bounds.origin.y + bounds.size.height * 0.5,
+                                                    ));
+                                                    for &(x, y, _, _, _) in &valid {
+                                                        let clamped_y = y.max(0.5);
+                                                        lower_area.line_to(point(
+                                                            bounds.origin.x + bounds.size.width * x,
+                                                            bounds.origin.y
+                                                                + bounds.size.height * clamped_y,
+                                                        ));
+                                                    }
+                                                    if let Some(&(last_x, _, _, _, _)) =
+                                                        valid.last()
+                                                    {
+                                                        lower_area.line_to(point(
+                                                            bounds.origin.x
+                                                                + bounds.size.width * last_x,
+                                                            bounds.origin.y
+                                                                + bounds.size.height * 0.5,
+                                                        ));
+                                                    }
+                                                    lower_area.close();
+                                                    if let Ok(path) = lower_area.build() {
+                                                        window.paint_path(
+                                                            path,
+                                                            hsla(0.08, 0.85, 0.5, 0.15),
+                                                        );
+                                                    }
+                                                }
+
+                                                // Main smooth curve line
+                                                let mut path = PathBuilder::stroke(px(2.0));
+                                                for (index, (x, y, _, _, _)) in
+                                                    valid.iter().enumerate()
+                                                {
+                                                    let position = point(
+                                                        bounds.origin.x + bounds.size.width * *x,
+                                                        bounds.origin.y + bounds.size.height * *y,
+                                                    );
+                                                    if index == 0 {
+                                                        path.move_to(position);
+                                                    } else {
+                                                        path.line_to(position);
+                                                    }
+                                                }
+                                                if let Ok(path) = path.build() {
+                                                    window.paint_path(path, rgb(graph_accent));
+                                                }
+                                            }
+
+                                            // Render node dots & current move indicator
+                                            for (x, y, color, is_current, is_blunder) in valid {
+                                                let center = point(
+                                                    bounds.origin.x + bounds.size.width * x,
+                                                    bounds.origin.y + bounds.size.height * y,
+                                                );
+
+                                                if is_current {
+                                                    // Vertical cursor line at active move
+                                                    let mut cursor_line =
+                                                        PathBuilder::stroke(px(1.5));
+                                                    cursor_line
+                                                        .move_to(point(center.x, bounds.origin.y));
+                                                    cursor_line.line_to(point(
+                                                        center.x,
+                                                        bounds.origin.y + bounds.size.height,
+                                                    ));
+                                                    if let Ok(path) = cursor_line.build() {
+                                                        window.paint_path(
+                                                            path,
+                                                            hsla(0.55, 0.9, 0.6, 0.65),
+                                                        );
+                                                    }
+                                                }
+
+                                                let dot_radius = if is_current {
+                                                    px(4.5)
+                                                } else if is_blunder {
+                                                    px(3.5)
+                                                } else {
+                                                    px(2.0)
+                                                };
+                                                window.paint_quad(gpui::quad(
+                                                    gpui::Bounds {
+                                                        origin: point(
+                                                            center.x - dot_radius,
+                                                            center.y - dot_radius,
+                                                        ),
+                                                        size: gpui::size(
+                                                            dot_radius * 2.0,
+                                                            dot_radius * 2.0,
+                                                        ),
+                                                    },
+                                                    dot_radius,
+                                                    rgb(color),
+                                                    if is_current { px(1.5) } else { px(0.0) },
+                                                    rgb(0xffffff),
+                                                    gpui::BorderStyle::default(),
+                                                ));
+                                            }
+                                        },
+                                    )
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h_full(),
                                 )
-                        })),
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .w_full()
+                                        .h_full()
+                                        .flex()
+                                        .children(points.iter().enumerate().map(|(index, _)| {
+                                            let handler = on_node_clicked.clone();
+                                            let node_id = points[index].node_id.clone();
+                                            div()
+                                                .id(("winrate-scrub-cell", index))
+                                                .flex_1()
+                                                .h_full()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_: &MouseDownEvent,
+                                                          window: &mut Window,
+                                                          cx: &mut App| {
+                                                        handler(&node_id, window, cx);
+                                                    },
+                                                )
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    // X-Axis Move Number Ticks (Bottom Row)
+                    div()
+                        .pl(px(36.0))
+                        .pr_1()
+                        .flex()
+                        .justify_between()
+                        .text_xs()
+                        .text_color(rgb(0x71717a))
+                        .child("0")
+                        .children((1..=4).filter_map(|i| {
+                            let move_val = i * x_step;
+                            (move_val < total_moves).then(|| div().child(move_val.to_string()))
+                        }))
+                        .child(format!("{total_moves}")),
                 )
         } else {
             div()
-                .id("winrate-graph-empty")
-                .debug_selector(|| "winrate-graph-empty".to_owned())
                 .flex_1()
+                .min_h_0()
+                .rounded_md()
+                .bg(rgb(0x121214))
+                .border_1()
+                .border_color(rgb(0x26262c))
+                .p_3()
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded_md()
-                .bg(rgb(palette.input))
                 .text_xs()
                 .text_color(rgb(palette.subtle))
-                .child("No winrate data on this variation")
+                .child("暂无胜率记录。连接分析引擎或开启自动分析后实时生成走势图。")
         })
 }
 
 /// Renders the LizzieYZY-style blunder and mistake inspection panel in the right sidebar.
+#[allow(dead_code)]
 pub fn render_blunder_list_panel(
     blunders: &[sabaki_host::BlunderEntry],
     palette: UiPalette,
@@ -3593,6 +3818,45 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
     let best_score_lead = candidates.first().and_then(|e| e.score_lead);
     let total_visits: u64 = candidates.iter().map(|e| e.visits).sum();
 
+    let winrate_metric = crate::winrate_graph::WinrateGraphMetric::from_setting(
+        shell.settings.get_str("board.analysis_type"),
+    );
+    let live_player_winrate =
+        crate::engine_console::best_analysis_entry(&shell.analysis).map(|entry| entry.winrate);
+    let live_score_lead = crate::engine_console::best_analysis_entry(&shell.analysis)
+        .and_then(|entry| entry.score_lead)
+        .filter(|lead| lead.is_finite());
+
+    // Compute winrate graph history points for embedded OGS graph card
+    let history = crate::winrate_graph::winrate_history(
+        &snapshot,
+        live_player_winrate,
+        live_score_lead,
+        snapshot.board.next_player,
+    );
+    let graph_points = crate::winrate_graph::graph_plot_points(
+        &history,
+        winrate_metric,
+        shell
+            .settings
+            .get_bool("view.winrategraph_invert")
+            .unwrap_or(false),
+        shell
+            .settings
+            .get("view.winrategraph_blunderthreshold")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(5.0),
+        5.0,
+    );
+
+    let weak_shell = cx.entity().downgrade();
+    let on_node_clicked =
+        move |node_id: &sabaki_domain_core::NodeId, _: &mut Window, cx: &mut App| {
+            weak_shell
+                .update(cx, |shell, cx| shell.navigate_to_node(node_id.clone(), cx))
+                .ok();
+        };
+
     div()
         .id("engine-sidebar")
         .debug_selector(|| "engine-sidebar".to_owned())
@@ -3601,38 +3865,11 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_2p5()
         .p_3()
         .bg(rgb(shell.palette.input))
         .text_xs()
-        // Section 1: Header with Rule, Komi, Handicap
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .p_2()
-                .rounded_md()
-                .bg(rgb(shell.palette.panel))
-                .border_1()
-                .border_color(rgb(shell.palette.border))
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child(format!("📊 {}", rule_config.ruleset.label())),
-                )
-                .child(div().text_color(rgb(shell.palette.muted)).child(format!(
-                    "贴目 {:.1}目{}",
-                    rule_config.komi,
-                    if rule_config.handicap >= 2 {
-                        format!(" (让{}子)", rule_config.handicap)
-                    } else {
-                        String::new()
-                    }
-                ))),
-        )
-        // Section 2: AI Live Scorecard (Winrate & Score Lead)
+        // Card 1: AI 局面评估与好坏棋统计 (整合规则与贴目信息，移除 sgf2gif 字样)
         .child(
             div()
                 .p_2p5()
@@ -3642,7 +3879,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                 .border_color(rgb(shell.palette.border))
                 .flex()
                 .flex_col()
-                .gap_1p5()
+                .gap_2()
                 .child(
                     div()
                         .flex()
@@ -3650,9 +3887,27 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .justify_between()
                         .child(
                             div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("AI 局面评估"),
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.text))
+                                        .child("AI 局面评估"),
+                                )
+                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                    format!(
+                                        "{} · 贴目 {:.1}目{}",
+                                        rule_config.ruleset.label(),
+                                        rule_config.komi,
+                                        if rule_config.handicap >= 2 {
+                                            format!(" (让{}子)", rule_config.handicap)
+                                        } else {
+                                            String::new()
+                                        }
+                                    ),
+                                )),
                         )
                         .child(
                             div()
@@ -3668,9 +3923,9 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                                 .batch_review_progress
                                                 .is_some_and(|p| p.is_running)
                                             {
-                                                "⏹ 停止全盘复盘"
+                                                "⏹ 停止复盘"
                                             } else {
-                                                "⏩ 全盘 AI 复盘"
+                                                "⏩ 全盘复盘"
                                             },
                                         )
                                         .on_click(cx.listener(|shell, _, _, cx| {
@@ -3688,6 +3943,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 )),
                         ),
                 )
+                // Real-time Winrate & Score Lead
                 .child(
                     div()
                         .flex()
@@ -3698,7 +3954,11 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .text_base()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(shell.palette.text))
-                                .child(format!("胜率: {:.1}%", live_winrate * 100.0)),
+                                .child(format!(
+                                    "胜率: 黑 {:.1}% · 白 {:.1}%",
+                                    live_winrate * 100.0,
+                                    (1.0 - live_winrate) * 100.0
+                                )),
                         )
                         .child(
                             div()
@@ -3711,37 +3971,42 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 }))
                                 .child(
                                     best_score_lead
-                                        .map(|s| format!("领先: {:+.1} 目", s))
-                                        .unwrap_or_else(|| "领先: 0.0 目".to_owned()),
+                                        .map(|s| {
+                                            if s >= 0.0 {
+                                                format!("黑领先 +{:.1} 目", s)
+                                            } else {
+                                                format!("白领先 +{:.1} 目", -s)
+                                            }
+                                        })
+                                        .unwrap_or_else(|| "均势 0.0 目".to_owned()),
                                 ),
                         ),
                 )
-                // Winrate bar
+                // Dual Winrate Bar (Black vs White)
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child("黑")
+                        .child(div().text_color(rgb(shell.palette.subtle)).child("黑"))
                         .child(
                             div()
                                 .flex_1()
                                 .h(px(8.0))
                                 .rounded(px(2.0))
-                                .bg(rgb(shell.palette.track))
+                                .bg(rgb(0xf4f4f5))
                                 .child(
                                     div()
                                         .h_full()
-                                        .w(px(live_winrate as f32 * 140.0))
-                                        .bg(rgb(shell.palette.text)),
+                                        .w(px((live_winrate as f32).clamp(0.0, 1.0) * 160.0))
+                                        .bg(rgb(0x18181b)),
                                 ),
                         )
-                        .child("白"),
+                        .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
                 )
-                // Move quality badge
+                // Current Move Quality evaluation (if any)
                 .children(current_eval.map(|ev| {
                     div()
-                        .mt_1()
                         .p_1p5()
                         .rounded_md()
                         .bg(rgb(shell.palette.input))
@@ -3759,9 +4024,73 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .text_color(rgb(shell.palette.muted))
                                 .child(format!("损失 {:.1}目", ev.points_lost)),
                         )
-                })),
+                }))
+                // KaTrain Move Quality Classification Table
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .pt_1()
+                        .border_t_1()
+                        .border_color(rgb(shell.palette.border))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(shell.palette.muted))
+                                .child("好坏棋评级")
+                                .child("黑棋")
+                                .child("白棋"),
+                        )
+                        .child(render_stat_row(
+                            "🌟 最佳 (Best)",
+                            summary.black_best_count,
+                            summary.white_best_count,
+                            0x10b981,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟢 好手 (Good)",
+                            summary.black_good_count,
+                            summary.white_good_count,
+                            0x0ea5e9,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟡 疑问 (Inaccuracy)",
+                            summary.black_inaccuracy_count,
+                            summary.white_inaccuracy_count,
+                            0xf59e0b,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🟠 错着 (Mistake)",
+                            summary.black_mistake_count,
+                            summary.white_mistake_count,
+                            0xf97316,
+                            shell,
+                        ))
+                        .child(render_stat_row(
+                            "🔴 恶手 (Blunder)",
+                            summary.black_blunder_count,
+                            summary.white_blunder_count,
+                            0xef4444,
+                            shell,
+                        )),
+                ),
         )
-        // Section 3: AI Candidate Moves Table
+        // Card 2: 胜率与目差走势图卡片 (OGS 风格，置于 AI 评估卡片下方)
+        .child(render_winrate_graph_panel(
+            &graph_points,
+            winrate_metric,
+            210.0,
+            shell.palette,
+            on_node_clicked,
+            cx,
+        ))
+        // Card 3: AI 候选点推荐卡片 (置于胜率图卡片下方，不显示长串 PV 文本，点击即预览)
         .child(
             div()
                 .p_2p5()
@@ -3781,7 +4110,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             div()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(shell.palette.subtle))
-                                .child(format!("候选点 · {}", candidates.len())),
+                                .child(format!("AI 候选点 · {}", candidates.len())),
                         )
                         .child(
                             div()
@@ -3805,20 +4134,6 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .score_lead
                                 .map(|s| format!("{:+.1}目", s))
                                 .unwrap_or_default();
-                            let pv_str = if entry.pv.is_empty() {
-                                String::new()
-                            } else {
-                                format!(
-                                    "PV: {}",
-                                    entry
-                                        .pv
-                                        .iter()
-                                        .take(4)
-                                        .cloned()
-                                        .collect::<Vec<_>>()
-                                        .join(" → ")
-                                )
-                            };
 
                             let is_active_preview = shell.hovered_candidate_vertex.as_deref()
                                 == hover_vertex.as_deref();
@@ -3845,51 +4160,40 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 })
                                 .hover(|style| style.bg(rgb(shell.palette.button_active)))
                                 .flex()
-                                .flex_col()
-                                .gap_1()
+                                .items_center()
+                                .justify_between()
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
-                                        .justify_between()
+                                        .gap_1p5()
                                         .child(
                                             div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1p5()
-                                                .child(
-                                                    div()
-                                                        .font_weight(FontWeight::BOLD)
-                                                        .text_color(if is_active_preview {
-                                                            rgb(0x38bdf8)
-                                                        } else if is_best {
-                                                            rgb(shell.palette.accent)
-                                                        } else {
-                                                            rgb(shell.palette.text)
-                                                        })
-                                                        .child(format!("#{} {}", idx + 1, vtx)),
-                                                )
-                                                .children(is_active_preview.then(|| {
-                                                    Badge::new().small().child("👁 预览中")
-                                                })),
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(if is_active_preview {
+                                                    rgb(0x38bdf8)
+                                                } else if is_best {
+                                                    rgb(shell.palette.accent)
+                                                } else {
+                                                    rgb(shell.palette.text)
+                                                })
+                                                .child(format!("#{} {}", idx + 1, vtx)),
                                         )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(rgb(shell.palette.subtle))
-                                                .child(format!(
-                                                    "{:.1}% · {} · {}v",
-                                                    wr_pct, score_str, entry.visits
-                                                )),
+                                        .children(
+                                            is_active_preview
+                                                .then(|| Badge::new().small().child("👁 预览中")),
                                         ),
                                 )
-                                .children((!pv_str.is_empty()).then(|| {
+                                .child(
                                     div()
                                         .text_xs()
-                                        .text_color(rgb(shell.palette.muted))
-                                        .child(pv_str)
-                                }))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(shell.palette.subtle))
+                                        .child(format!(
+                                            "{:.1}% · {} · {}v",
+                                            wr_pct, score_str, entry.visits
+                                        )),
+                                )
                                 .id(("candidate-row", idx))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -3913,108 +4217,6 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         }),
                     )
                 }),
-        )
-        // Section 4: Full-Game Review Statistics Summary (KaTrain / sgf2gif)
-        .child(
-            div()
-                .p_2p5()
-                .rounded_md()
-                .bg(rgb(shell.palette.panel))
-                .border_1()
-                .border_color(rgb(shell.palette.border))
-                .flex()
-                .flex_col()
-                .gap_1p5()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("整局好坏棋复盘 (SGF2GIF 统计)"),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(shell.palette.muted))
-                                .child(format!("共 {} 手", summary.total_moves)),
-                        ),
-                )
-                // KaTrain Category Counts Grid
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .text_color(rgb(shell.palette.muted))
-                                .child("评级")
-                                .child("黑棋")
-                                .child("白棋"),
-                        )
-                        .child(render_stat_row(
-                            "🌟 最佳 (Best)",
-                            summary.black_best_count,
-                            summary.white_best_count,
-                            0x10b981,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟢 好手 (Good)",
-                            summary.black_good_count,
-                            summary.white_good_count,
-                            0x0ea5e9,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟡 略亏 (Inaccuracy)",
-                            summary.black_inaccuracy_count,
-                            summary.white_inaccuracy_count,
-                            0xf59e0b,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟠 疑问 (Mistake)",
-                            summary.black_mistake_count,
-                            summary.white_mistake_count,
-                            0xf97316,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🔴 恶手 (Blunder)",
-                            summary.black_blunder_count,
-                            summary.white_blunder_count,
-                            0xef4444,
-                            shell,
-                        )),
-                )
-                // Averages
-                .child(
-                    div()
-                        .mt_1()
-                        .p_1()
-                        .rounded_sm()
-                        .bg(rgb(shell.palette.input))
-                        .flex()
-                        .justify_between()
-                        .child(div().child(format!("黑均损: {:.1}目", summary.black_avg_loss)))
-                        .child(div().child(format!("白均损: {:.1}目", summary.white_avg_loss))),
-                )
-                // Export GIF Button
-                .child(
-                    Button::new("export-gif-button")
-                        .small()
-                        .outline()
-                        .label("🎬 导出动画 GIF 棋谱 (sgf2gif)...")
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
-                        })),
-                ),
         )
 }
 
@@ -4380,30 +4582,57 @@ pub fn render_node_inspector_panel(
                     .gap_1()
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(shell.palette.subtle))
-                            .child("Comment"),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(shell.palette.subtle))
+                                    .child("💬 局面解说 / 评论 (Markdown)"),
+                            )
+                            .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                if metadata.comment.is_empty() {
+                                    "可直接输入 Markdown"
+                                } else {
+                                    "已渲染解说"
+                                },
+                            )),
                     )
                     .child(
                         div()
                             .track_focus(&shell.comment_focus_handle)
                             .px_3()
                             .py_2()
+                            .min_h(px(80.0))
                             .border_1()
-                            .border_color(rgb(shell.palette.border))
+                            .border_color(rgb(
+                                if shell.active_text_input == Some(crate::ActiveTextInput::Comment)
+                                {
+                                    0x38bdf8
+                                } else {
+                                    shell.palette.border
+                                },
+                            ))
                             .rounded_md()
                             .bg(rgb(shell.palette.input))
                             .text_color(rgb(shell.palette.text))
                             .text_xs()
                             .child(if shell.comment_input.text().is_empty() {
                                 if metadata.comment.is_empty() {
-                                    "No comment on this move. Click to add a note...".to_owned()
+                                    div()
+                                        .text_color(rgb(0x71717a))
+                                        .child("点击此处直接输入 Markdown 局面解说 / 棋谱评论...")
                                 } else {
-                                    metadata.comment.clone()
+                                    div()
+                                        .text_color(rgb(shell.palette.text))
+                                        .child(metadata.comment.clone())
                                 }
                             } else {
-                                shell.comment_input.text().to_owned()
+                                div()
+                                    .text_color(rgb(shell.palette.text))
+                                    .child(shell.comment_input.text().to_owned())
                             })
                             .on_mouse_down(
                                 MouseButton::Left,
