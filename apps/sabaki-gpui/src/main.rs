@@ -4714,12 +4714,14 @@ impl ShellApp {
 
     /// Ignore delayed leave events from a different candidate row. GPUI hover
     /// transitions can overlap while moving from one row into another's action.
+    #[allow(dead_code)]
     fn clear_hovered_candidate_if(&mut self, vertex: &str, cx: &mut Context<Self>) {
         if self.hovered_candidate_vertex.as_deref() == Some(vertex) {
             self.set_hovered_candidate(None, cx);
         }
     }
 
+    #[allow(dead_code)]
     fn on_trial_candidate(&mut self, vertex: &str, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let Some((column, row)) = parse_gtp_vertex(snapshot.board.width, vertex) else {
@@ -4747,6 +4749,7 @@ impl ShellApp {
         }
     }
 
+    #[allow(dead_code)]
     fn clear_trial_move(&mut self, cx: &mut Context<Self>) {
         if self.trial_move.take().is_some() {
             self.active_analysis_trial_move = None;
@@ -4770,6 +4773,7 @@ impl ShellApp {
         }
     }
 
+    #[allow(dead_code)]
     fn on_branch_candidate_pv(&mut self, pv: &[String], cx: &mut Context<Self>) {
         if pv.is_empty() {
             return;

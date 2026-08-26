@@ -3800,7 +3800,6 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             let vtx = entry.vertex.as_deref().unwrap_or("pass");
                             let is_best = idx == 0;
                             let hover_vertex = entry.vertex.clone();
-                            let trial_vertex = entry.vertex.clone();
                             let wr_pct = entry.winrate * 100.0;
                             let score_str = entry
                                 .score_lead
@@ -3821,23 +3820,33 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 )
                             };
 
+                            let is_active_preview = shell.hovered_candidate_vertex.as_deref()
+                                == hover_vertex.as_deref();
+                            let click_vertex = hover_vertex.clone();
+
                             div()
-                                .p_1p5()
+                                .p_2()
                                 .rounded_md()
+                                .cursor_pointer()
                                 .border_1()
-                                .border_color(if is_best {
+                                .border_color(if is_active_preview {
+                                    rgb(0x38bdf8)
+                                } else if is_best {
                                     rgb(shell.palette.accent)
                                 } else {
                                     rgb(shell.palette.border)
                                 })
-                                .bg(if is_best {
+                                .bg(if is_active_preview {
                                     rgb(shell.palette.button_active)
-                                } else {
+                                } else if is_best {
                                     rgb(shell.palette.input)
+                                } else {
+                                    rgb(shell.palette.panel)
                                 })
+                                .hover(|style| style.bg(rgb(shell.palette.button_active)))
                                 .flex()
                                 .flex_col()
-                                .gap_0p5()
+                                .gap_1()
                                 .child(
                                     div()
                                         .flex()
@@ -3845,74 +3854,59 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .justify_between()
                                         .child(
                                             div()
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(if is_best {
-                                                    rgb(shell.palette.accent)
-                                                } else {
-                                                    rgb(shell.palette.text)
-                                                })
-                                                .child(format!("#{} {}", idx + 1, vtx)),
+                                                .flex()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(if is_active_preview {
+                                                            rgb(0x38bdf8)
+                                                        } else if is_best {
+                                                            rgb(shell.palette.accent)
+                                                        } else {
+                                                            rgb(shell.palette.text)
+                                                        })
+                                                        .child(format!("#{} {}", idx + 1, vtx)),
+                                                )
+                                                .children(is_active_preview.then(|| {
+                                                    Badge::new().small().child("👁 预览中")
+                                                })),
                                         )
                                         .child(
                                             div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_1()
-                                                .child(
-                                                    div()
-                                                        .text_color(rgb(shell.palette.text))
-                                                        .child(format!(
-                                                            "{:.1}% · {} · {}v",
-                                                            wr_pct, score_str, entry.visits
-                                                        )),
-                                                )
-                                                .children((!entry.pv.is_empty()).then(|| {
-                                                    let pv_clone = entry.pv.clone();
-                                                    Button::new(("branch-btn", idx))
-                                                        .xsmall()
-                                                        .outline()
-                                                        .label("+ 分支")
-                                                        .tooltip(
-                                                            "将此 AI 推荐变化图作为新分支加入棋谱",
-                                                        )
-                                                        .on_click(cx.listener(
-                                                            move |shell, _, _, cx| {
-                                                                shell.on_branch_candidate_pv(
-                                                                    &pv_clone, cx,
-                                                                );
-                                                            },
-                                                        ))
-                                                }))
-                                                .children(trial_vertex.map(|vertex| {
-                                                    let vertex_for_handler = vertex.clone();
-                                                    Button::new(("trial-btn", idx))
-                                                        .xsmall()
-                                                        .primary()
-                                                        .label("试下")
-                                                        .tooltip(
-                                                            "在棋盘上试下此点并让 AI 给出即时应对",
-                                                        )
-                                                        .on_click(cx.listener(
-                                                            move |shell, _, _, cx| {
-                                                                shell.on_trial_candidate(
-                                                                    &vertex_for_handler,
-                                                                    cx,
-                                                                );
-                                                            },
-                                                        ))
-                                                })),
+                                                .text_xs()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(rgb(shell.palette.subtle))
+                                                .child(format!(
+                                                    "{:.1}% · {} · {}v",
+                                                    wr_pct, score_str, entry.visits
+                                                )),
                                         ),
                                 )
                                 .children((!pv_str.is_empty()).then(|| {
-                                    div().text_color(rgb(shell.palette.subtle)).child(pv_str)
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.muted))
+                                        .child(pv_str)
                                 }))
                                 .id(("candidate-row", idx))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell, _, _, cx| {
+                                        if shell.hovered_candidate_vertex.as_deref()
+                                            == click_vertex.as_deref()
+                                        {
+                                            shell.set_hovered_candidate(None, cx);
+                                        } else {
+                                            shell.set_hovered_candidate(click_vertex.clone(), cx);
+                                        }
+                                    }),
+                                )
                                 .on_hover(cx.listener(
                                     move |shell, is_hovering: &bool, _window, cx| {
                                         if *is_hovering {
                                             shell.set_hovered_candidate(hover_vertex.clone(), cx);
-                                        } else if let Some(vertex) = hover_vertex.as_deref() {
-                                            shell.clear_hovered_candidate_if(vertex, cx);
                                         }
                                     },
                                 ))
@@ -5071,7 +5065,7 @@ pub fn render_analysis_preview_panel(
     snapshot: &GameSnapshot,
     theme: &crate::theme::ThemeTokens,
     shell: &ShellApp,
-    cx: &Context<ShellApp>,
+    _cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
     let selected = shell
         .hovered_candidate_vertex
@@ -5176,31 +5170,8 @@ pub fn render_analysis_preview_panel(
                         .text_color(rgb(shell.palette.subtle))
                         .child("AI 变化预览"),
                 )
-                .child(if shell.trial_move.is_some() {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div().text_xs().text_color(rgb(shell.palette.accent)).child(
-                                preview
-                                    .as_ref()
-                                    .map(|(vertex, _)| vertex.clone())
-                                    .unwrap_or_else(|| "试下".to_owned()),
-                            ),
-                        )
-                        .child(
-                            Button::new("exit-trial-button")
-                                .xsmall()
-                                .danger()
-                                .label("退出")
-                                .tooltip("退出试下局面并恢复当前对局分析")
-                                .on_click(
-                                    cx.listener(|shell, _, _, cx| shell.clear_trial_move(cx)),
-                                ),
-                        )
-                } else if let Some((vertex, _)) = preview.as_ref() {
-                    div().child(Badge::new().small().child(vertex.clone()))
+                .child(if let Some((vertex, _)) = preview.as_ref() {
+                    div().child(Badge::new().small().child(format!("选点 {vertex}")))
                 } else {
                     div().child(Badge::new().small().child("待机"))
                 }),
