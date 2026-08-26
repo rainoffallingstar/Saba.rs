@@ -5,10 +5,23 @@ use thiserror::Error;
 
 pub mod gtp;
 pub mod legacy;
+pub mod opening;
+pub mod review;
 pub mod scoring;
+pub mod session;
+pub mod time_control;
 
+pub use opening::OpeningConvention;
+pub use review::ReviewProfile;
 pub use scoring::{
-    DEFAULT_KOMI, ScoreResult, StoneChain, find_chains, mark_surrounded_chains, score_board,
+    DEFAULT_KOMI, ScoreResult, ScoringRule, StoneChain, find_chains, mark_surrounded_chains,
+    score_board, score_board_with_rule,
+};
+pub use session::{
+    AnalysisPolicy, MatchParticipants, PlayerKind, SessionMode, SessionPolicy, SessionSource,
+};
+pub use time_control::{
+    ClockController, ClockEvent, ClockPhase, ClockState, PlayerClock, TimeControl,
 };
 
 pub const CURRENT_GAME_SCHEMA_VERSION: u32 = 1;
@@ -504,6 +517,16 @@ impl GameDocument {
     pub fn set_source_path(&mut self, source_path: Option<String>) {
         self.source_path = source_path;
         self.mark_saved();
+    }
+
+    /// Restores the selected node from editor workspace state without creating
+    /// undo history or marking the SGF document dirty.
+    pub fn restore_current_node(&mut self, node_id: &str) -> Result<(), DomainError> {
+        if !self.node_store.contains_key(node_id) {
+            return Err(DomainError::MissingNode(node_id.to_owned()));
+        }
+        self.current_node_id = node_id.to_owned();
+        Ok(())
     }
 
     pub fn mark_saved(&mut self) {

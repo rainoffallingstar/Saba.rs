@@ -120,6 +120,21 @@ impl ExternalFileStore {
             .as_ref()
             .map(|tracked_file| tracked_file.path.clone())
     }
+
+    /// Returns the fingerprint of the last accepted on-disk baseline. This is
+    /// distinct from the active document content when the document is dirty.
+    pub fn tracked_fingerprint(&self) -> Option<String> {
+        self.tracked_file
+            .as_ref()
+            .map(|tracked_file| tracked_file.fingerprint.clone())
+    }
+
+    /// Restores a previously captured external-file baseline without treating
+    /// the current document snapshot as the file's on-disk contents.
+    pub fn track_file_with_fingerprint(&mut self, path: PathBuf, fingerprint: String) {
+        self.tracked_file = Some(TrackedFile { path, fingerprint });
+        self.status = ExternalFileStatus::Unchanged;
+    }
 }
 
 pub fn decide_external_file_change(
@@ -309,6 +324,27 @@ mod tests {
         store.track_file(std::path::PathBuf::from("/games/game.sgf"), "(;C[after])");
 
         assert_eq!(store.status().status, ExternalFileStatus::Unchanged);
+    }
+
+    #[test]
+    fn persisted_fingerprint_restores_the_disk_baseline_for_a_dirty_tab() {
+        let game_path = "/games/game.sgf";
+        let original = "(;C[original])";
+        let fingerprint = super::fingerprint_content(original);
+        let mut store = ExternalFileStore::default();
+        store.track_file_with_fingerprint(std::path::PathBuf::from(game_path), fingerprint.clone());
+        let reader = MemoryExternalFileReader {
+            files: BTreeMap::from([(game_path.to_owned(), original.to_owned())]),
+        };
+
+        assert_eq!(
+            store.tracked_fingerprint().as_deref(),
+            Some(fingerprint.as_str())
+        );
+        assert_eq!(
+            store.decide_current_file_change(true, &reader),
+            ExternalFileDecision::KeepStatus(ExternalFileStatus::Unchanged)
+        );
     }
 
     #[test]

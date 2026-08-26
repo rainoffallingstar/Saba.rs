@@ -23,6 +23,14 @@
       {
         "id": "org.ryusei.katago-setup-hub.download_strongest",
         "title": "Download Strongest Model (240MB)"
+      },
+      {
+        "id": "org.ryusei.katago-setup-hub.refresh",
+        "title": "Refresh KataGo Version and Weights"
+      },
+      {
+        "id": "org.ryusei.katago-setup-hub.update_binary",
+        "title": "Update KataGo Binary (Windows/Linux)"
       }
     ],
     "panels": [

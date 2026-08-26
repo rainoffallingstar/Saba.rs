@@ -197,6 +197,7 @@ fn err(content: &str) -> GtpResponse {
 /// Parses an engine-management spec line of the form
 /// `Name | /path/to/engine | args | startup commands` (name and path
 /// required; `args` and `commands` optional) into a validated `EngineRecord`.
+#[allow(dead_code)]
 pub fn parse_engine_spec(spec: &str) -> Result<ryusei_host::EngineRecord, String> {
     let mut parts = spec.splitn(4, '|').map(str::trim);
     let name = parts.next().unwrap_or_default();
@@ -328,6 +329,7 @@ impl EngineRoleAssignments {
         }
     }
 
+    #[allow(dead_code)]
     pub fn clear_engine(&mut self, engine_name: &str) {
         for slot in [&mut self.analysis, &mut self.black, &mut self.white] {
             if slot.as_deref() == Some(engine_name) {

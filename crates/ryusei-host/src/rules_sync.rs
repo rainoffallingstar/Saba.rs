@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GoRuleset {
     Chinese,
+    /// Ancient Chinese area scoring with group tax (还棋头).
+    AncientChinese,
     Japanese,
     Korean,
     Aga,
@@ -16,10 +18,15 @@ pub enum GoRuleset {
 }
 
 impl GoRuleset {
-    /// Canonical KataGo rules string used with `kata-set-rules`.
+    /// Canonical KataGo rules argument used with `kata-set-rules`.
     pub fn katago_name(self) -> &'static str {
         match self {
             GoRuleset::Chinese => "chinese",
+            // KataGo requires a JSON rules object for the historical group-tax
+            // preset; there is no portable named "ancient" rule.
+            GoRuleset::AncientChinese => {
+                r#"{"koRule":"SIMPLE","scoringRule":"AREA","taxRule":"ALL","suicide":false,"whiteHandicapBonus":"N","hasButton":false}"#
+            }
             GoRuleset::Japanese => "japanese",
             GoRuleset::Korean => "korean",
             GoRuleset::Aga => "aga",
@@ -32,6 +39,7 @@ impl GoRuleset {
     pub fn label(self) -> &'static str {
         match self {
             GoRuleset::Chinese => "中国规则 (Chinese / 数子法)",
+            GoRuleset::AncientChinese => "中国古谱规则 (还棋头 / Ancient Chinese)",
             GoRuleset::Japanese => "日本规则 (Japanese / 目数法)",
             GoRuleset::Korean => "韩国规则 (Korean)",
             GoRuleset::Aga => "AGA 规则 (American)",
@@ -50,6 +58,7 @@ impl GoRuleset {
                 | GoRuleset::Aga
                 | GoRuleset::TrompTaylor
                 | GoRuleset::NewZealand => 7.5,
+                GoRuleset::AncientChinese => 0.0,
                 GoRuleset::Japanese | GoRuleset::Korean => 6.5,
             }
         }
@@ -58,7 +67,18 @@ impl GoRuleset {
     /// Parses an SGF `RU` property value into a standard Go ruleset.
     pub fn from_sgf_ru(ru: &str) -> Self {
         let trimmed = ru.trim().to_lowercase();
-        if trimmed.contains("japan") || trimmed.contains("nihon") || trimmed.contains("territory") {
+        if trimmed.contains("ancient")
+            || trimmed.contains("old chinese")
+            || trimmed.contains("chinese-ancient")
+            || trimmed.contains("中古")
+            || trimmed.contains("古棋")
+            || trimmed.contains("还棋头")
+        {
+            GoRuleset::AncientChinese
+        } else if trimmed.contains("japan")
+            || trimmed.contains("nihon")
+            || trimmed.contains("territory")
+        {
             GoRuleset::Japanese
         } else if trimmed.contains("korea") || trimmed.contains("hangul") {
             GoRuleset::Korean
@@ -134,6 +154,14 @@ mod tests {
     #[test]
     fn parses_various_sgf_rules_strings() {
         assert_eq!(GoRuleset::from_sgf_ru("Chinese"), GoRuleset::Chinese);
+        assert_eq!(
+            GoRuleset::from_sgf_ru("Chinese-ancient / tax ALL"),
+            GoRuleset::AncientChinese
+        );
+        assert_eq!(
+            GoRuleset::from_sgf_ru("中古规则"),
+            GoRuleset::AncientChinese
+        );
         assert_eq!(GoRuleset::from_sgf_ru("Japanese"), GoRuleset::Japanese);
         assert_eq!(GoRuleset::from_sgf_ru("korean"), GoRuleset::Korean);
         assert_eq!(GoRuleset::from_sgf_ru("AGA"), GoRuleset::Aga);
@@ -142,6 +170,22 @@ mod tests {
             GoRuleset::TrompTaylor
         );
         assert_eq!(GoRuleset::from_sgf_ru("Unknown"), GoRuleset::Chinese);
+    }
+
+    #[test]
+    fn ancient_rules_use_zero_komi_and_group_tax_json() {
+        let mut props = BTreeMap::new();
+        props.insert("RU".to_owned(), vec!["Ancient Chinese".to_owned()]);
+        let config = GameRuleConfig::from_root_properties(&props, 19);
+        assert_eq!(config.ruleset, GoRuleset::AncientChinese);
+        assert_eq!(config.komi, 0.0);
+        let commands = config.to_gtp_setup_commands();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.contains("taxRule\":\"ALL"))
+        );
+        assert!(commands.iter().any(|command| command == "komi 0.0"));
     }
 
     #[test]

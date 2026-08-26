@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, time::Duration};
 use ryusei_domain_core::gtp::{
     DEFAULT_COMMAND_TIMEOUT, GtpError, GtpProcessSupervisor, GtpResponse, SEARCH_COMMAND_TIMEOUT,
 };
+use ryusei_domain_core::{ClockState, Color, TimeControl};
 use thiserror::Error;
 
 use crate::engine_workflow::EngineRecord;
@@ -138,6 +139,8 @@ pub enum EngineSessionError {
     Transport(#[from] GtpError),
     #[error("engine rejected the {0} handshake: {1}")]
     Handshake(String, String),
+    #[error("engine rejected `{command}`: {content}")]
+    CommandRejected { command: String, content: String },
     #[error("engine did not report a version")]
     MissingVersion,
 }
@@ -325,6 +328,73 @@ impl<T: GtpTransport> EngineSession<T> {
             .send_with_timeout("genmove", vec![color.to_owned()], self.timeouts.search)
     }
 
+    /// Configures the engine's clock before a local or remote game starts.
+    pub fn set_time_control(&mut self, control: TimeControl) -> Result<GtpResponse, GtpError> {
+        let arguments = match control {
+            TimeControl::None => vec!["0".to_owned(), "0".to_owned(), "0".to_owned()],
+            TimeControl::Absolute { main_time_secs } => {
+                vec![main_time_secs.to_string(), "0".to_owned(), "0".to_owned()]
+            }
+            TimeControl::ByoYomi {
+                main_time_secs,
+                period_time_secs,
+                periods,
+            } => vec![
+                main_time_secs.to_string(),
+                period_time_secs.to_string(),
+                periods.to_string(),
+            ],
+        };
+        self.send_ordinary("time_settings", arguments)
+    }
+
+    /// Synchronizes a local predictive clock to a GTP engine before `genmove`.
+    /// Remote adapters must pass their server-authoritative clock state here.
+    pub fn sync_clock_state(&mut self, state: ClockState) -> Result<(), EngineSessionError> {
+        if matches!(state.control, TimeControl::None) {
+            return Ok(());
+        }
+        let settings = self.set_time_control(state.control)?;
+        if !settings.success {
+            return Err(EngineSessionError::CommandRejected {
+                command: "time_settings".to_owned(),
+                content: settings.content,
+            });
+        }
+        for color in [Color::Black, Color::White] {
+            let player = state.player(color);
+            let response =
+                self.set_time_left(color, player.display_remaining(), player.periods_remaining)?;
+            if !response.success {
+                return Err(EngineSessionError::CommandRejected {
+                    command: "time_left".to_owned(),
+                    content: response.content,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Reports the current remaining time for one color to the engine.
+    pub fn set_time_left(
+        &mut self,
+        color: Color,
+        remaining: std::time::Duration,
+        periods: u32,
+    ) -> Result<GtpResponse, GtpError> {
+        self.send_ordinary(
+            "time_left",
+            vec![
+                match color {
+                    Color::Black => "B".to_owned(),
+                    Color::White => "W".to_owned(),
+                },
+                format!("{:.3}", remaining.as_secs_f64()),
+                periods.to_string(),
+            ],
+        )
+    }
+
     /// Sends an analysis command (`analyze`, `lz-analyze`, `kata-analyze`,
     /// ...) and parses the engine's response into structured entries. The
     /// transport framing stays request/response; streaming search updates
@@ -397,12 +467,14 @@ mod tests {
     };
     use crate::engine_workflow::EngineRecord;
     use ryusei_domain_core::gtp::{GtpError, GtpResponse};
+    use ryusei_domain_core::{ClockState, Color, TimeControl};
     use std::{cell::RefCell, collections::BTreeMap, time::Duration};
 
     #[derive(Default, Debug)]
     struct MockTransport {
         responses: RefCell<BTreeMap<String, GtpResponse>>,
         calls: RefCell<Vec<String>>,
+        calls_with_arguments: RefCell<Vec<(String, Vec<String>)>>,
         timed_calls: RefCell<Vec<(String, Duration)>>,
         /// Streaming lines consumed by `recv_line_timeout`.
         stream_lines: RefCell<std::collections::VecDeque<String>>,
@@ -435,16 +507,23 @@ mod tests {
         fn calls(&self) -> Vec<String> {
             self.calls.borrow().clone()
         }
+
+        fn calls_with_arguments(&self) -> Vec<(String, Vec<String>)> {
+            self.calls_with_arguments.borrow().clone()
+        }
     }
 
     impl GtpTransport for MockTransport {
         fn send_with_timeout(
             &mut self,
             name: &str,
-            _arguments: Vec<String>,
+            arguments: Vec<String>,
             timeout: Duration,
         ) -> Result<GtpResponse, GtpError> {
             self.calls.borrow_mut().push(name.to_owned());
+            self.calls_with_arguments
+                .borrow_mut()
+                .push((name.to_owned(), arguments));
             self.timed_calls
                 .borrow_mut()
                 .push((name.to_owned(), timeout));
@@ -671,6 +750,79 @@ mod tests {
             calls
                 .iter()
                 .any(|(name, timeout)| name == "stop" && *timeout == timeouts.stop)
+        );
+    }
+
+    #[test]
+    fn typed_time_commands_forward_standard_gtp_arguments() {
+        let transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+        ]);
+        let mut session = EngineSession::start(transport, &record_with_commands(None), 19)
+            .expect("session starts");
+        session
+            .set_time_control(TimeControl::ByoYomi {
+                main_time_secs: 600,
+                period_time_secs: 30,
+                periods: 5,
+            })
+            .expect("time settings succeeds");
+        session
+            .set_time_left(Color::White, Duration::from_millis(12_345), 4)
+            .expect("time left succeeds");
+        let calls = session.transport().calls_with_arguments();
+        assert!(
+            calls
+                .iter()
+                .any(|(name, args)| { name == "time_settings" && args == &["600", "30", "5"] })
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, args)| { name == "time_left" && args == &["W", "12.345", "4"] })
+        );
+    }
+
+    #[test]
+    fn clock_sync_reports_both_player_clocks_before_genmove() {
+        let transport = MockTransport::responding(&[
+            ("name", true, "KataGo"),
+            ("version", true, "1.16.4"),
+            ("boardsize", true, ""),
+            ("clear_board", true, ""),
+            ("time_settings", true, ""),
+            ("time_left", true, ""),
+        ]);
+        let mut session = EngineSession::start(transport, &record_with_commands(None), 19)
+            .expect("session starts");
+        let state = ClockState::new(TimeControl::ByoYomi {
+            main_time_secs: 600,
+            period_time_secs: 30,
+            periods: 5,
+        });
+
+        session
+            .sync_clock_state(state)
+            .expect("clock sync succeeds");
+
+        let calls = session.transport().calls_with_arguments();
+        assert!(
+            calls
+                .iter()
+                .any(|(name, args)| { name == "time_settings" && args == &vec!["600", "30", "5"] })
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, args)| { name == "time_left" && args == &vec!["B", "600.000", "5"] })
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, args)| { name == "time_left" && args == &vec!["W", "600.000", "5"] })
         );
     }
 

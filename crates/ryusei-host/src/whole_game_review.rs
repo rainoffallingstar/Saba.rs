@@ -141,10 +141,9 @@ pub fn active_lineage_moves(snapshot: &GameSnapshot) -> Vec<LineageMove> {
         .filter_map(|node| {
             let (player, property) = if let Some(value) = node.properties.get("B") {
                 (Color::Black, value.first().cloned())
-            } else if let Some(value) = node.properties.get("W") {
-                (Color::White, value.first().cloned())
             } else {
-                return None;
+                let value = node.properties.get("W")?;
+                (Color::White, value.first().cloned())
             };
             Some(LineageMove {
                 move_number: 0,

@@ -10,8 +10,11 @@
 //! supervision concern; the session method returns the entries the engine
 //! emitted for one request.
 
+use serde::{Deserialize, Serialize};
+
 /// One analysis candidate emitted by an engine.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalysisEntry {
     /// Request identifier, when the engine echoes one.
     pub id: Option<u64>,

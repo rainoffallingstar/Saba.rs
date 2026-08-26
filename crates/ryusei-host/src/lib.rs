@@ -12,23 +12,28 @@ pub mod gif_exporter;
 pub mod katago_setup;
 pub mod legacy_styles;
 pub mod move_grading;
+pub mod ogs;
 pub mod persistence;
 pub mod plugin_commands;
 pub mod plugin_controller;
 pub mod plugin_supervisor;
 pub mod plugin_wasm;
 pub mod plugin_workflow;
+pub mod position_exporter;
 pub mod recent_files;
 pub mod rules_sync;
 pub mod settings;
+pub mod sgf_library;
+pub mod starriver_capture;
 pub mod territory_estimator;
 pub mod theme_workflow;
 pub mod whole_game_review;
+pub mod workspace_tabs;
 
 use std::path::PathBuf;
 
 use ryusei_domain_core::{Color, GameDocument, GameSnapshot, GameTransaction, Properties, Vertex};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use analysis::{
@@ -64,17 +69,28 @@ pub use fox_kifu::{
 };
 pub use gif_exporter::{GifExportOptions, export_sgf_to_gif};
 pub use katago_setup::{
-    CurlKataGoModelDownloadAdapter, HardwareBackend, KATAGO_OFFICIAL_RELEASE_BASE,
-    KataGoEnvironment, KataGoModelDownloadAdapter, KataGoModelInstallError, KataGoModelTier,
-    MODEL_BALANCED_NAME, MODEL_BALANCED_URL, MODEL_LIGHTWEIGHT_NAME, MODEL_LIGHTWEIGHT_URL,
-    MODEL_STRONGEST_NAME, MODEL_STRONGEST_URL, build_katago_engine_record,
-    ensure_katago_environment, find_katago_executable, generate_optimized_gtp_config,
-    install_katago_model, install_katago_model_with, katago_storage_dir,
-    repair_katago_engine_record,
+    CurlKataGoModelDownloadAdapter, HardwareBackend, KATAGO_HUMAN_SL_CONFIG_NAME,
+    KATAGO_OFFICIAL_EXTRA_WEIGHTS_PAGE, KATAGO_OFFICIAL_RELEASE_BASE, KATAGO_OFFICIAL_WEIGHTS_PAGE,
+    KataGoEnvironment, KataGoLocalInfo, KataGoModelDownloadAdapter, KataGoModelInstallError,
+    KataGoModelTier, KataGoReleaseAsset, KataGoReleaseInfo, KataGoWeightInfo, MODEL_BALANCED_NAME,
+    MODEL_BALANCED_URL, MODEL_LIGHTWEIGHT_NAME, MODEL_LIGHTWEIGHT_URL, MODEL_STRONGEST_NAME,
+    MODEL_STRONGEST_URL, build_katago_engine_record, build_katago_human_sl_engine_record,
+    download_katago_weight, ensure_katago_environment, fetch_katago_human_sl_weights,
+    fetch_katago_latest_release, fetch_katago_official_weights, find_installed_normal_katago_model,
+    find_katago_executable, generate_human_sl_gtp_config, generate_optimized_gtp_config,
+    human_sl_profiles, inspect_katago_local, install_katago_model, install_katago_model_with,
+    is_human_sl_weight_name, is_valid_human_sl_profile, katago_storage_dir,
+    merge_katago_weight_catalog, parse_katago_release_json, parse_katago_weight_html,
+    prepare_katago_human_sl_engine, repair_katago_engine_record, select_katago_binary_asset,
+    set_active_katago_model, update_katago_binary, validate_katago_engine_record,
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use move_grading::{
     GameAnalyticsSummary, MoveEvaluation, MoveQuality, compute_game_move_evaluations,
+};
+pub use ogs::{
+    OGS_GAME_API_ROOT, OgsCompetitionSession, OgsError, OgsGameUpdate, OgsMoveSubmission,
+    OgsServerClock, OgsTransport,
 };
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_commands::{BuiltinPluginCommand, BuiltinPluginCommandRegistry};
@@ -90,12 +106,21 @@ pub use plugin_workflow::{
     PersistedPluginState, PluginPersistence, PluginStore, install_plugin_from_zip_file,
     scan_plugin_installations,
 };
+pub use position_exporter::{PositionPngOptions, export_position_to_png};
 pub use recent_files::{RecentFileDto, RecentFilesStore};
 pub use rules_sync::{GameRuleConfig, GoRuleset};
 pub use settings::{
     LoadedSettings, SettingKind, SettingValidationError, SettingsPersistence, SettingsStore,
     SettingsValidation, is_legacy_overwrite_marker, load_settings_store, persist_settings_store,
     setting_kind, validate_setting_value, validate_settings,
+};
+pub use sgf_library::{
+    ProcessGitSyncAdapter, RedistributionRights, SgfGitSyncAdapter, SgfLibraryError,
+    SgfLibrarySource, SgfLibrarySyncOperation, SgfLibrarySyncReport, sync_sgf_library,
+};
+pub use starriver_capture::{
+    PublicPageFetch, StarRiverCapture, StarRiverCaptureError, capture_public_live_sgf,
+    extract_sgf_collection, validate_public_https_url,
 };
 pub use territory_estimator::{TerritoryEstimate, estimate_territory};
 pub use theme_workflow::{
@@ -108,6 +133,7 @@ pub use whole_game_review::{
     BatchReviewProgress, BlunderEntry, BlunderGrade, LineageMove, ReviewedPosition,
     active_lineage_moves, active_lineage_review_nodes, find_blunders,
 };
+pub use workspace_tabs::{WorkspaceTab, WorkspaceTabError, WorkspaceTabs};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedGameFile {
@@ -115,7 +141,8 @@ pub struct DecodedGameFile {
     pub encoding: SourceEncoding,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SourceEncoding {
     Utf8,
     ShiftJis,
@@ -180,6 +207,13 @@ impl HostApplication {
     }
 
     pub fn snapshot(&self) -> GameSnapshot {
+        self.game.snapshot()
+    }
+
+    /// Replaces a root SGF property without creating a move-tree node. This is
+    /// used for game-level metadata such as rules, time controls, and results.
+    pub fn set_root_property(&mut self, property: &str, values: Vec<String>) -> GameSnapshot {
+        self.game.set_root_property(property, values);
         self.game.snapshot()
     }
 
@@ -314,6 +348,67 @@ impl HostApplication {
         self.game.set_source_path(None);
         self.game.mark_dirty();
         self.source_encoding = SourceEncoding::Utf8;
+        Ok(self.emit_snapshot(events))
+    }
+
+    /// Replaces the document from a persisted workspace-tab snapshot without
+    /// turning a clean source-backed document into recovery-dirty state.
+    pub fn restore_workspace_tab(
+        &mut self,
+        content: &str,
+        source_path: Option<String>,
+        source_encoding: SourceEncoding,
+        events: &mut impl HostEventSink,
+    ) -> Result<GameSnapshot, HostError> {
+        self.restore_workspace_tab_with_dirty(content, source_path, source_encoding, false, events)
+    }
+
+    /// Restores a persisted workspace snapshot while preserving whether the
+    /// snapshot represented unsaved edits. A source path establishes the
+    /// external-file baseline; `is_dirty` then re-applies the pending edit
+    /// marker without pretending that the snapshot was clean.
+    pub fn restore_workspace_tab_with_dirty(
+        &mut self,
+        content: &str,
+        source_path: Option<String>,
+        source_encoding: SourceEncoding,
+        is_dirty: bool,
+        events: &mut impl HostEventSink,
+    ) -> Result<GameSnapshot, HostError> {
+        self.restore_workspace_tab_with_state(
+            content,
+            source_path,
+            source_encoding,
+            is_dirty,
+            None,
+            events,
+        )
+    }
+
+    /// Restores a workspace snapshot, including the currently selected node
+    /// when that node still exists in the serialized SGF tree.
+    pub fn restore_workspace_tab_with_state(
+        &mut self,
+        content: &str,
+        source_path: Option<String>,
+        source_encoding: SourceEncoding,
+        is_dirty: bool,
+        current_node_id: Option<&str>,
+        events: &mut impl HostEventSink,
+    ) -> Result<GameSnapshot, HostError> {
+        let mut restored_game = GameDocument::from_sgf(content)?;
+        restored_game.set_source_path(source_path);
+        if let Some(node_id) = current_node_id {
+            // Node identifiers are deterministic for the current serializer,
+            // but older snapshots may use a different numbering scheme. The
+            // SGF remains recoverable even when the selection cannot be.
+            let _ = restored_game.restore_current_node(node_id);
+        }
+        if is_dirty {
+            restored_game.mark_dirty();
+        }
+        self.game = restored_game;
+        self.source_encoding = source_encoding;
         Ok(self.emit_snapshot(events))
     }
 
@@ -528,6 +623,58 @@ mod tests {
         assert!(snapshot.file_state.path.is_none());
         assert_eq!(snapshot.board.width, 9);
         assert_eq!(application.source_encoding(), SourceEncoding::Utf8);
+    }
+
+    #[test]
+    fn restoring_a_workspace_snapshot_preserves_dirty_state() {
+        let mut application = HostApplication::default();
+        let mut events = RecordedEvents::default();
+        let snapshot = application
+            .restore_workspace_tab_with_dirty(
+                "(;FF[4]SZ[9];B[dd])",
+                Some("/games/unfinished.sgf".to_owned()),
+                SourceEncoding::Utf8,
+                true,
+                &mut events,
+            )
+            .expect("workspace snapshot restores");
+        assert!(snapshot.file_state.is_dirty);
+        assert_eq!(
+            snapshot.file_state.path.as_deref(),
+            Some("/games/unfinished.sgf")
+        );
+
+        let clean = application
+            .restore_workspace_tab_with_dirty(
+                "(;FF[4]SZ[9])",
+                Some("/games/clean.sgf".to_owned()),
+                SourceEncoding::Utf8,
+                false,
+                &mut events,
+            )
+            .expect("clean workspace snapshot restores");
+        assert!(!clean.file_state.is_dirty);
+    }
+
+    #[test]
+    fn restoring_a_workspace_snapshot_preserves_selected_node() {
+        let mut application = HostApplication::default();
+        let mut events = RecordedEvents::default();
+        let snapshot = application
+            .restore_workspace_tab_with_state(
+                "(;FF[4]SZ[9];B[dd];W[ee])",
+                None,
+                SourceEncoding::Utf8,
+                false,
+                Some("node-2"),
+                &mut events,
+            )
+            .expect("workspace snapshot restores");
+        assert_eq!(snapshot.current_node_id, "node-2");
+        assert_eq!(
+            snapshot.board.current_vertex,
+            Some(Vertex { column: 4, row: 4 })
+        );
     }
 
     #[test]

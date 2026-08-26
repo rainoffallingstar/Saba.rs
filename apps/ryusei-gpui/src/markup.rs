@@ -7,6 +7,7 @@ use ryusei_domain_core::{
 /// normal board interaction; the markup tools attach a marker to the clicked
 /// vertex via the `AddMarkup` transaction; the setup tools write `AB`/`AW`/
 /// `AE`-style setup properties via `SetNodeProperty`.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MarkupTool {
     Play,
@@ -250,23 +251,49 @@ pub fn scoring_summary(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
         .and_then(|values| values.first())
         .and_then(|value| value.parse::<f64>().ok())
         .or(Some(ryusei_domain_core::DEFAULT_KOMI));
-    let result = ryusei_domain_core::score_board(&snapshot.board, komi, &snapshot.score_overrides);
+    let rule = ryusei_domain_core::ScoringRule::from_sgf_ru(
+        snapshot
+            .root_properties
+            .get("RU")
+            .and_then(|values| values.first())
+            .map(String::as_str),
+    );
+    let result = ryusei_domain_core::score_board_with_rule(
+        &snapshot.board,
+        komi,
+        &snapshot.score_overrides,
+        rule,
+    );
     let winner = match result.winner {
         Some(ryusei_domain_core::Color::Black) => "Black",
         Some(ryusei_domain_core::Color::White) => "White",
         None => "Draw",
     };
+    let tax = (result.rule == ryusei_domain_core::ScoringRule::ChineseAncient).then(|| {
+        format!(
+            " - {} group tax ({} groups)",
+            result.black_group_tax, result.black_groups
+        )
+    });
+    let white_tax = (result.rule == ryusei_domain_core::ScoringRule::ChineseAncient).then(|| {
+        format!(
+            " - {} group tax ({} groups)",
+            result.white_group_tax, result.white_groups
+        )
+    });
     format!(
-        "B {:.1} ({} ter + {} stones + {} cap) — W {:.1} ({} ter + {} stones + {} cap + {:.1} komi) → {} by {:.1}",
+        "B {:.1} ({} ter + {} stones + {} cap{}) - W {:.1} ({} ter + {} stones + {} cap + {:.1} komi{}) → {} by {:.1}",
         result.black_total,
         result.black_territory,
         result.black_stones,
         result.black_captured,
+        tax.unwrap_or_default(),
         result.white_total,
         result.white_territory,
         result.white_stones,
         result.white_captured,
         result.komi,
+        white_tax.unwrap_or_default(),
         winner,
         result.margin
     )
@@ -299,6 +326,29 @@ mod tests {
             "black total must be territory 5 + stones 4: {summary}"
         );
         assert!(summary.contains("→ Black by 9.0"), "summary: {summary}");
+    }
+
+    #[test]
+    fn scoring_summary_reports_ancient_chinese_group_tax() {
+        use ryusei_domain_core::{Color, GameDocument, Vertex};
+
+        let mut game = GameDocument::new(3, 3).unwrap();
+        for vertex in [Vertex { column: 0, row: 0 }, Vertex { column: 2, row: 0 }] {
+            game.play_move(Color::Black, Some(vertex))
+                .expect("setup moves are legal");
+        }
+        let mut snapshot = game.snapshot();
+        snapshot
+            .root_properties
+            .insert("RU".to_owned(), vec!["Chinese-ancient".to_owned()]);
+        snapshot
+            .root_properties
+            .insert("KM".to_owned(), vec!["0".to_owned()]);
+        let summary = super::scoring_summary(&snapshot);
+        assert!(
+            summary.contains("group tax (2 groups)"),
+            "summary: {summary}"
+        );
     }
 
     #[test]

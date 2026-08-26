@@ -14,7 +14,8 @@ use ryusei_domain_core::{GameMode, GameSnapshot};
 
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Selectable, Sizable};
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::{Disableable, Selectable, Sizable};
 
 use crate::ShellApp;
 use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
@@ -232,6 +233,21 @@ pub fn render_player_bar(
     };
     let white_rank = property("WR");
     let is_black_turn = snapshot.board.next_player == ryusei_domain_core::Color::Black;
+    let clock_state = shell.clock.state();
+    let format_clock = |clock: ryusei_domain_core::PlayerClock| {
+        let seconds = clock.display_remaining().as_secs();
+        let time = format!("{:02}:{:02}", seconds / 60, seconds % 60);
+        match clock.phase {
+            ryusei_domain_core::ClockPhase::ByoYomi => {
+                format!("{time} ({})", clock.periods_remaining)
+            }
+            ryusei_domain_core::ClockPhase::Expired => "TIME".to_owned(),
+            ryusei_domain_core::ClockPhase::MainTime => time,
+        }
+    };
+    let black_clock = format_clock(clock_state.black);
+    let white_clock = format_clock(clock_state.white);
+    let clocks_visible = !matches!(clock_state.control, ryusei_domain_core::TimeControl::None);
     let show_coordinates = shell
         .settings
         .get_bool("view.show_coordinates")
@@ -268,6 +284,12 @@ pub fn render_player_bar(
                     div()
                         .text_color(rgb(0x9a9a9a))
                         .child(format!("({black_rank})"))
+                }))
+                .children(clocks_visible.then(|| {
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if is_black_turn { 0xf3c969 } else { 0xa0a0a0 }))
+                        .child(black_clock)
                 })),
         )
         // Center: turn indicator + pass / resign actions + recovery chip
@@ -380,6 +402,12 @@ pub fn render_player_bar(
                     div()
                         .text_color(rgb(0x9a9a9a))
                         .child(format!("({white_rank})"))
+                }))
+                .children(clocks_visible.then(|| {
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if !is_black_turn { 0xf3c969 } else { 0xa0a0a0 }))
+                        .child(white_clock)
                 }))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(white_name))
                 .child(div().child("○"))
@@ -597,6 +625,196 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                         .text_xs()
                         .text_color(rgb(0x9a9a9a))
                         .child("支持自动下载 KataGo 原生引擎，并根据本机硬件自动匹配 Metal (Apple Silicon) / OpenCL / CUDA 加速。"),
+                ),
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(0x121214))
+                .border_1()
+                .border_color(rgb(0x26262c))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(0xf2f2f5))
+                                .child("本机与官网版本"),
+                        )
+                        .child(
+                            Button::new("katago-refresh-metadata-btn")
+                                .small()
+                                .ghost()
+                                .label("↻ 刷新官网")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.refresh_katago_panel(cx);
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(rgb(0xb9b9c0))
+                                .child(format!(
+                                    "本机 KataGo: {}",
+                                    shell.katago_local
+                                        .as_ref()
+                                        .and_then(|local| local.version.as_deref())
+                                        .unwrap_or("未检测到"),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(rgb(0xb9b9c0))
+                                .child(format!(
+                                    "官网最新: {}",
+                                    shell
+                                        .katago_release
+                                        .as_ref()
+                                        .map(|release| release.version.as_str())
+                                        .unwrap_or("未刷新"),
+                                )),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(rgb(0x8f8f98))
+                                .child(shell.katago_panel_status.clone()),
+                        )
+                        .child(
+                            Button::new("katago-update-binary-btn")
+                                .small()
+                                .outline()
+                                .label(if cfg!(target_os = "windows") || cfg!(target_os = "linux") {
+                                    "⬆ 更新引擎"
+                                } else {
+                                    "⬆ Windows/Linux 更新"
+                                })
+                                .disabled(!(cfg!(target_os = "windows") || cfg!(target_os = "linux")))
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.update_katago_binary_from_panel(cx);
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(0x121214))
+                .border_1()
+                .border_color(rgb(0x26262c))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .max_h(px(190.0))
+                .overflow_y_scrollbar()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xf2f2f5))
+                        .child("官网权重与统一模型入口"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8f8f98))
+                        .child(format!(
+                            "统一模型: {}",
+                            shell.katago_local
+                                .as_ref()
+                                .map(|local| local.unified_model.display().to_string())
+                                .unwrap_or_else(|| "尚未初始化".to_owned()),
+                        )),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8f8f98))
+                        .child(format!(
+                            "HumanSL profile: {}",
+                            shell
+                                .settings
+                                .get_str("katago.human_sl_profile")
+                                .unwrap_or("rank_5k"),
+                        )),
+                )
+                .children(shell.katago_weights.iter().enumerate().map(|(index, weight)| {
+                    let name = weight.name.clone();
+                    let activate_name = name.clone();
+                    let downloaded = weight.installed;
+                    let active = weight.active;
+                    let human_sl = ryusei_host::is_human_sl_weight_name(&name);
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(rgb(if active { 0x62d68a } else { 0xc5c5ca }))
+                                .child(format!(
+                                    "{}{}{}",
+                                    if active { "● " } else { "○ " },
+                                    name,
+                                    if human_sl { " · HumanSL" } else if downloaded { " · 已下载" } else { " · 官网" },
+                                )),
+                        )
+                        .child(if downloaded {
+                            Button::new(("katago-activate-weight", index))
+                                .small()
+                                .ghost()
+                                .label(if human_sl {
+                                    "启用 HumanSL"
+                                } else if active {
+                                    "使用中"
+                                } else {
+                                    "设为当前"
+                                })
+                                .disabled(active && !human_sl)
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    shell.activate_katago_weight(&activate_name, cx);
+                                }))
+                        } else {
+                            Button::new(("katago-download-weight", index))
+                                .small()
+                                .outline()
+                                .label("下载")
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    shell.download_katago_weight_asset(&name, cx);
+                                }))
+                        })
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x777780))
+                        .child("标准权重使用 active-model.bin.gz；HumanSL 会保留标准模型，并以 -human-model 和专用配置启动。"),
                 ),
         )
         .child(
@@ -1541,6 +1759,7 @@ pub fn render_winrate_graph_panel(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_variation_tree_panel(
     layout: &VariationTreeLayout,
     grid_size: f32,
@@ -1827,10 +2046,18 @@ pub fn render_score_drawer(
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(7.5);
 
-    let scoring_result = ryusei_domain_core::scoring::score_board(
+    let scoring_rule = ryusei_domain_core::ScoringRule::from_sgf_ru(
+        snapshot
+            .root_properties
+            .get("RU")
+            .and_then(|values| values.first())
+            .map(String::as_str),
+    );
+    let scoring_result = ryusei_domain_core::score_board_with_rule(
         &snapshot.board,
         Some(komi),
         &snapshot.score_overrides,
+        scoring_rule,
     );
 
     let katago_estimate = shell
@@ -1921,7 +2148,19 @@ pub fn render_score_drawer(
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(shell.palette.text))
                             .child(crate::markup::scoring_summary(snapshot)),
-                    ),
+                    )
+                    .children((scoring_rule == ryusei_domain_core::ScoringRule::ChineseAncient).then(|| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.muted))
+                            .child(format!(
+                                "中国古谱还棋头: 黑 {} 目 ({} 块)，白 {} 目 ({} 块)",
+                                scoring_result.black_group_tax,
+                                scoring_result.black_groups,
+                                scoring_result.white_group_tax,
+                                scoring_result.white_groups,
+                            ))
+                    })),
             )
             .child(
                 div()
@@ -1952,6 +2191,186 @@ pub fn render_score_drawer(
                     .text_xs()
                     .text_color(rgb(shell.palette.muted))
                     .child("Tip: switch to Scoring mode on the board to click and toggle stone group status."),
+            ),
+        shell,
+        cx,
+    )
+}
+
+/// Lists library material available from recent local games and managed Git sources.
+pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let recent_files = shell.recent_files.list();
+    render_readonly_drawer(
+        "library",
+        4,
+        "棋谱库",
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("本地最近棋谱与已授权 Git SGF 来源会显示在这里。"),
+            )
+            .child(div().flex().flex_col().gap_1().children(
+                recent_files.into_iter().enumerate().map(|(index, entry)| {
+                    div()
+                        .id(("library-recent", index))
+                        .p_2()
+                        .bg(rgb(shell.palette.input))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        .text_sm()
+                        .text_color(rgb(if entry.is_missing {
+                            shell.palette.muted
+                        } else {
+                            shell.palette.text
+                        }))
+                        .child(entry.display_name)
+                }),
+            )),
+        shell,
+        cx,
+    )
+}
+
+/// Shows the local profile identity used by the navigation rail.
+pub fn render_profile_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let name = shell
+        .settings
+        .get_str("profile.display_name")
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Player")
+        .to_owned();
+    render_readonly_drawer(
+        "profile",
+        5,
+        "Profile",
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(shell.palette.text))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child(format!("{} 个本地会话", shell.workspace_tabs.tabs().len())),
+            ),
+        shell,
+        cx,
+    )
+}
+
+/// Opens the user's current objective and plan workspace.
+pub fn render_goals_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let goal = shell
+        .settings
+        .get_str("profile.current_goal")
+        .filter(|goal| !goal.trim().is_empty())
+        .unwrap_or("尚未设置目标")
+        .to_owned();
+    let plan = shell
+        .settings
+        .get_str("profile.current_plan")
+        .filter(|plan| !plan.trim().is_empty())
+        .unwrap_or("从棋谱库或当前会话开始制定计划")
+        .to_owned();
+    render_readonly_drawer(
+        "goals",
+        7,
+        "目标与计划",
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("当前目标"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(shell.palette.text))
+                    .child(goal),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("完成计划"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(shell.palette.text))
+                    .child(plan),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("goal-set-current")
+                            .small()
+                            .outline()
+                            .label("设为当前会话目标")
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                shell.set_goal_from_active_session(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("goal-complete-plan")
+                            .small()
+                            .primary()
+                            .label("完成计划")
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                shell.complete_current_plan(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("目标和计划会跟随设置持久化。"),
+            ),
+        shell,
+        cx,
+    )
+}
+
+/// Gives the compact rail a real settings destination rather than a toast.
+pub fn render_preferences_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    render_readonly_drawer(
+        "preferences",
+        6,
+        "设置",
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("显示、棋盘、引擎与插件设置可从顶部菜单继续调整。"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.text))
+                    .child(format!("当前主题: {:?}", shell.theme_choice)),
             ),
         shell,
         cx,
@@ -2592,22 +3011,51 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .items_center()
                                 .gap_1p5()
                                 .child(
-                                    Button::new("whole-game-review-button")
-                                        .xsmall()
-                                        .outline()
-                                        .label(
-                                            if shell
-                                                .batch_review_progress
-                                                .is_some_and(|p| p.is_running)
-                                            {
-                                                "⏹ 停止复盘"
-                                            } else {
-                                                "⏩ 全盘复盘"
-                                            },
-                                        )
-                                        .on_click(cx.listener(|shell, _, _, cx| {
-                                            shell.start_whole_game_review(cx);
-                                        })),
+                                    if shell
+                                        .batch_review_progress
+                                        .is_some_and(|progress| progress.is_running)
+                                    {
+                                        Button::new("whole-game-review-stop")
+                                            .xsmall()
+                                            .outline()
+                                            .label("⏹ 停止复盘")
+                                            .on_click(cx.listener(|shell, _, _, cx| {
+                                                shell.stop_whole_game_review(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .children(
+                                                ryusei_domain_core::ReviewProfile::ALL
+                                                    .into_iter()
+                                                    .enumerate()
+                                                    .map(|(index, profile)| {
+                                                        Button::new((
+                                                            "whole-game-review-profile",
+                                                            index,
+                                                        ))
+                                                        .xsmall()
+                                                        .outline()
+                                                        .label(format!("{}v", profile.visits()))
+                                                        .tooltip(format!(
+                                                            "{} 全盘复盘（{} visits）",
+                                                            profile.label(),
+                                                            profile.visits()
+                                                        ))
+                                                        .on_click(cx.listener(
+                                                            move |shell, _, _, cx| {
+                                                                shell.start_review_profile_action(
+                                                                    profile, cx,
+                                                                );
+                                                            },
+                                                        ))
+                                                    }),
+                                            )
+                                            .into_any_element()
+                                    },
                                 )
                                 .child(Badge::new().small().child(
                                     if shell.analysis_task.is_some() {

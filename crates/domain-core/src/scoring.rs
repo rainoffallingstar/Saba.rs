@@ -20,6 +20,37 @@ use crate::{BoardSnapshot, Color, Vertex};
 /// Default komi (White compensation) used when the game carries no `KM`.
 pub const DEFAULT_KOMI: f64 = 7.5;
 
+/// Local scoring semantics. Ancient Chinese scoring is area scoring with a
+/// two-point tax for every surviving connected group (还棋头 / group tax).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ScoringRule {
+    #[default]
+    ChineseArea,
+    ChineseAncient,
+}
+
+impl ScoringRule {
+    /// Resolves the local scoring semantics from common SGF `RU` labels.
+    /// Unknown labels remain modern Chinese area scoring for compatibility.
+    pub fn from_sgf_ru(ru: Option<&str>) -> Self {
+        let Some(ru) = ru else {
+            return Self::ChineseArea;
+        };
+        let ru = ru.trim().to_ascii_lowercase();
+        if ru.contains("ancient")
+            || ru.contains("old chinese")
+            || ru.contains("chinese-ancient")
+            || ru.contains("中古")
+            || ru.contains("古棋")
+            || ru.contains("还棋头")
+        {
+            Self::ChineseAncient
+        } else {
+            Self::ChineseArea
+        }
+    }
+}
+
 /// One chain (connected same-color group) on the board.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoneChain {
@@ -39,6 +70,11 @@ pub struct ScoreResult {
     pub white_stones: usize,
     pub black_captured: usize,
     pub white_captured: usize,
+    pub black_groups: usize,
+    pub white_groups: usize,
+    pub black_group_tax: usize,
+    pub white_group_tax: usize,
+    pub rule: ScoringRule,
     pub komi: f64,
     /// Total = territory + stones + captured (area scoring).
     pub black_total: f64,
@@ -189,6 +225,16 @@ pub fn score_board(
     komi: Option<f64>,
     score_overrides: &std::collections::BTreeMap<Vertex, i8>,
 ) -> ScoreResult {
+    score_board_with_rule(board, komi, score_overrides, ScoringRule::ChineseArea)
+}
+
+/// Scores the board under an explicit local rule.
+pub fn score_board_with_rule(
+    board: &BoardSnapshot,
+    komi: Option<f64>,
+    score_overrides: &std::collections::BTreeMap<Vertex, i8>,
+    rule: ScoringRule,
+) -> ScoreResult {
     let mut chains = find_chains(board);
     mark_surrounded_chains(board, &mut chains);
 
@@ -240,8 +286,24 @@ pub fn score_board(
         .sum();
 
     let komi = komi.unwrap_or(DEFAULT_KOMI);
-    let black_total = (black_territory + black_stones + black_captured) as f64;
-    let white_total = (white_territory + white_stones + white_captured) as f64 + komi;
+    let black_groups = chains
+        .iter()
+        .filter(|chain| chain.color == Color::Black && !dead_vertices.contains(&chain.vertices[0]))
+        .count();
+    let white_groups = chains
+        .iter()
+        .filter(|chain| chain.color == Color::White && !dead_vertices.contains(&chain.vertices[0]))
+        .count();
+    let black_group_tax = (matches!(rule, ScoringRule::ChineseAncient) as usize)
+        .saturating_mul(black_groups)
+        .saturating_mul(2);
+    let white_group_tax = (matches!(rule, ScoringRule::ChineseAncient) as usize)
+        .saturating_mul(white_groups)
+        .saturating_mul(2);
+    let black_total =
+        (black_territory + black_stones + black_captured) as f64 - black_group_tax as f64;
+    let white_total =
+        (white_territory + white_stones + white_captured) as f64 + komi - white_group_tax as f64;
     let (winner, margin) = if (black_total - white_total).abs() < f64::EPSILON {
         (None, 0.0)
     } else if black_total > white_total {
@@ -257,6 +319,11 @@ pub fn score_board(
         white_stones,
         black_captured,
         white_captured,
+        black_groups,
+        white_groups,
+        black_group_tax,
+        white_group_tax,
+        rule,
         komi,
         black_total,
         white_total,
@@ -343,6 +410,24 @@ mod tests {
         assert_eq!(result.black_stones, 4);
         assert_eq!(result.black_total, 9.0);
         assert_eq!(result.winner, Some(Color::Black));
+    }
+
+    #[test]
+    fn ancient_chinese_applies_two_point_tax_per_live_group() {
+        let board = board_from_rows(&["B.B", "...", "W.W"]);
+        let result = score_board_with_rule(
+            &board,
+            Some(0.0),
+            &Default::default(),
+            ScoringRule::ChineseAncient,
+        );
+        assert_eq!(result.black_groups, 2);
+        assert_eq!(result.white_groups, 2);
+        assert_eq!(result.black_group_tax, 4);
+        assert_eq!(result.white_group_tax, 4);
+        assert_eq!(result.black_total, -2.0);
+        assert_eq!(result.white_total, -2.0);
+        assert_eq!(result.rule, ScoringRule::ChineseAncient);
     }
 
     #[test]

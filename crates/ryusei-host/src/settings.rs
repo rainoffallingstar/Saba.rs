@@ -50,7 +50,13 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "board.variation_replay_mode"
         | "scoring.method"
         | "view.coordinates_type"
-        | "view.move_numbers_type" => Some(SettingKind::String),
+        | "view.move_numbers_type"
+        | "game.opening_convention"
+        | "katago.human_sl_profile"
+        | "profile.display_name"
+        | "profile.current_goal"
+        | "profile.current_plan"
+        | "workspace.tabs" => Some(SettingKind::String),
         "engines.analysis"
         | "engines.black"
         | "engines.white"
@@ -189,6 +195,26 @@ fn value_kind(value: &Value) -> &'static str {
 pub fn validate_setting_value(key: &str, value: &Value) -> Result<(), SettingValidationError> {
     if key == "engines.list" {
         return crate::engine_workflow::validate_engine_list_value(value);
+    }
+    if key == "katago.human_sl_profile"
+        && !value
+            .as_str()
+            .is_some_and(crate::katago_setup::is_valid_human_sl_profile)
+    {
+        return Err(SettingValidationError {
+            key: key.to_owned(),
+            expected: "a HumanSL rank_*/preaz_* profile from 20K through 9D".to_owned(),
+            found: value_kind(value).to_owned(),
+        });
+    }
+    if key == "game.opening_convention"
+        && !matches!(value.as_str(), Some("free" | "chineseAncientSeatStones"))
+    {
+        return Err(SettingValidationError {
+            key: key.to_owned(),
+            expected: "free or chineseAncientSeatStones".to_owned(),
+            found: value_kind(value).to_owned(),
+        });
     }
     let Some(kind) = setting_kind(key) else {
         return Err(SettingValidationError {
@@ -420,6 +446,16 @@ mod tests {
     #[test]
     fn validates_values_against_their_kind() {
         assert!(validate_setting_value("sound.enable", &json!(true)).is_ok());
+        assert!(validate_setting_value("game.opening_convention", &json!("free")).is_ok());
+        assert!(
+            validate_setting_value(
+                "game.opening_convention",
+                &json!("chineseAncientSeatStones")
+            )
+            .is_ok()
+        );
+        assert!(validate_setting_value("katago.human_sl_profile", &json!("rank_9d")).is_ok());
+        assert!(validate_setting_value("katago.human_sl_profile", &json!("rank_21k")).is_err());
         assert!(validate_setting_value("sound.enable", &json!("yes")).is_err());
         assert!(validate_setting_value("theme.current", &json!(null)).is_ok());
         assert!(validate_setting_value("theme.current", &json!("mist")).is_ok());

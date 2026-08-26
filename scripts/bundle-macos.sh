@@ -22,6 +22,9 @@ test -x "$BINARY" || { echo "error: release binary not found: $BINARY" >&2; exit
 rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS" "$BUNDLE_DIR/Contents/Resources"
 cp "$BINARY" "$BUNDLE_DIR/Contents/MacOS/$EXECUTABLE"
+"$ROOT_DIR/scripts/make-macos-icon.sh" \
+  "$ROOT_DIR/fig/ryusei-logo.svg" \
+  "$BUNDLE_DIR/Contents/Resources/Ryusei.icns"
 
 cat > "$BUNDLE_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -34,6 +37,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$EXECUTABLE</string>
+  <key>CFBundleIconFile</key><string>Ryusei.icns</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>

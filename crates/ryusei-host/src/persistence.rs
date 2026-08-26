@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::autosave::{AutosaveCandidate, AutosaveInfo, AutosaveStore};
 use crate::recent_files::RecentFilesStore;
+use crate::workspace_tabs::{WorkspaceTabError, WorkspaceTabs};
 
 pub trait HostPersistence {
     fn load_autosave(&self) -> AutosaveStore;
@@ -13,6 +14,27 @@ pub trait HostPersistence {
     fn load_recent_files(&self) -> Result<RecentFilesStore, String>;
 
     fn persist_recent_files(&self, store: &RecentFilesStore) -> Result<(), String>;
+
+    /// Restores the complete multi-session workspace when the adapter supports
+    /// it. Existing adapters remain valid and simply opt out by default.
+    fn load_workspace_tabs(&self) -> Result<Option<WorkspaceTabs>, String> {
+        Ok(None)
+    }
+
+    /// Persists every workspace session independently from user preferences.
+    fn persist_workspace_tabs(&self, _tabs: &WorkspaceTabs) -> Result<(), String> {
+        Err("workspace-session persistence is not supported by this adapter".to_owned())
+    }
+
+    /// Writes an exported current-position PNG through a task-level host port.
+    fn persist_png_export(&self, _path: &std::path::Path, _bytes: &[u8]) -> Result<(), String> {
+        Err("PNG export persistence is not supported by this adapter".to_owned())
+    }
+
+    /// Writes an exported animated GIF through a task-level host port.
+    fn persist_gif_export(&self, _path: &std::path::Path, _bytes: &[u8]) -> Result<(), String> {
+        Err("GIF export persistence is not supported by this adapter".to_owned())
+    }
 }
 
 pub fn synchronize_autosave(
@@ -56,11 +78,22 @@ pub fn record_recent_file(
     Ok(())
 }
 
+/// Deserializes and validates a persisted workspace-tabs payload. Returns
+/// `Ok(None)` when the payload is absent so adapters can treat "no file" and
+/// "invalid file" distinctly, while surfacing corrupt data as an error instead
+/// of letting an out-of-range `active_tab_id` reach a panicking accessor.
+pub fn deserialize_workspace_tabs(json: &str) -> Result<Option<WorkspaceTabs>, WorkspaceTabError> {
+    WorkspaceTabs::deserialize_validated(json).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HostPersistence, record_recent_file, synchronize_autosave};
+    use super::{
+        HostPersistence, deserialize_workspace_tabs, record_recent_file, synchronize_autosave,
+    };
     use crate::autosave::{AutosaveCandidate, AutosaveStore};
     use crate::recent_files::RecentFilesStore;
+    use crate::workspace_tabs::WorkspaceTabError;
     use std::{cell::RefCell, path::PathBuf};
 
     #[derive(Default)]
@@ -193,5 +226,38 @@ mod tests {
         assert_eq!(error, "recent-file storage is unavailable");
         assert!(store.list().is_empty());
         assert!(persistence.load_recent_files().unwrap().list().is_empty());
+    }
+
+    #[test]
+    fn validated_workspace_tabs_load_rejects_corrupt_payloads() {
+        use crate::workspace_tabs::WorkspaceTabs;
+
+        // Build a fully-populated valid payload by serializing a real workspace.
+        let tabs = WorkspaceTabs::new("(;SZ[19])".to_owned(), "One");
+        let valid_json = serde_json::to_string(&tabs).expect("tabs serialize");
+        let loaded = deserialize_workspace_tabs(&valid_json)
+            .expect("valid payload must load")
+            .expect("payload must be present");
+        assert_eq!(loaded.active_tab().id, "session-1");
+
+        // Point the active id at a tab that does not exist.
+        let mut value: serde_json::Value =
+            serde_json::from_str(&valid_json).expect("serialized output parses");
+        value["activeTabId"] = serde_json::json!("session-99");
+        let unknown_active = value.to_string();
+        assert!(matches!(
+            deserialize_workspace_tabs(&unknown_active),
+            Err(WorkspaceTabError::UnknownActiveTab(id)) if id == "session-99"
+        ));
+
+        // Empty the tab list entirely.
+        let mut value: serde_json::Value =
+            serde_json::from_str(&valid_json).expect("serialized output parses");
+        value["tabs"] = serde_json::json!([]);
+        let empty = value.to_string();
+        assert!(matches!(
+            deserialize_workspace_tabs(&empty),
+            Err(WorkspaceTabError::EmptyTabs)
+        ));
     }
 }

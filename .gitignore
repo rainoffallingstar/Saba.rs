@@ -20,3 +20,6 @@ gtp_logs/
 
 # KataGo runtime logs created when tests spawn the real engine
 katago_logs/
+
+# DeepSeek Harness visual inspection artifacts
+.dsh-vision-router/

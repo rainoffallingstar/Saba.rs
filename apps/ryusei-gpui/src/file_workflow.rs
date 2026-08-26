@@ -325,6 +325,10 @@ impl NativeHostPersistence {
     fn recent_files_path(&self) -> PathBuf {
         self.config_directory.join("recent-files.json")
     }
+
+    fn workspace_tabs_path(&self) -> PathBuf {
+        self.config_directory.join("workspace-tabs.json")
+    }
 }
 
 impl HostPersistence for NativeHostPersistence {
@@ -388,6 +392,34 @@ impl HostPersistence for NativeHostPersistence {
             &self.recent_files_path(),
             &String::from_utf8_lossy(&content),
         )
+    }
+
+    fn load_workspace_tabs(&self) -> Result<Option<ryusei_host::WorkspaceTabs>, String> {
+        let path = self.workspace_tabs_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|error| format!("could not read workspace sessions: {error}"))?;
+        ryusei_host::WorkspaceTabs::deserialize_validated(&content)
+            .map(Some)
+            .map_err(|error| format!("could not parse workspace sessions: {error}"))
+    }
+
+    fn persist_workspace_tabs(&self, tabs: &ryusei_host::WorkspaceTabs) -> Result<(), String> {
+        let content = serde_json::to_string_pretty(tabs)
+            .map_err(|error| format!("could not serialize workspace sessions: {error}"))?;
+        write_file_atomically(&self.workspace_tabs_path(), &content)
+    }
+
+    fn persist_png_export(&self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        write_bytes_atomically(path, bytes)
+            .map_err(|error| format!("could not persist PNG export: {error}"))
+    }
+
+    fn persist_gif_export(&self, path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        write_bytes_atomically(path, bytes)
+            .map_err(|error| format!("could not persist GIF export: {error}"))
     }
 }
 

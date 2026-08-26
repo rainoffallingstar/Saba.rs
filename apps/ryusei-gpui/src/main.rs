@@ -9,6 +9,7 @@ mod layout;
 mod markup;
 mod native_text_input;
 mod navigation;
+mod navigation_rail;
 mod node_inspector;
 mod panels;
 mod plugin_contribution;
@@ -36,7 +37,10 @@ use gpui::{
 };
 use ryusei_domain_core::gtp::AnalysisStream;
 use ryusei_domain_core::legacy::handicap_placement;
-use ryusei_domain_core::{Color, GameMode, MoveDto, Vertex};
+use ryusei_domain_core::{
+    AnalysisPolicy, ClockController, ClockEvent, Color, GameMode, MatchParticipants, MoveDto,
+    OpeningConvention, PlayerKind, SessionMode, SessionPolicy, SessionSource, TimeControl, Vertex,
+};
 use ryusei_host::{HostPersistence, replay_position_stream_commands};
 
 use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogService};
@@ -81,6 +85,7 @@ use crate::winrate_graph::{
 };
 
 const BOARD_PIXEL_SIZE: f32 = 420.0;
+const NAVIGATION_RAIL_WIDTH: f32 = 64.0;
 
 actions!(
     ryusei_gpui,
@@ -108,12 +113,25 @@ actions!(
         SetEditMode,
         SetScoringMode,
         SetEstimatorMode,
+        SetSessionMatch,
+        SetSessionRecord,
+        SetSessionLive,
+        SetPlayersHumanVsHuman,
+        SetPlayersHumanVsAi,
+        SetPlayersAiVsHuman,
+        SetPlayersAiVsAi,
+        SetOpeningFree,
+        SetOpeningAncientSeatStones,
+        SetTimeNone,
+        SetTimeAbsolute600,
+        SetTimeByoYomi,
         StartAnalysis,
         StopAnalysis,
         GenerateEngineMove,
         ToggleGtpTerminal,
         StartWholeGameReview,
         ExportGif,
+        ExportPositionPng,
         SetThemeClassic,
         SetThemeDark,
         SetThemeMist,
@@ -126,6 +144,10 @@ actions!(
         SetVisits500,
         SetVisits1000,
         SetVisitsUnlimited,
+        StartReviewQuick,
+        StartReviewPreliminary,
+        StartReviewIntermediate,
+        StartReviewAdvanced,
         PluginKataGoSetup,
         PluginFoxSync,
         PluginPositionToSgf,
@@ -149,6 +171,9 @@ pub enum BottomDeckTab {
 #[allow(dead_code)]
 enum ActiveDrawer {
     Preferences,
+    Library,
+    Profile,
+    Goals,
     GameInfo,
     Score,
     About,
@@ -165,6 +190,9 @@ enum ActiveTextInput {
 
 struct ShellApp {
     host: ryusei_host::HostApplication,
+    /// The active document is materialized in `host`; non-active documents
+    /// remain independent serialized workspace-tab snapshots.
+    workspace_tabs: ryusei_host::WorkspaceTabs,
     file_access: NativeGameFileAccess,
     dialog_service: Box<dyn DialogService>,
     external_file: ryusei_host::ExternalFileStore,
@@ -197,6 +225,9 @@ struct ShellApp {
     pending_analysis_request: Option<PendingAnalysisRequest>,
     batch_review_progress: Option<ryusei_host::BatchReviewProgress>,
     batch_review_state: Option<BatchReviewState>,
+    /// A batch review owns a fixed search budget for its entire run. This is
+    /// intentionally independent from the interactive analysis preference.
+    batch_review_profile: Option<ryusei_domain_core::ReviewProfile>,
     /// Candidate currently hovered in either the board overlay or candidate
     /// list. The vertex is stored instead of a copied PV so live engine updates
     /// immediately refresh the preview line.
@@ -212,6 +243,13 @@ struct ShellApp {
     /// Keep analysis continuous across real moves/navigation when the user has
     /// started analysis explicitly.
     analysis_enabled: bool,
+    /// Top-level play/study/broadcast behavior, deliberately separate from
+    /// the board's Play/Edit/Scoring interaction mode.
+    session_policy: SessionPolicy,
+    /// Local prediction for Match clocks. Remote providers will replace it with
+    /// their server-authoritative state through the same controller.
+    clock: ClockController,
+    clock_last_updated: Instant,
     restart_analysis_after_position_change: bool,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
@@ -264,6 +302,12 @@ struct ShellApp {
     status: SharedString,
     /// Prominent transient notification shown as a centered toast overlay.
     toast: Option<SharedString>,
+    /// Live KataGo setup panel state. Network refreshes run off the UI thread.
+    katago_local: Option<ryusei_host::KataGoLocalInfo>,
+    katago_release: Option<ryusei_host::KataGoReleaseInfo>,
+    katago_weights: Vec<ryusei_host::KataGoWeightInfo>,
+    katago_panel_status: SharedString,
+    katago_panel_task: Option<Task<()>>,
 }
 
 /// Active splitter drag state. Window-global mouse move/up listeners are
@@ -396,6 +440,8 @@ fn default_new_game_properties_for_size(
                 .collect(),
         );
     }
+    let opening = OpeningConvention::from_setting(settings.get_str("game.opening_convention"));
+    opening.apply_to_root_properties(size, &mut properties, format_sgf_vertex);
     properties
 }
 
@@ -408,6 +454,25 @@ fn default_new_game_properties(
     let size = default_board_size(settings);
     let properties = default_new_game_properties_for_size(settings, size);
     (size, properties)
+}
+
+fn workspace_tab_title(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
+    snapshot
+        .file_state
+        .path
+        .as_deref()
+        .and_then(|path| std::path::Path::new(path).file_name())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            snapshot
+                .root_properties
+                .get("GN")
+                .and_then(|values| values.first())
+                .filter(|title| !title.trim().is_empty())
+                .cloned()
+        })
+        .unwrap_or_else(|| "Untitled Game".to_owned())
 }
 
 impl ShellApp {
@@ -461,6 +526,7 @@ impl ShellApp {
         );
 
         let mut status = initial_status;
+        let has_startup_file = startup_file.is_some();
         if let Some(path) = startup_file {
             match host.open(path.clone(), &file_access, &mut events) {
                 Ok(_) => status = format!("opened {}", path.display()),
@@ -477,7 +543,53 @@ impl ShellApp {
                 Err(error) => status = format!("could not create new game: {error}"),
             }
         }
-        let board_size = host.snapshot().board.width;
+        let initial_snapshot = host.snapshot();
+        let fallback_tabs =
+            ryusei_host::WorkspaceTabs::new(host.to_sgf(), workspace_tab_title(&initial_snapshot));
+        let mut workspace_tabs = fallback_tabs;
+        if !has_startup_file {
+            let persisted_tabs = match persistence.load_workspace_tabs() {
+                Ok(Some(tabs)) => Some(tabs),
+                Ok(None) => settings.get_str("workspace.tabs").and_then(|json| {
+                    match ryusei_host::WorkspaceTabs::deserialize_validated(json) {
+                        Ok(tabs) => Some(tabs),
+                        Err(error) => {
+                            status =
+                                format!("legacy workspace sessions could not be restored: {error}");
+                            None
+                        }
+                    }
+                }),
+                Err(error) => {
+                    status = format!("workspace sessions could not be restored: {error}");
+                    None
+                }
+            };
+            if let Some(tabs) = persisted_tabs {
+                match tabs.try_active_tab().cloned() {
+                    Ok(active) => match host.restore_workspace_tab_with_state(
+                        &active.sgf,
+                        active.source_path,
+                        active.source_encoding,
+                        active.is_dirty,
+                        active.current_node_id.as_deref(),
+                        &mut events,
+                    ) {
+                        Ok(_) => workspace_tabs = tabs,
+                        Err(error) => {
+                            status =
+                                format!("active workspace session could not be restored: {error}")
+                        }
+                    },
+                    Err(error) => {
+                        status = format!("workspace sessions are invalid: {error}");
+                    }
+                }
+            }
+        }
+        let initial_snapshot = host.snapshot();
+        let initial_clock_control = TimeControl::from_sgf(&initial_snapshot.root_properties);
+        let board_size = initial_snapshot.board.width;
 
         let recent_files = persistence.load_recent_files().unwrap_or_default();
         let autosave = persistence.load_autosave();
@@ -547,10 +659,33 @@ impl ShellApp {
         let active_console_role = EngineRole::ALL
             .into_iter()
             .find(|role| engine_roles.get(*role).is_some());
-        let analysis_enabled = engine_roles.get(EngineRole::Analysis).is_some();
+        let session_policy = workspace_tabs.active_tab().policy;
+        let active_tab_mode = workspace_tabs.active_tab().mode;
+        let active_tab_last_vertex = workspace_tabs.active_tab().last_vertex;
+        let active_tab_analysis = workspace_tabs.active_tab().analysis.clone();
+        let active_tab_analysis_best_move = workspace_tabs.active_tab().analysis_best_move;
+        // A new local Match is analysis-off by default. Live sessions opt into
+        // continuous analysis when selected through the Session menu.
+        let analysis_enabled = workspace_tabs.active_tab().analysis_enabled
+            || session_policy.analysis == AnalysisPolicy::Continuous;
+        let katago_local = crate::file_workflow::current_user_config_directory()
+            .ok()
+            .and_then(|base| ryusei_host::inspect_katago_local(&base).ok());
+        let katago_weights = katago_local
+            .as_ref()
+            .map(|local| local.weights.clone())
+            .unwrap_or_default();
+        let active_clock = workspace_tabs.active_tab().clock;
+        let mut clock = ClockController::new(initial_clock_control);
+        if active_clock.control == initial_clock_control {
+            clock.apply_remote_clock(active_clock);
+        } else if !matches!(initial_clock_control, TimeControl::None) {
+            clock.start(host.snapshot().board.next_player);
+        }
 
-        Self {
+        let mut shell = Self {
             host,
+            workspace_tabs,
             file_access,
             dialog_service,
             persistence,
@@ -564,8 +699,8 @@ impl ShellApp {
             engine_controller: ryusei_host::EngineController::default(),
             active_console_role,
             engine_roles,
-            analysis: Vec::new(),
-            analysis_best_move: None,
+            analysis: active_tab_analysis,
+            analysis_best_move: active_tab_analysis_best_move,
             analysis_run: ryusei_host::AnalysisRunController::default(),
             analysis_task: None,
             engine_connect_tasks: BTreeMap::new(),
@@ -574,6 +709,7 @@ impl ShellApp {
             pending_analysis_request: None,
             batch_review_progress: None,
             batch_review_state: None,
+            batch_review_profile: None,
             hovered_candidate_vertex: None,
             trial_move: None,
             last_analysis_trial_move: None,
@@ -582,6 +718,9 @@ impl ShellApp {
             // Keep a configured Analysis role continuously evaluating the
             // current position; explicit Stop remains the opt-out.
             analysis_enabled,
+            session_policy,
+            clock,
+            clock_last_updated: Instant::now(),
             restart_analysis_after_position_change: false,
             last_analysis_node: None,
             engine_log: Vec::new(),
@@ -611,9 +750,9 @@ impl ShellApp {
             settings_input_focus_handle: cx.focus_handle(),
             plugin_controller,
             installed_plugins,
-            last_vertex: None,
+            last_vertex: active_tab_last_vertex,
             active_tool: MarkupTool::Play,
-            mode: GameMode::Play,
+            mode: active_tab_mode,
             line_start: None,
             hovered_vertex: None,
             comment_focus_handle: cx.focus_handle(),
@@ -623,7 +762,23 @@ impl ShellApp {
             active_text_input: None,
             status: status.into(),
             toast: None,
+            katago_local,
+            katago_release: None,
+            katago_weights,
+            katago_panel_status: "尚未刷新官网 KataGo 信息".into(),
+            katago_panel_task: None,
+        };
+        if let Some(path) = shell.host.snapshot().file_state.path {
+            match shell.workspace_tabs.active_tab().source_fingerprint.clone() {
+                Some(fingerprint) => shell
+                    .external_file
+                    .track_file_with_fingerprint(std::path::PathBuf::from(path), fingerprint),
+                None => shell
+                    .external_file
+                    .track_file(std::path::PathBuf::from(path), &shell.host.to_sgf()),
+            }
         }
+        shell
     }
 
     /// Parses a GTP command line into `(name, arguments)`.
@@ -1106,6 +1261,12 @@ impl ShellApp {
             cx.notify();
             return;
         };
+        if let Err(error) = ryusei_host::validate_katago_engine_record(&record) {
+            self.status = error.clone().into();
+            self.show_toast(format!("引擎启动检查失败: {error}"), cx);
+            cx.notify();
+            return;
+        }
 
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
         let board_size = self.host.snapshot().board.width;
@@ -1305,6 +1466,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn on_analyze(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.analysis_enabled = true;
         self.start_analysis(cx);
@@ -1313,6 +1475,11 @@ impl ShellApp {
     /// Requests analysis from the role-specific Analysis engine and marks the
     /// best candidate on the board.
     fn start_analysis(&mut self, cx: &mut Context<Self>) {
+        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff {
+            self.status = "AI analysis is locked for this remote competition".into();
+            cx.notify();
+            return;
+        }
         if self.analysis_task.is_some() {
             self.status = "analysis is already running; stop it before starting another run".into();
             cx.notify();
@@ -1324,9 +1491,13 @@ impl ShellApp {
         // KataGo limits search depth via `maxVisits`; 0 means unlimited.
         // Applied through `kata-set-param` right before the stream starts.
         let max_visits = self
-            .settings
-            .get("engines.analysis_max_visits")
-            .and_then(serde_json::Value::as_u64)
+            .batch_review_profile
+            .map(ryusei_domain_core::ReviewProfile::visits)
+            .or_else(|| {
+                self.settings
+                    .get("engines.analysis_max_visits")
+                    .and_then(serde_json::Value::as_u64)
+            })
             .unwrap_or(500);
         if !self.engine_controller.is_attached(EngineRole::Analysis) {
             let name = self
@@ -1850,19 +2021,31 @@ impl ShellApp {
                     let preparation = cx
                         .background_executor()
                         .spawn(async move {
-                            let result = AnalysisStream::start_in(
-                                &executable,
-                                &arguments,
-                                Some(&runtime_dir),
-                            )
-                            .map_err(|error| error.to_string())
-                            .and_then(|mut stream| {
-                                let setup_timeout =
-                                    ryusei_domain_core::gtp::DEFAULT_COMMAND_TIMEOUT;
-                                let replay = |stream: &mut AnalysisStream| -> Result<(), String> {
-                                    let commands =
-                                        replay_position_stream_commands(board_size, &moves);
-                                    for command in commands {
+                            AnalysisStream::start_in(&executable, &arguments, Some(&runtime_dir))
+                                .map_err(|error| error.to_string())
+                                .and_then(|mut stream| {
+                                    let setup_timeout =
+                                        ryusei_domain_core::gtp::DEFAULT_COMMAND_TIMEOUT;
+                                    let replay = |stream: &mut AnalysisStream| -> Result<(), String> {
+                                        let commands =
+                                            replay_position_stream_commands(board_size, &moves);
+                                        for command in commands {
+                                            let response = stream
+                                                .send_request(&command, setup_timeout)
+                                                .map_err(|error| error.to_string())?;
+                                            if !response.success {
+                                                return Err(format!(
+                                                    "engine rejected setup command `{command}`: {}",
+                                                    response.content
+                                                ));
+                                            }
+                                        }
+                                        Ok(())
+                                    };
+                                    replay(&mut stream)?;
+                                    if preparation_command == "kata-analyze" {
+                                        let command =
+                                            format!("kata-set-param maxVisits {max_visits}");
                                         let response = stream
                                             .send_request(&command, setup_timeout)
                                             .map_err(|error| error.to_string())?;
@@ -1873,27 +2056,11 @@ impl ShellApp {
                                             ));
                                         }
                                     }
-                                    Ok(())
-                                };
-                                replay(&mut stream)?;
-                                if preparation_command == "kata-analyze" {
-                                    let command = format!("kata-set-param maxVisits {max_visits}");
-                                    let response = stream
-                                        .send_request(&command, setup_timeout)
+                                    stream
+                                        .send_command(&full_command)
                                         .map_err(|error| error.to_string())?;
-                                    if !response.success {
-                                        return Err(format!(
-                                            "engine rejected setup command `{command}`: {}",
-                                            response.content
-                                        ));
-                                    }
-                                }
-                                stream
-                                    .send_command(&full_command)
-                                    .map_err(|error| error.to_string())?;
-                                Ok(stream)
-                            });
-                            result
+                                    Ok(stream)
+                                })
                         })
                         .await;
                     let Ok(mut stream) = preparation else {
@@ -2221,6 +2388,7 @@ impl ShellApp {
                 .map(|state| state.original_node_id.clone());
             self.batch_review_state = None;
             self.batch_review_progress = None;
+            self.batch_review_profile = None;
             if let Some(original_node) = original_node
                 && self.host.snapshot().current_node_id != original_node
             {
@@ -2239,6 +2407,7 @@ impl ShellApp {
                 .map(|state| state.original_node_id.clone());
             self.batch_review_state = None;
             self.batch_review_progress = None;
+            self.batch_review_profile = None;
             if let Some(original_node) = original_node
                 && self.host.snapshot().current_node_id != original_node
             {
@@ -2284,6 +2453,7 @@ impl ShellApp {
         }
     }
 
+    #[allow(dead_code)]
     fn on_analysis_stop(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.stop_analysis(cx);
     }
@@ -2330,7 +2500,23 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn start_review_profile_action(
+        &mut self,
+        profile: ryusei_domain_core::ReviewProfile,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_whole_game_review_with_profile(profile, cx);
+    }
+
     fn start_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        self.start_whole_game_review_with_profile(ryusei_domain_core::ReviewProfile::default(), cx);
+    }
+
+    fn start_whole_game_review_with_profile(
+        &mut self,
+        profile: ryusei_domain_core::ReviewProfile,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .batch_review_progress
             .is_some_and(|progress| progress.is_running)
@@ -2360,6 +2546,7 @@ impl ShellApp {
             return;
         }
         let node_ids = ryusei_host::active_lineage_review_nodes(&snapshot);
+        self.batch_review_profile = Some(profile);
         self.batch_review_state = BatchReviewState::new(snapshot.current_node_id.clone(), node_ids);
         self.batch_review_progress = Some(ryusei_host::BatchReviewProgress {
             current_move: 1,
@@ -2367,7 +2554,12 @@ impl ShellApp {
             is_running: true,
         });
         self.show_toast(
-            format!("⏩ 开启全盘 AI 复盘分析 (共 {} 手)...", lineage.len()),
+            format!(
+                "⏩ {} {} visits 全盘 AI 复盘分析 (共 {} 手)...",
+                profile.label(),
+                profile.visits(),
+                lineage.len()
+            ),
             cx,
         );
 
@@ -2418,6 +2610,7 @@ impl ShellApp {
         self.pending_analysis_request = None;
         self.batch_review_state = None;
         self.batch_review_progress = None;
+        self.batch_review_profile = None;
         if let Some(Some(original_node)) = original_node
             && self.host.snapshot().current_node_id != original_node
         {
@@ -2448,6 +2641,10 @@ impl ShellApp {
     /// Asks the engine attached to the specified role for a move without
     /// blocking GPUI while KataGo searches.
     fn trigger_engine_genmove(&mut self, role: EngineRole, color: Color, cx: &mut Context<Self>) {
+        self.advance_clock(Instant::now(), cx);
+        if self.clock.state().expired.is_some() {
+            return;
+        }
         if self.engine_command_tasks.contains_key(&role)
             || self.engine_controller.is_streaming(role)
         {
@@ -2474,6 +2671,7 @@ impl ShellApp {
         }
         .to_owned();
         self.status = format!("{} engine is thinking…", role.label()).into();
+        let clock_state = self.clock.state();
         let command_generation = self
             .engine_generations
             .get(&role)
@@ -2491,7 +2689,14 @@ impl ShellApp {
                             .background_executor()
                             .spawn(async move {
                                 let mut session = session;
-                                let result = session.generate_move(&engine_color);
+                                let result = session
+                                    .sync_clock_state(clock_state)
+                                    .map_err(|error| error.to_string())
+                                    .and_then(|()| {
+                                        session
+                                            .generate_move(&engine_color)
+                                            .map_err(|error| error.to_string())
+                                    });
                                 (session, result)
                             })
                             .await;
@@ -2524,9 +2729,16 @@ impl ShellApp {
                                     let board_size = shell.host.snapshot().board.width;
                                     let vertex = parse_gtp_vertex(board_size, &response_text)
                                         .map(|(column, row)| Vertex { column, row });
+                                    shell.advance_clock(Instant::now(), cx);
+                                    if shell.clock.state().expired.is_some() {
+                                        return;
+                                    }
                                     let mut events = RecordingSink;
                                     match shell.host.play_move(color, vertex, &mut events) {
                                         Ok(_) => {
+                                            if !shell.commit_clock_move(color) {
+                                                return;
+                                            }
                                             shell.last_vertex = vertex;
                                             shell.status = format!(
                                                 "{} AI played {response_text}",
@@ -2545,6 +2757,7 @@ impl ShellApp {
                                                 vertex,
                                                 cx,
                                             );
+                                            shell.request_configured_engine_turn(cx);
                                         }
                                         Err(error) => {
                                             shell.status =
@@ -2581,6 +2794,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn on_engine_move(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.generate_engine_move(cx);
     }
@@ -2907,11 +3121,17 @@ impl ShellApp {
                     weak.update(&mut cx, |shell, cx| match result {
                         Ok(path) => {
                             let mut executable_exists = false;
-                            if let Ok(env) = ryusei_host::ensure_katago_environment(
+                            let activation = ryusei_host::set_active_katago_model(
                                 &base_dir_for_task,
-                                tier,
-                                Some(&path),
-                            ) {
+                                &path,
+                            );
+                            if activation.is_ok()
+                                && let Ok(env) = ryusei_host::ensure_katago_environment(
+                                    &base_dir_for_task,
+                                    tier,
+                                    None,
+                                )
+                            {
                                 executable_exists = env.executable_exists;
                                 let engine_name = env.engine_record.name.clone();
                                 shell.engine_store.upsert(env.engine_record.clone());
@@ -2929,7 +3149,9 @@ impl ShellApp {
                                     shell.on_engine_connect(EngineRole::Analysis, cx);
                                 }
                             }
-                            let ready_message = if executable_exists {
+                            let ready_message = if let Err(error) = activation {
+                                format!("⚠️ 权重已下载但统一模型链接创建失败: {error}")
+                            } else if executable_exists {
                                 format!("KataGo model installed and ready: {}", path.display())
                             } else {
                                 format!(
@@ -2989,6 +3211,267 @@ impl ShellApp {
         .detach();
     }
 
+    fn refresh_katago_panel(&mut self, cx: &mut Context<Self>) {
+        if self.katago_panel_task.is_some() {
+            return;
+        }
+        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
+            self.katago_panel_status = "无法确定 KataGo 配置目录".into();
+            cx.notify();
+            return;
+        };
+        self.katago_panel_status = "正在读取本机与官网 KataGo 信息…".into();
+        let weak = cx.entity().downgrade();
+        self.katago_panel_task = Some(cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let local = ryusei_host::inspect_katago_local(&base)
+                                .map_err(|error| error.to_string())?;
+                            let mut release = ryusei_host::fetch_katago_latest_release()?;
+                            release
+                                .assets
+                                .extend(ryusei_host::fetch_katago_official_weights()?);
+                            // The main catalog remains useful even when the
+                            // optional special-model catalog is temporarily unavailable.
+                            if let Ok(human_sl_assets) =
+                                ryusei_host::fetch_katago_human_sl_weights()
+                            {
+                                release.assets.extend(human_sl_assets);
+                            }
+                            let weights =
+                                ryusei_host::merge_katago_weight_catalog(&local, &release);
+                            Ok::<_, String>((local, release, weights))
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        shell.katago_panel_task = None;
+                        match result {
+                            Ok((local, release, weights)) => {
+                                shell.katago_local = Some(local);
+                                shell.katago_release = Some(release);
+                                shell.katago_weights = weights;
+                                shell.katago_panel_status = "本机与官网信息已更新".into();
+                            }
+                            Err(error) => {
+                                shell.katago_panel_status =
+                                    format!("官网信息读取失败: {error}").into();
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        ));
+        cx.notify();
+    }
+
+    fn activate_katago_weight(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
+            return;
+        };
+        let model = ryusei_host::katago_storage_dir(&base)
+            .join("models")
+            .join(name);
+
+        if ryusei_host::is_human_sl_weight_name(name) {
+            let human_profile = self
+                .settings
+                .get_str("katago.human_sl_profile")
+                .unwrap_or("rank_5k")
+                .to_owned();
+            let result = ryusei_host::find_installed_normal_katago_model(&base)
+                .ok_or_else(|| "请先下载一个普通 KataGo 权重；HumanSL 需要普通 -model 与 HumanSL -human-model 成对启动".to_owned())
+                .and_then(|normal_model| {
+                    ryusei_host::prepare_katago_human_sl_engine(
+                        &base,
+                        &normal_model,
+                        &model,
+                        &human_profile,
+                    )
+                });
+            match result {
+                Ok(record) => {
+                    let engine_name = record.name.clone();
+                    self.engine_store.upsert(record);
+                    self.engine_roles.assign(EngineRole::White, &engine_name);
+                    let _ = self.engine_store.save(&mut self.settings);
+                    let _ = self.persist_engine_roles();
+                    let _ = ryusei_host::persist_settings_store(
+                        &self.settings,
+                        &mut self.settings_persistence,
+                    );
+                    self.katago_panel_status = format!(
+                        "HumanSL 已配置为白方引擎（{human_profile}）：{name}；未替换普通分析权重"
+                    )
+                    .into();
+                }
+                Err(error) => {
+                    self.katago_panel_status = format!("HumanSL 配置失败: {error}").into();
+                    self.show_toast(self.katago_panel_status.clone(), cx);
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        match ryusei_host::set_active_katago_model(&base, &model) {
+            Ok(_) => {
+                if let Ok(environment) = ryusei_host::ensure_katago_environment(
+                    &base,
+                    ryusei_host::KataGoModelTier::Balanced,
+                    None,
+                ) {
+                    self.engine_store.upsert(environment.engine_record);
+                    let _ = self.engine_store.save(&mut self.settings);
+                    let _ = ryusei_host::persist_settings_store(
+                        &self.settings,
+                        &mut self.settings_persistence,
+                    );
+                }
+                self.katago_local = ryusei_host::inspect_katago_local(&base).ok();
+                self.katago_weights = self
+                    .katago_local
+                    .as_ref()
+                    .map(|local| local.weights.clone())
+                    .unwrap_or_default();
+                self.katago_panel_status = format!("已切换当前标准权重: {name}").into();
+                cx.notify();
+            }
+            Err(error) => {
+                self.katago_panel_status = format!("切换权重失败: {error}").into();
+                self.show_toast(self.katago_panel_status.clone(), cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn download_katago_weight_asset(&mut self, name: &str, cx: &mut Context<Self>) {
+        let name = name.to_owned();
+        let Some(release) = self.katago_release.clone() else {
+            self.katago_panel_status = "请先刷新官网权重列表".into();
+            cx.notify();
+            return;
+        };
+        let Some(asset) = release.assets.into_iter().find(|asset| asset.name == name) else {
+            self.katago_panel_status = format!("官网未找到权重: {name}").into();
+            cx.notify();
+            return;
+        };
+        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
+            return;
+        };
+        self.katago_panel_status = format!("正在下载权重: {name}").into();
+        let weak = cx.entity().downgrade();
+        let worker_base = base.clone();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result =
+                        cx.background_executor()
+                            .spawn(async move {
+                                ryusei_host::download_katago_weight(&worker_base, &asset)
+                            })
+                            .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(_) => {
+                                shell.katago_local = ryusei_host::inspect_katago_local(&base).ok();
+                                shell.katago_weights = shell
+                                    .katago_local
+                                    .as_ref()
+                                    .map(|local| {
+                                        shell
+                                            .katago_release
+                                            .as_ref()
+                                            .map(|release| {
+                                                ryusei_host::merge_katago_weight_catalog(
+                                                    local, release,
+                                                )
+                                            })
+                                            .unwrap_or_else(|| local.weights.clone())
+                                    })
+                                    .unwrap_or_default();
+                                shell.katago_panel_status = format!("权重下载完成: {name}").into();
+                            }
+                            Err(error) => {
+                                shell.katago_panel_status = format!("权重下载失败: {error}").into()
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn update_katago_binary_from_panel(&mut self, cx: &mut Context<Self>) {
+        let Some(release) = self.katago_release.clone() else {
+            self.katago_panel_status = "请先刷新官网版本信息".into();
+            cx.notify();
+            return;
+        };
+        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
+            return;
+        };
+        self.katago_panel_status = "正在下载并安装官网最新 KataGo…".into();
+        let weak = cx.entity().downgrade();
+        let worker_base = base.clone();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result =
+                        cx.background_executor()
+                            .spawn(async move {
+                                ryusei_host::update_katago_binary(&worker_base, &release)
+                            })
+                            .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(path) => {
+                                if let Some(record) = shell
+                                    .engine_store
+                                    .list()
+                                    .iter()
+                                    .find(|record| {
+                                        record.name.to_ascii_lowercase().contains("katago")
+                                    })
+                                    .cloned()
+                                {
+                                    let mut updated = record;
+                                    updated.path = path.display().to_string();
+                                    shell.engine_store.upsert(updated);
+                                    let _ = shell.engine_store.save(&mut shell.settings);
+                                    let _ = ryusei_host::persist_settings_store(
+                                        &shell.settings,
+                                        &mut shell.settings_persistence,
+                                    );
+                                }
+                                shell.katago_local = ryusei_host::inspect_katago_local(&base).ok();
+                                shell.katago_panel_status =
+                                    format!("KataGo 更新完成: {}", path.display()).into();
+                            }
+                            Err(error) => {
+                                shell.katago_panel_status =
+                                    format!("KataGo 更新失败: {error}").into()
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
     fn on_plugin_command(&mut self, plugin_id: &str, command_id: &str, cx: &mut Context<Self>) {
         let builtin = ryusei_host::BuiltinPluginCommandRegistry::resolve(plugin_id, command_id);
         if builtin.is_some_and(|command| command.is_katago()) {
@@ -2999,6 +3482,12 @@ impl ShellApp {
             };
 
             match builtin.expect("KataGo command was classified") {
+                ryusei_host::BuiltinPluginCommand::KataGoRefresh => {
+                    self.refresh_katago_panel(cx);
+                }
+                ryusei_host::BuiltinPluginCommand::KataGoUpdateBinary => {
+                    self.update_katago_binary_from_panel(cx);
+                }
                 ryusei_host::BuiltinPluginCommand::KataGoSetup => {
                     match ryusei_host::ensure_katago_environment(
                         &base_dir,
@@ -3210,6 +3699,144 @@ impl ShellApp {
         self.analysis_best_move = None;
     }
 
+    fn capture_active_workspace_tab(&mut self) {
+        let snapshot = self.host.snapshot();
+        self.workspace_tabs.capture_active(
+            self.host.to_sgf(),
+            workspace_tab_title(&snapshot),
+            snapshot.file_state.path,
+            self.host.source_encoding(),
+            snapshot.file_state.is_dirty,
+            self.external_file.tracked_fingerprint(),
+            Some(snapshot.current_node_id.clone()),
+            self.clock.state(),
+            self.session_policy,
+            self.mode,
+            self.last_vertex,
+            self.analysis_enabled,
+            self.analysis.clone(),
+            self.analysis_best_move,
+        );
+    }
+
+    fn persist_workspace_tabs(&mut self) -> Result<(), String> {
+        self.persistence
+            .persist_workspace_tabs(&self.workspace_tabs)
+    }
+
+    fn activate_workspace_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+        if tab_id == self.workspace_tabs.active_tab_id() {
+            return;
+        }
+        self.capture_active_workspace_tab();
+        let tab = match self.workspace_tabs.tab_snapshot(tab_id) {
+            Ok(tab) => tab,
+            Err(error) => {
+                self.status = format!("could not activate session: {error}").into();
+                cx.notify();
+                return;
+            }
+        };
+        let tracked_path = tab.source_path.clone();
+        let tab_title = tab.title.clone();
+        let mut events = RecordingSink;
+        match self.host.restore_workspace_tab_with_state(
+            &tab.sgf,
+            tab.source_path.clone(),
+            tab.source_encoding,
+            tab.is_dirty,
+            tab.current_node_id.as_deref(),
+            &mut events,
+        ) {
+            Ok(snapshot) => {
+                // Commit the selection only after the SGF snapshot has been
+                // parsed successfully; a corrupt background tab must not
+                // desynchronize the workspace selection from the active host.
+                let _ = self.workspace_tabs.activate(tab_id);
+                self.disconnect_all_engine_sessions();
+                self.external_file.detach_file();
+                self.clock.apply_remote_clock(tab.clock);
+                self.clock_last_updated = Instant::now();
+                self.session_policy = tab.policy;
+                self.mode = tab.mode;
+                self.analysis_enabled = tab.analysis_enabled;
+                self.analysis = tab.analysis;
+                self.analysis_best_move = tab.analysis_best_move;
+                self.board_size = snapshot.board.width;
+                self.last_vertex = tab.last_vertex.or(snapshot.board.current_vertex);
+                match (tracked_path, tab.source_fingerprint) {
+                    (Some(path), Some(fingerprint)) => self
+                        .external_file
+                        .track_file_with_fingerprint(std::path::PathBuf::from(path), fingerprint),
+                    (Some(path), None) => {
+                        // Legacy snapshots predate the persisted baseline. Read
+                        // the actual source when possible rather than treating
+                        // dirty in-memory SGF as the last on-disk contents.
+                        let path = std::path::PathBuf::from(path);
+                        let baseline =
+                            ryusei_host::GameFileAccess::read_game_file(&self.file_access, &path)
+                                .map(|decoded| decoded.content)
+                                .unwrap_or_else(|_| tab.sgf.clone());
+                        self.external_file.track_file(path, &baseline);
+                    }
+                    (None, _) => {}
+                }
+                self.status = format!("已切换到会话: {tab_title}").into();
+            }
+            Err(error) => {
+                self.status = format!("could not restore session: {error}").into();
+                cx.notify();
+                return;
+            }
+        }
+        if self.analysis_enabled {
+            self.start_analysis(cx);
+        }
+        if let Err(error) = self.persist_workspace_tabs() {
+            self.status = format!("session state not persisted: {error}").into();
+        }
+        cx.notify();
+    }
+
+    fn create_workspace_session(&mut self, cx: &mut Context<Self>) {
+        self.capture_active_workspace_tab();
+        let (size, properties) = default_new_game_properties(&self.settings);
+        let mut new_host = match ryusei_host::HostApplication::new(size, size) {
+            Ok(host) => host,
+            Err(error) => {
+                self.status = format!("could not create session: {error}").into();
+                cx.notify();
+                return;
+            }
+        };
+        let mut events = RecordingSink;
+        if let Err(error) =
+            new_host.create_new_with_properties(size, size, &properties, &mut events)
+        {
+            self.status = format!("could not initialize session: {error}").into();
+            cx.notify();
+            return;
+        }
+        self.disconnect_all_engine_sessions();
+        self.external_file.detach_file();
+        self.host = new_host;
+        self.clock = ClockController::new(TimeControl::None);
+        self.clock_last_updated = Instant::now();
+        self.session_policy = SessionPolicy::new(SessionMode::Match, SessionSource::Local);
+        self.board_size = size;
+        self.last_vertex = None;
+        let tab = self.workspace_tabs.create_tab(
+            self.host.to_sgf(),
+            "Untitled Game",
+            ryusei_host::SourceEncoding::Utf8,
+        );
+        self.status = format!("新建会话: {}", tab.title).into();
+        if let Err(error) = self.persist_workspace_tabs() {
+            self.status = format!("session state not persisted: {error}").into();
+        }
+        cx.notify();
+    }
+
     /// Applies a settings edit through the validated store and persists it.
     /// A persistence failure rolls the store back so the UI never shows a
     /// value that is not on disk.
@@ -3367,6 +3994,10 @@ impl ShellApp {
 
     /// Snapshots the current dirty document as crash recovery.
     fn synchronize_recovery(&mut self) {
+        self.capture_active_workspace_tab();
+        if let Err(error) = self.persist_workspace_tabs() {
+            self.status = format!("session state not persisted: {error}").into();
+        }
         let snapshot = self.host.snapshot();
         if !snapshot.file_state.is_dirty {
             return;
@@ -3415,6 +4046,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn on_discard_recovery(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.autosave.resolve_discard();
         if let Err(error) = clear_autosave(&self.persistence, &mut self.autosave) {
@@ -3450,6 +4082,11 @@ impl ShellApp {
             }
         }
         self.last_vertex = None;
+        self.clock = ClockController::new(TimeControl::from_sgf(&properties));
+        self.clock_last_updated = Instant::now();
+        if !matches!(self.clock.state().control, TimeControl::None) {
+            self.clock.start(Color::Black);
+        }
         self.external_file.detach_file();
         self.disconnect_all_engine_sessions();
         cx.notify();
@@ -3461,9 +4098,22 @@ impl ShellApp {
 
     fn on_pass(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let color = self.host.snapshot().board.next_player;
+        if self.configured_engine_role(color).is_some() {
+            self.status = "当前轮到 AI 落子".into();
+            self.show_toast("当前轮到 AI 落子".to_owned(), cx);
+            cx.notify();
+            return;
+        }
+        self.advance_clock(Instant::now(), cx);
+        if self.clock.state().expired.is_some() {
+            return;
+        }
         let mut events = RecordingSink;
         match self.host.play_move(color, None, &mut events) {
             Ok(_) => {
+                if !self.commit_clock_move(color) {
+                    return;
+                }
                 self.last_vertex = None;
                 self.status = format!(
                     "{} passed",
@@ -3477,6 +4127,7 @@ impl ShellApp {
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::Pass);
                 self.sync_engine_position(None, color, None, cx);
+                self.request_configured_engine_turn(cx);
             }
             Err(error) => self.status = format!("pass rejected: {error}").into(),
         }
@@ -3850,6 +4501,7 @@ impl ShellApp {
 
     /// Explicitly reloads the document from its tracked source file, ignoring
     /// any pending external-file conflict.
+    #[allow(dead_code)]
     fn on_reload_external(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.external_file.tracked_path() else {
             self.status = "no external file to reload".into();
@@ -3877,6 +4529,7 @@ impl ShellApp {
 
     /// Keeps the local modifications and drops the source identity, so the
     /// next save must go through Save As.
+    #[allow(dead_code)]
     fn on_keep_local_external(
         &mut self,
         _: &MouseDownEvent,
@@ -4028,26 +4681,29 @@ impl ShellApp {
 
     fn play_at(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
         let color = self.host.snapshot().board.next_player;
+        if self.configured_engine_role(color).is_some() {
+            self.status = "当前轮到 AI 落子".into();
+            self.show_toast("当前轮到 AI 落子".to_owned(), cx);
+            cx.notify();
+            return;
+        }
+        self.advance_clock(Instant::now(), cx);
+        if self.clock.state().expired.is_some() {
+            return;
+        }
         let mut events = RecordingSink;
         match self.host.play_move(color, Some(vertex), &mut events) {
             Ok(_) => {
+                if !self.commit_clock_move(color) {
+                    return;
+                }
                 self.last_vertex = Some(vertex);
                 self.status = format!("move at {},{}", vertex.column, vertex.row).into();
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::StonePlaced);
                 self.sync_engine_position(None, color, Some(vertex), cx);
 
-                // Auto-reply if next player has an attached engine session in Play mode (Play vs AI)
-                if self.mode == GameMode::Play {
-                    let next_color = self.host.snapshot().board.next_player;
-                    let next_role = match next_color {
-                        Color::Black => EngineRole::Black,
-                        Color::White => EngineRole::White,
-                    };
-                    if self.engine_controller.is_attached(next_role) {
-                        self.trigger_engine_genmove(next_role, next_color, cx);
-                    }
-                }
+                self.request_configured_engine_turn(cx);
             }
             Err(error) => self.status = format!("move rejected: {error}").into(),
         }
@@ -4309,6 +4965,162 @@ impl ShellApp {
             Err(error) => self.status = format!("scoring failed: {error}").into(),
         }
         cx.notify();
+    }
+
+    fn set_match_participants(&mut self, participants: MatchParticipants, cx: &mut Context<Self>) {
+        self.session_policy.participants = participants;
+        self.status = format!("对局模式: {}", participants.label()).into();
+        self.show_toast(self.status.clone(), cx);
+        self.request_configured_engine_turn(cx);
+        cx.notify();
+    }
+
+    fn configured_engine_role(&self, color: Color) -> Option<EngineRole> {
+        (self.session_policy.mode == SessionMode::Match
+            && self.mode == GameMode::Play
+            && self.session_policy.participants.player(color) == PlayerKind::Ai)
+            .then_some(match color {
+                Color::Black => EngineRole::Black,
+                Color::White => EngineRole::White,
+            })
+    }
+
+    fn request_configured_engine_turn(&mut self, cx: &mut Context<Self>) {
+        let color = self.host.snapshot().board.next_player;
+        let Some(role) = self.configured_engine_role(color) else {
+            return;
+        };
+        if self.engine_controller.is_attached(role) {
+            self.trigger_engine_genmove(role, color, cx);
+        } else {
+            self.status = format!(
+                "{} 轮到 AI；请先连接 {} 引擎",
+                if color == Color::Black {
+                    "黑方"
+                } else {
+                    "白方"
+                },
+                role.label()
+            )
+            .into();
+            cx.notify();
+        }
+    }
+
+    fn set_opening_convention(&mut self, opening: OpeningConvention, cx: &mut Context<Self>) {
+        let _ = self.settings.set(
+            "game.opening_convention",
+            serde_json::json!(opening.setting_value()),
+        );
+        let _ = ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence);
+        self.new_game_at(self.board_size, cx);
+        self.status = format!("新局开局方式: {}", opening.label()).into();
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    fn set_time_control(&mut self, control: TimeControl, cx: &mut Context<Self>) {
+        self.clock = ClockController::new(control);
+        self.clock_last_updated = Instant::now();
+        if !matches!(control, TimeControl::None) {
+            self.clock.start(self.host.snapshot().board.next_player);
+        }
+        match control.to_sgf() {
+            Some((main_time, overtime)) => {
+                self.host.set_root_property("TM", vec![main_time]);
+                self.host.set_root_property("OT", vec![overtime]);
+            }
+            None => {
+                self.host.set_root_property("TM", vec!["0".to_owned()]);
+                self.host.set_root_property("OT", vec!["none".to_owned()]);
+            }
+        }
+        self.status = match control {
+            TimeControl::None => "time control disabled".into(),
+            TimeControl::Absolute { main_time_secs } => {
+                format!("absolute time: {} minutes", main_time_secs / 60).into()
+            }
+            TimeControl::ByoYomi {
+                main_time_secs,
+                period_time_secs,
+                periods,
+            } => format!(
+                "time control: {} minutes + {} x {} seconds byo-yomi",
+                main_time_secs / 60,
+                periods,
+                period_time_secs
+            )
+            .into(),
+        };
+        self.synchronize_recovery();
+        cx.notify();
+    }
+
+    fn advance_clock(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let elapsed = now.saturating_duration_since(self.clock_last_updated);
+        self.clock_last_updated = now;
+        if let Some(ClockEvent::Expired(loser)) = self.clock.tick(elapsed) {
+            let winner = match loser {
+                Color::Black => "W",
+                Color::White => "B",
+            };
+            self.host
+                .set_root_property("RE", vec![format!("{winner}+T")]);
+            self.status = format!(
+                "{} lost on time",
+                if loser == Color::Black {
+                    "black"
+                } else {
+                    "white"
+                }
+            )
+            .into();
+            self.synchronize_recovery();
+            cx.notify();
+        }
+    }
+
+    fn commit_clock_move(&mut self, color: Color) -> bool {
+        if let ClockEvent::Expired(loser) = self.clock.on_move_committed(color, Duration::ZERO) {
+            let winner = match loser {
+                Color::Black => "W",
+                Color::White => "B",
+            };
+            self.host
+                .set_root_property("RE", vec![format!("{winner}+T")]);
+            self.status = format!(
+                "{} lost on time",
+                if loser == Color::Black {
+                    "black"
+                } else {
+                    "white"
+                }
+            )
+            .into();
+            self.synchronize_recovery();
+            return false;
+        }
+        self.clock_last_updated = Instant::now();
+        true
+    }
+
+    fn set_session_mode(&mut self, mode: SessionMode, cx: &mut Context<Self>) {
+        self.session_policy = SessionPolicy::new(mode, self.session_policy.source);
+        self.analysis_enabled = self.session_policy.analysis == AnalysisPolicy::Continuous;
+        if !self.analysis_enabled && self.analysis_task.is_some() {
+            self.analysis_run.request_stop();
+        }
+        self.status = match mode {
+            SessionMode::Match => "match session: AI analysis is off by default".into(),
+            SessionMode::Record => "record session: start AI analysis manually when needed".into(),
+            SessionMode::Live => "live session: continuous AI analysis is enabled".into(),
+        };
+        if self.analysis_enabled {
+            self.start_analysis(cx);
+        } else {
+            self.request_configured_engine_turn(cx);
+            cx.notify();
+        }
     }
 
     fn set_mode(&mut self, mode: GameMode, cx: &mut Context<Self>) {
@@ -4622,6 +5434,53 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn export_current_position_png(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.host.snapshot();
+        let ownership =
+            best_analysis_entry(&self.analysis).and_then(|entry| entry.ownership.clone());
+        let options = ryusei_host::PositionPngOptions {
+            image_size: 720,
+            show_coordinates: self
+                .settings
+                .get_bool("view.show_coordinates")
+                .unwrap_or(true),
+            ownership,
+        };
+        match ryusei_host::export_position_to_png(&snapshot.board, &options) {
+            Ok(png_bytes) => {
+                let suggested = format!("ryusei-position-{}.png", std::process::id());
+                let Some(destination) = self.dialog_service.pick_save_png_path(&suggested) else {
+                    self.status = "PNG export cancelled".into();
+                    cx.notify();
+                    return;
+                };
+                match self
+                    .persistence
+                    .persist_png_export(&destination, &png_bytes)
+                {
+                    Ok(()) => {
+                        self.status =
+                            format!("current position PNG exported: {}", destination.display())
+                                .into();
+                        self.show_toast(
+                            format!("已导出当前局面 PNG: {}", destination.display()),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        self.status = format!("PNG export failed: {error}").into();
+                        self.show_toast(self.status.clone(), cx);
+                    }
+                }
+            }
+            Err(error) => {
+                self.status = format!("PNG export failed: {error}").into();
+                self.show_toast(self.status.clone(), cx);
+            }
+        }
+        cx.notify();
+    }
+
     fn on_export_gif_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let options = ryusei_host::GifExportOptions::default();
@@ -4632,10 +5491,16 @@ impl ShellApp {
                     .dialog_service
                     .pick_save_gif_path(&suggested)
                     .unwrap_or_else(|| std::env::temp_dir().join(&suggested));
-                if std::fs::write(&dest, &gif_bytes).is_ok() {
-                    self.show_toast(format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()), cx);
-                } else {
-                    self.show_toast("GIF 保存失败".to_owned(), cx);
+                match self.persistence.persist_gif_export(&dest, &gif_bytes) {
+                    Ok(()) => {
+                        self.show_toast(
+                            format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        self.show_toast(format!("GIF 保存失败: {error}"), cx);
+                    }
                 }
             }
             Err(e) => {
@@ -4651,11 +5516,49 @@ impl ShellApp {
         cx.notify();
     }
 
+    fn open_library(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::Library, "棋谱库已打开", cx);
+    }
+
+    fn open_profile(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::Profile, "Profile 已打开", cx);
+    }
+
+    fn open_goals(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::Goals, "目标与计划已打开", cx);
+    }
+
     fn open_preferences(&mut self, cx: &mut Context<Self>) {
-        self.show_toast(
-            "💡 设置与插件功能已全部移入顶部菜单栏 (View / Board & Theme / Engines / Plugins)",
-            cx,
-        );
+        self.open_drawer(ActiveDrawer::Preferences, "设置已打开", cx);
+    }
+
+    fn set_goal_from_active_session(&mut self, cx: &mut Context<Self>) {
+        let title = self.workspace_tabs.active_tab().title.clone();
+        self.apply_settings_edit(SettingEdit::Set {
+            key: "profile.current_goal".to_owned(),
+            value: serde_json::Value::String(format!("完成 {title}")),
+        });
+        self.apply_settings_edit(SettingEdit::Set {
+            key: "profile.current_plan".to_owned(),
+            value: serde_json::Value::String(format!("打谱、复盘并保存 {title}")),
+        });
+        self.status = format!("已将 {title} 设为当前目标").into();
+        cx.notify();
+    }
+
+    fn complete_current_plan(&mut self, cx: &mut Context<Self>) {
+        let plan = self
+            .settings
+            .get_str("profile.current_plan")
+            .filter(|plan| !plan.trim().is_empty())
+            .unwrap_or("当前计划")
+            .to_owned();
+        self.apply_settings_edit(SettingEdit::Set {
+            key: "profile.current_plan".to_owned(),
+            value: serde_json::Value::String(format!("已完成: {plan}")),
+        });
+        self.status = "计划已标记为完成".into();
+        cx.notify();
     }
 
     /// Opens the plugin pinning manager from the player bar hamburger menu.
@@ -4693,6 +5596,9 @@ impl ShellApp {
             BottomDeckTab::KataGo => {
                 self.gtp_terminal_open = false;
                 self.active_plugin_popover = Some("org.ryusei.katago-setup-hub".to_owned());
+                if self.katago_release.is_none() {
+                    self.refresh_katago_panel(cx);
+                }
             }
             BottomDeckTab::FoxSync => {
                 self.gtp_terminal_open = false;
@@ -4861,6 +5767,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn on_navigate_first(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.navigate(NavigationDirection::First, cx);
     }
@@ -4873,6 +5780,7 @@ impl ShellApp {
         self.navigate(NavigationDirection::Next, cx);
     }
 
+    #[allow(dead_code)]
     fn on_navigate_last(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.navigate(NavigationDirection::Last, cx);
     }
@@ -5001,15 +5909,17 @@ impl Render for ShellApp {
         let window_bounds = window.bounds();
         let window_width = f32::from(window_bounds.size.width);
         let window_height = f32::from(window_bounds.size.height);
-        let side_panels = if show_left_sidebar {
-            self.left_sidebar_width
-        } else {
-            0.0
-        } + if show_right_sidebar {
-            self.right_sidebar_width
-        } else {
-            0.0
-        };
+        let side_panels = NAVIGATION_RAIL_WIDTH
+            + if show_left_sidebar {
+                self.left_sidebar_width
+            } else {
+                0.0
+            }
+            + if show_right_sidebar {
+                self.right_sidebar_width
+            } else {
+                0.0
+            };
         let bottom_panel_height = if self.is_bottom_deck_open() {
             280.0
         } else {
@@ -5041,6 +5951,7 @@ impl Render for ShellApp {
                     .h_0()
                     .min_h_0()
                     .flex()
+                    .child(navigation_rail::render_navigation_rail(self, cx))
                     .child(if show_left_sidebar {
                         div()
                             .id("left-sidebar")
@@ -5203,7 +6114,10 @@ impl Render for ShellApp {
                     }),
             )
             .child(match self.active_drawer {
-                Some(ActiveDrawer::Preferences) => div().id("preferences-drawer-hidden"),
+                Some(ActiveDrawer::Preferences) => panels::render_preferences_drawer(self, cx),
+                Some(ActiveDrawer::Library) => panels::render_library_drawer(self, cx),
+                Some(ActiveDrawer::Profile) => panels::render_profile_drawer(self, cx),
+                Some(ActiveDrawer::Goals) => panels::render_goals_drawer(self, cx),
                 Some(ActiveDrawer::GameInfo) => {
                     panels::render_game_info_drawer(&snapshot, self, cx)
                 }
@@ -5486,6 +6400,7 @@ fn shell_menus() -> Vec<Menu> {
                 MenuItem::action("Save As…", SaveGameAs),
                 MenuItem::separator(),
                 MenuItem::action("Export Animated GIF…", ExportGif),
+                MenuItem::action("Export Current Position PNG…", ExportPositionPng),
             ],
         },
         Menu {
@@ -5523,7 +6438,27 @@ fn shell_menus() -> Vec<Menu> {
             ],
         },
         Menu {
-            name: "Mode".into(),
+            name: "Session".into(),
+            items: vec![
+                MenuItem::action("Match", SetSessionMatch),
+                MenuItem::action("Record", SetSessionRecord),
+                MenuItem::action("Live", SetSessionLive),
+                MenuItem::separator(),
+                MenuItem::action("人人对弈", SetPlayersHumanVsHuman),
+                MenuItem::action("人机对弈（黑方人类）", SetPlayersHumanVsAi),
+                MenuItem::action("人机对弈（白方人类）", SetPlayersAiVsHuman),
+                MenuItem::action("AI 对弈", SetPlayersAiVsAi),
+                MenuItem::separator(),
+                MenuItem::action("Free Opening", SetOpeningFree),
+                MenuItem::action("Chinese Ancient: Seat Stones", SetOpeningAncientSeatStones),
+                MenuItem::separator(),
+                MenuItem::action("No Clock", SetTimeNone),
+                MenuItem::action("10 Minutes Absolute", SetTimeAbsolute600),
+                MenuItem::action("10m + 5 x 30s Byo-yomi", SetTimeByoYomi),
+            ],
+        },
+        Menu {
+            name: "Board Tool".into(),
             items: vec![
                 MenuItem::action("Play", SetPlayMode),
                 MenuItem::action("Edit", SetEditMode),
@@ -5539,7 +6474,19 @@ fn shell_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Start Analysis", StartAnalysis),
                 MenuItem::action("Stop Analysis", StopAnalysis),
-                MenuItem::action("Start Whole Game Review", StartWholeGameReview),
+                MenuItem::action("Whole Game Review: Quick (50 visits)", StartReviewQuick),
+                MenuItem::action(
+                    "Whole Game Review: Preliminary (800 visits)",
+                    StartReviewPreliminary,
+                ),
+                MenuItem::action(
+                    "Whole Game Review: Intermediate (2500 visits)",
+                    StartReviewIntermediate,
+                ),
+                MenuItem::action(
+                    "Whole Game Review: Advanced (10000 visits)",
+                    StartReviewAdvanced,
+                ),
                 MenuItem::action("Generate Engine Move", GenerateEngineMove),
                 MenuItem::separator(),
                 MenuItem::action("Visits Limit: 100", SetVisits100),
@@ -5615,9 +6562,12 @@ fn schedule_external_check<V: gpui::Render + 'static>(
             Some(previous) => previous.elapsed() >= EXTERNAL_CHECK_INTERVAL,
             None => true,
         };
-        if due && window_handle.is_active(cx).unwrap_or(false) {
-            last_check.set(Some(Instant::now()));
-            shell.update(cx, |shell, cx| shell.check_external_file_now(cx));
+        if window_handle.is_active(cx).unwrap_or(false) {
+            shell.update(cx, |shell, cx| shell.advance_clock(Instant::now(), cx));
+            if due {
+                last_check.set(Some(Instant::now()));
+                shell.update(cx, |shell, cx| shell.check_external_file_now(cx));
+            }
         }
         schedule_external_check(window, cx, window_handle, shell, last_check);
     });
@@ -5816,6 +6766,83 @@ fn main() {
                 shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx)
             });
         });
+        let shell_session_match = shell.clone();
+        cx.on_action(move |_: &SetSessionMatch, cx| {
+            shell_session_match.update(cx, |shell, cx| shell.set_session_mode(SessionMode::Match, cx));
+        });
+        let shell_session_record = shell.clone();
+        cx.on_action(move |_: &SetSessionRecord, cx| {
+            shell_session_record.update(cx, |shell, cx| shell.set_session_mode(SessionMode::Record, cx));
+        });
+        let shell_session_live = shell.clone();
+        cx.on_action(move |_: &SetSessionLive, cx| {
+            shell_session_live.update(cx, |shell, cx| shell.set_session_mode(SessionMode::Live, cx));
+        });
+        let shell_players_hvh = shell.clone();
+        cx.on_action(move |_: &SetPlayersHumanVsHuman, cx| {
+            shell_players_hvh.update(cx, |shell, cx| {
+                shell.set_match_participants(MatchParticipants::human_vs_human(), cx)
+            });
+        });
+        let shell_players_hvai = shell.clone();
+        cx.on_action(move |_: &SetPlayersHumanVsAi, cx| {
+            shell_players_hvai.update(cx, |shell, cx| {
+                shell.set_match_participants(MatchParticipants::human_vs_ai(), cx)
+            });
+        });
+        let shell_players_aihv = shell.clone();
+        cx.on_action(move |_: &SetPlayersAiVsHuman, cx| {
+            shell_players_aihv.update(cx, |shell, cx| {
+                shell.set_match_participants(
+                    MatchParticipants {
+                        black: PlayerKind::Ai,
+                        white: PlayerKind::Human,
+                    },
+                    cx,
+                )
+            });
+        });
+        let shell_players_aiai = shell.clone();
+        cx.on_action(move |_: &SetPlayersAiVsAi, cx| {
+            shell_players_aiai.update(cx, |shell, cx| {
+                shell.set_match_participants(MatchParticipants::ai_vs_ai(), cx)
+            });
+        });
+        let shell_opening_free = shell.clone();
+        cx.on_action(move |_: &SetOpeningFree, cx| {
+            shell_opening_free.update(cx, |shell, cx| {
+                shell.set_opening_convention(OpeningConvention::Free, cx)
+            });
+        });
+        let shell_opening_ancient = shell.clone();
+        cx.on_action(move |_: &SetOpeningAncientSeatStones, cx| {
+            shell_opening_ancient.update(cx, |shell, cx| {
+                shell.set_opening_convention(OpeningConvention::ChineseAncientSeatStones, cx)
+            });
+        });
+        let shell_time_none = shell.clone();
+        cx.on_action(move |_: &SetTimeNone, cx| {
+            shell_time_none.update(cx, |shell, cx| shell.set_time_control(TimeControl::None, cx));
+        });
+        let shell_time_absolute = shell.clone();
+        cx.on_action(move |_: &SetTimeAbsolute600, cx| {
+            shell_time_absolute.update(cx, |shell, cx| {
+                shell.set_time_control(TimeControl::Absolute { main_time_secs: 600 }, cx)
+            });
+        });
+        let shell_time_byoyomi = shell.clone();
+        cx.on_action(move |_: &SetTimeByoYomi, cx| {
+            shell_time_byoyomi.update(cx, |shell, cx| {
+                shell.set_time_control(
+                    TimeControl::ByoYomi {
+                        main_time_secs: 600,
+                        period_time_secs: 30,
+                        periods: 5,
+                    },
+                    cx,
+                )
+            });
+        });
         let shell_play_mode = shell.clone();
         cx.on_action(move |_: &SetPlayMode, cx| {
             shell_play_mode.update(cx, |shell, cx| shell.set_mode(GameMode::Play, cx));
@@ -5936,6 +6963,30 @@ fn main() {
         cx.on_action(move |_: &SetVisitsUnlimited, cx| {
             shell_v0.update(cx, |shell, cx| shell.apply_analysis_visits(0, cx));
         });
+        let shell_review_quick = shell.clone();
+        cx.on_action(move |_: &StartReviewQuick, cx| {
+            shell_review_quick.update(cx, |shell, cx| {
+                shell.start_review_profile_action(ryusei_domain_core::ReviewProfile::Quick, cx)
+            });
+        });
+        let shell_review_preliminary = shell.clone();
+        cx.on_action(move |_: &StartReviewPreliminary, cx| {
+            shell_review_preliminary.update(cx, |shell, cx| {
+                shell.start_review_profile_action(ryusei_domain_core::ReviewProfile::Preliminary, cx)
+            });
+        });
+        let shell_review_intermediate = shell.clone();
+        cx.on_action(move |_: &StartReviewIntermediate, cx| {
+            shell_review_intermediate.update(cx, |shell, cx| {
+                shell.start_review_profile_action(ryusei_domain_core::ReviewProfile::Intermediate, cx)
+            });
+        });
+        let shell_review_advanced = shell.clone();
+        cx.on_action(move |_: &StartReviewAdvanced, cx| {
+            shell_review_advanced.update(cx, |shell, cx| {
+                shell.start_review_profile_action(ryusei_domain_core::ReviewProfile::Advanced, cx)
+            });
+        });
         let shell_p_katago = shell.clone();
         cx.on_action(move |_: &PluginKataGoSetup, cx| {
             shell_p_katago.update(cx, |shell, cx| {
@@ -6012,6 +7063,10 @@ fn main() {
                 cx.notify();
             });
         });
+        let shell_export_png = shell.clone();
+        cx.on_action(move |_: &ExportPositionPng, cx| {
+            shell_export_png.update(cx, |shell, cx| shell.export_current_position_png(cx));
+        });
         cx.on_action(|_: &Quit, cx| cx.quit());
 
         cx.bind_keys([
@@ -6064,13 +7119,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn shell_menus_cover_file_edit_view_mode_engine_and_navigation() {
+    fn shell_menus_cover_file_edit_view_session_engine_and_navigation() {
         let names = super::shell_menus()
             .into_iter()
             .map(|menu| menu.name.to_string())
             .collect::<Vec<_>>();
         for expected in [
-            "File", "Edit", "View", "Mode", "Engines", "Navigate", "Help",
+            "File", "Edit", "View", "Session", "Engines", "Navigate", "Help",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -6155,6 +7210,21 @@ mod tests {
                 "cc".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn ancient_seat_stones_preserve_rules_and_komi_while_adding_setup_stones() {
+        let mut settings = SettingsStore::default();
+        settings
+            .set("game.opening_convention", json!("chineseAncientSeatStones"))
+            .unwrap();
+        let (size, properties) = default_new_game_properties(&settings);
+        assert_eq!(size, 19);
+        assert_eq!(properties.get("KM").unwrap(), &vec!["6.5".to_owned()]);
+        assert!(!properties.contains_key("RU"));
+        assert_eq!(properties.get("AB").unwrap().len(), 4);
+        assert!(properties.get("AB").unwrap().contains(&"dd".to_owned()));
+        assert!(properties.get("AB").unwrap().contains(&"pp".to_owned()));
     }
 }
 
@@ -6511,7 +7581,14 @@ mod frontend_smoke {
 
         // A fresh profile exposes the engines and analysis controls rather
         // than making a connected KataGo process look inert.
-        assert!(vcx.debug_bounds("left-sidebar").is_some());
+        let navigation_rail = vcx
+            .debug_bounds("navigation-rail")
+            .expect("a compact global navigation rail is always present");
+        let left_sidebar = vcx
+            .debug_bounds("left-sidebar")
+            .expect("fresh profile renders the engine sidebar");
+        assert_eq!(navigation_rail.size.width, px(NAVIGATION_RAIL_WIDTH));
+        assert!(navigation_rail.right() <= left_sidebar.origin.x);
         assert!(vcx.debug_bounds("right-sidebar").is_some());
         shell.update(&mut vcx.cx, |shell, cx| {
             shell.toggle_sidebar_setting("view.show_leftsidebar", "engines sidebar", cx);
@@ -6544,6 +7621,40 @@ mod frontend_smoke {
             "release player bar should remain a single compact row, got {:?}",
             status.size
         );
+        shell.update(&mut vcx.cx, |shell, cx| {
+            let first_sgf = shell.host.to_sgf();
+            shell.mode = GameMode::Edit;
+            shell.last_vertex = Some(Vertex { column: 3, row: 3 });
+            shell.analysis_enabled = true;
+            shell.analysis = vec![ryusei_host::AnalysisEntry {
+                id: Some(7),
+                vertex: Some("D4".to_owned()),
+                visits: 800,
+                winrate: 0.61,
+                score_lead: Some(2.5),
+                pv: vec!["D4".to_owned()],
+                is_during_search: false,
+                ownership: None,
+            }];
+            shell.analysis_best_move = Some(Vertex { column: 3, row: 3 });
+            shell.create_workspace_session(cx);
+            assert_eq!(shell.workspace_tabs.tabs().len(), 2);
+            assert_eq!(shell.workspace_tabs.active_tab_id(), "session-2");
+            shell.activate_workspace_tab("session-1", cx);
+            assert_eq!(shell.host.to_sgf(), first_sgf);
+            assert_eq!(shell.workspace_tabs.active_tab_id(), "session-1");
+            assert_eq!(shell.mode, GameMode::Edit);
+            assert!(shell.analysis_enabled);
+            assert_eq!(shell.analysis.len(), 1);
+            assert_eq!(shell.analysis_best_move, Some(Vertex { column: 3, row: 3 }));
+            assert!(
+                shell
+                    .persistence
+                    .load_workspace_tabs()
+                    .expect("workspace sessions persist")
+                    .is_some()
+            );
+        });
         let _ = std::fs::remove_dir_all(&config);
     }
 
@@ -6808,10 +7919,19 @@ mod frontend_smoke {
             "clicking the rendered intersection must place the next black stone"
         );
         assert!(after.1.is_some(), "placed move must have a vertex");
-        let pass_bounds = vcx
-            .debug_bounds("pass-button")
-            .expect("the pass button must have a debug selector");
-        vcx.simulate_click(pass_bounds.center(), gpui::Modifiers::none());
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        assert!(
+            vcx.debug_bounds("pass-button").is_some(),
+            "the pass button must have a debug selector"
+        );
+        vcx.update(|window, cx| {
+            shell.update(cx, |shell, cx| {
+                shell.on_pass(&MouseDownEvent::default(), window, cx);
+            });
+        });
         let after_pass = shell.read_with(&vcx.cx, |shell, _| {
             let snapshot = shell.host.snapshot();
             (

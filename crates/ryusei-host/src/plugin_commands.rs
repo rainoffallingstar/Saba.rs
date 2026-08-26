@@ -9,6 +9,8 @@ use crate::KataGoModelTier;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinPluginCommand {
     KataGoSetup,
+    KataGoRefresh,
+    KataGoUpdateBinary,
     KataGoDownload(KataGoModelTier),
     FoxFetchLatest,
     PositionCheck,
@@ -17,7 +19,13 @@ pub enum BuiltinPluginCommand {
 
 impl BuiltinPluginCommand {
     pub const fn is_katago(self) -> bool {
-        matches!(self, Self::KataGoSetup | Self::KataGoDownload(_))
+        matches!(
+            self,
+            Self::KataGoSetup
+                | Self::KataGoRefresh
+                | Self::KataGoUpdateBinary
+                | Self::KataGoDownload(_)
+        )
     }
 
     pub const fn is_fox(self) -> bool {
@@ -35,6 +43,12 @@ impl BuiltinPluginCommandRegistry {
         match (plugin_id, command_id) {
             ("org.ryusei.katago-setup-hub", "org.ryusei.katago-setup-hub.setup") => {
                 Some(BuiltinPluginCommand::KataGoSetup)
+            }
+            ("org.ryusei.katago-setup-hub", "org.ryusei.katago-setup-hub.refresh") => {
+                Some(BuiltinPluginCommand::KataGoRefresh)
+            }
+            ("org.ryusei.katago-setup-hub", "org.ryusei.katago-setup-hub.update_binary") => {
+                Some(BuiltinPluginCommand::KataGoUpdateBinary)
             }
             ("org.ryusei.katago-setup-hub", "org.ryusei.katago-setup-hub.download_balanced") => {
                 Some(BuiltinPluginCommand::KataGoDownload(
@@ -79,6 +93,20 @@ mod tests {
                 "org.ryusei.katago-setup-hub.setup"
             ),
             Some(BuiltinPluginCommand::KataGoSetup)
+        );
+        assert_eq!(
+            BuiltinPluginCommandRegistry::resolve(
+                "org.ryusei.katago-setup-hub",
+                "org.ryusei.katago-setup-hub.refresh"
+            ),
+            Some(BuiltinPluginCommand::KataGoRefresh)
+        );
+        assert_eq!(
+            BuiltinPluginCommandRegistry::resolve(
+                "org.ryusei.katago-setup-hub",
+                "org.ryusei.katago-setup-hub.update_binary"
+            ),
+            Some(BuiltinPluginCommand::KataGoUpdateBinary)
         );
         assert_eq!(
             BuiltinPluginCommandRegistry::resolve(

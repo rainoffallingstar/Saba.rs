@@ -29,6 +29,9 @@ fn find_katago_model() -> Option<String> {
         let home = PathBuf::from(home);
         roots.push(home.join(".config/ryusei-gpui/plugins/engines/katago/models"));
         roots.push(home.join(".config/ryusei/plugins/engines/katago/models"));
+        roots.push(home.join(".config/ryusei/engines/katago/models"));
+        roots.push(home.join(".config/sabaki-gpui/plugins/engines/katago/models"));
+        roots.push(home.join(".config/sabaki-gpui/engines/katago/models"));
         roots.push(home.join(".katago/models"));
     }
     for root in roots {
@@ -63,6 +66,9 @@ fn find_katago_config() -> Option<String> {
         let home = PathBuf::from(home);
         roots.push(home.join(".config/ryusei-gpui/plugins/engines/katago/configs"));
         roots.push(home.join(".config/ryusei/plugins/engines/katago/configs"));
+        roots.push(home.join(".config/ryusei/engines/katago/configs"));
+        roots.push(home.join(".config/sabaki-gpui/plugins/engines/katago/configs"));
+        roots.push(home.join(".config/sabaki-gpui/engines/katago/configs"));
     }
     for root in roots {
         let Ok(entries) = std::fs::read_dir(&root) else {

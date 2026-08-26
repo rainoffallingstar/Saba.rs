@@ -35,6 +35,8 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "game.default_board_size",
     "game.default_komi",
     "game.default_handicap",
+    "game.opening_convention",
+    "katago.human_sl_profile",
     "engines.analyze_commands",
 ];
 
@@ -166,6 +168,8 @@ pub fn setting_label(key: &str) -> &'static str {
         "game.default_board_size" => "Default board size",
         "game.default_komi" => "Default komi",
         "game.default_handicap" => "Default handicap",
+        "game.opening_convention" => "Opening convention",
+        "katago.human_sl_profile" => "KataGo HumanSL profile",
         "engines.analyze_commands" => "Analyze commands",
         _ => "Setting",
     }

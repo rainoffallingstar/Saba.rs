@@ -11,7 +11,7 @@ use std::{
 };
 
 use ryusei_domain_core::gtp::{GtpError, GtpResponse};
-use ryusei_domain_core::{Color, MoveDto};
+use ryusei_domain_core::{Color, MoveDto, TimeControl};
 
 use crate::{EngineRecord, EngineSession, EngineSessionError, GtpTransport};
 
@@ -153,6 +153,30 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
     ) -> Result<GtpResponse, EngineControllerError> {
         self.session_mut(role)?
             .send_command(name, arguments)
+            .map_err(Into::into)
+    }
+
+    /// Configures the time control for a connected role.
+    pub fn set_time_control(
+        &mut self,
+        role: R,
+        control: TimeControl,
+    ) -> Result<GtpResponse, EngineControllerError> {
+        self.session_mut(role)?
+            .set_time_control(control)
+            .map_err(Into::into)
+    }
+
+    /// Reports one player's remaining time to a connected role.
+    pub fn set_time_left(
+        &mut self,
+        role: R,
+        color: Color,
+        remaining: Duration,
+        periods: u32,
+    ) -> Result<GtpResponse, EngineControllerError> {
+        self.session_mut(role)?
+            .set_time_left(color, remaining, periods)
             .map_err(Into::into)
     }
 

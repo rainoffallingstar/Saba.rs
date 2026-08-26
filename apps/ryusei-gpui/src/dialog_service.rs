@@ -22,6 +22,9 @@ pub trait DialogService {
 
     /// Ask the user where to save an exported GIF animated file.
     fn pick_save_gif_path(&self, suggested_name: &str) -> Option<PathBuf>;
+
+    /// Ask the user where to save a current-position PNG image.
+    fn pick_save_png_path(&self, suggested_name: &str) -> Option<PathBuf>;
 }
 
 /// Deterministic dialog for the GPUI client.
@@ -35,6 +38,7 @@ pub struct MockDialogService {
     pub open_path: Option<PathBuf>,
     pub save_path: Option<PathBuf>,
     pub save_gif_path: Option<PathBuf>,
+    pub save_png_path: Option<PathBuf>,
 }
 
 impl Default for MockDialogService {
@@ -43,6 +47,7 @@ impl Default for MockDialogService {
             open_path: None,
             save_path: Some(PathBuf::from("untitled.sgf")),
             save_gif_path: Some(PathBuf::from("game.gif")),
+            save_png_path: Some(PathBuf::from("position.png")),
         }
     }
 }
@@ -67,6 +72,14 @@ impl DialogService for MockDialogService {
     fn pick_save_gif_path(&self, suggested_name: &str) -> Option<PathBuf> {
         Some(
             self.save_gif_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(suggested_name)),
+        )
+    }
+
+    fn pick_save_png_path(&self, suggested_name: &str) -> Option<PathBuf> {
+        Some(
+            self.save_png_path
                 .clone()
                 .unwrap_or_else(|| PathBuf::from(suggested_name)),
         )
@@ -115,12 +128,30 @@ impl DialogService for RfdDialogService {
             .save_file()
             .map(ensure_gif_extension)
     }
+
+    fn pick_save_png_path(&self, suggested_name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Export Current Position PNG")
+            .set_file_name(suggested_name)
+            .add_filter("PNG Image (*.png)", &["png"])
+            .save_file()
+            .map(ensure_png_extension)
+    }
 }
 
 /// Appends the `.gif` extension when the chosen save path has none.
 pub fn ensure_gif_extension(path: PathBuf) -> PathBuf {
     if path.extension().is_none() {
         path.with_extension("gif")
+    } else {
+        path
+    }
+}
+
+/// Appends the `.png` extension when the chosen save path has none.
+pub fn ensure_png_extension(path: PathBuf) -> PathBuf {
+    if path.extension().is_none() {
+        path.with_extension("png")
     } else {
         path
     }
@@ -186,6 +217,7 @@ mod tests {
             open_path: Some(PathBuf::from("/games/opening.sgf")),
             save_path: None,
             save_gif_path: None,
+            save_png_path: None,
         };
         assert_eq!(
             confirmed.pick_open_path(),
@@ -204,11 +236,16 @@ mod tests {
             default_dialog.pick_save_gif_path("game.gif"),
             Some(PathBuf::from("game.gif"))
         );
+        assert_eq!(
+            default_dialog.pick_save_png_path("position.png"),
+            Some(PathBuf::from("position.png"))
+        );
 
         let unset_dialog = MockDialogService {
             open_path: None,
             save_path: None,
             save_gif_path: None,
+            save_png_path: None,
         };
         assert_eq!(
             unset_dialog.pick_save_path("kifu.sgf"),
@@ -217,6 +254,10 @@ mod tests {
         assert_eq!(
             unset_dialog.pick_save_gif_path("game.gif"),
             Some(PathBuf::from("game.gif"))
+        );
+        assert_eq!(
+            unset_dialog.pick_save_png_path("position.png"),
+            Some(PathBuf::from("position.png"))
         );
     }
 

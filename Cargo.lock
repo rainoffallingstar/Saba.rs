@@ -5162,12 +5162,14 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "gif",
+ "png 0.17.16",
  "ryusei-domain-core",
  "ryusei-plugin-runtime",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+ "url",
  "wat",
 ]
 

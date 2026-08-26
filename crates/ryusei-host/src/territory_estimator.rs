@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerritoryEstimate {
+    /// Raw ownership confidence for each board intersection, preserved for
+    /// heatmap rendering and export. Positive values favor Black.
+    pub ownership: Vec<f64>,
     pub black_territory: f64,
     pub white_territory: f64,
     pub black_prisoners: usize,
@@ -78,6 +81,7 @@ pub fn estimate_territory(
     let lead_points = lead.abs();
 
     Some(TerritoryEstimate {
+        ownership: ownership.to_vec(),
         black_territory,
         white_territory,
         black_prisoners,
@@ -109,6 +113,7 @@ mod tests {
         let estimate =
             estimate_territory(&ownership, 3, 1, 7.5, 0.5).expect("estimate must succeed");
 
+        assert_eq!(estimate.ownership.len(), 361);
         assert_eq!(estimate.black_territory, 50.0);
         assert_eq!(estimate.white_territory, 30.0);
         assert_eq!(estimate.black_total, 53.0); // 50 + 3
