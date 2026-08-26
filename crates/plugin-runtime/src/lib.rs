@@ -7,7 +7,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{RecvTimeoutError, SyncSender, sync_channel},
+        mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
     },
     time::Duration,
 };
@@ -489,6 +489,7 @@ pub struct SupervisedNativePluginProcess {
     standard_input: ChildStdin,
     next_request_id: u64,
     pending: Arc<Mutex<BTreeMap<u64, SyncSender<JsonRpcResponse>>>>,
+    response_receivers: BTreeMap<u64, Receiver<JsonRpcResponse>>,
     log: Arc<Mutex<VecDeque<String>>>,
     exited: Arc<AtomicBool>,
     restart_count: u32,
@@ -608,6 +609,7 @@ impl SupervisedNativePluginProcess {
             standard_input,
             next_request_id: 1,
             pending,
+            response_receivers: BTreeMap::new(),
             log,
             exited,
             restart_count: 0,
@@ -624,7 +626,16 @@ impl SupervisedNativePluginProcess {
         }
         let request_id = self.next_request_id;
         self.next_request_id += 1;
-        write_rpc_frame(
+        // Register the receiver before writing. A fast plugin may answer
+        // immediately; registering afterward would let the response reader
+        // consume the response before `await_response` starts waiting.
+        let (sender, receiver) = sync_channel::<JsonRpcResponse>(1);
+        self.pending
+            .lock()
+            .expect("pending map is not poisoned")
+            .insert(request_id, sender);
+        self.response_receivers.insert(request_id, receiver);
+        if let Err(error) = write_rpc_frame(
             &mut self.standard_input,
             &JsonRpcRequest {
                 jsonrpc: "2.0",
@@ -632,7 +643,14 @@ impl SupervisedNativePluginProcess {
                 method,
                 params,
             },
-        )?;
+        ) {
+            self.pending
+                .lock()
+                .expect("pending map is not poisoned")
+                .remove(&request_id);
+            self.response_receivers.remove(&request_id);
+            return Err(error);
+        }
         Ok(request_id)
     }
 
@@ -643,7 +661,15 @@ impl SupervisedNativePluginProcess {
         request_id: u64,
         timeout: Duration,
     ) -> Result<Value, PluginError> {
+        let receiver = self
+            .response_receivers
+            .remove(&request_id)
+            .ok_or(PluginError::UnexpectedEndOfStream)?;
         if self.exited.load(Ordering::SeqCst) {
+            self.pending
+                .lock()
+                .expect("pending map is not poisoned")
+                .remove(&request_id);
             return Err(PluginError::ProcessExited {
                 status: self
                     .child
@@ -654,11 +680,6 @@ impl SupervisedNativePluginProcess {
                     .unwrap_or_else(|| "unknown".to_owned()),
             });
         }
-        let (sender, receiver) = sync_channel::<JsonRpcResponse>(1);
-        self.pending
-            .lock()
-            .expect("pending map is not poisoned")
-            .insert(request_id, sender);
         match receiver.recv_timeout(timeout) {
             Ok(response) => match response.error {
                 Some(error) if error.code == -32000 => Err(PluginError::ProcessExited {
@@ -719,6 +740,11 @@ impl SupervisedNativePluginProcess {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        self.pending
+            .lock()
+            .expect("pending map is not poisoned")
+            .clear();
+        self.response_receivers.clear();
         let (child, standard_input) = spawn_supervised(&self.spec)?;
         self.child = child;
         self.standard_input = standard_input;
@@ -918,6 +944,32 @@ while True:
             .await_response(id, Duration::from_secs(5))
             .expect("echo plugin answers");
         assert_eq!(result, serde_json::json!({"depth": 2}));
+        process.terminate().ok();
+    }
+
+    #[test]
+    fn supervised_process_delivers_back_to_back_fast_responses() {
+        let Some(()) = python3() else {
+            eprintln!("python3 not found; skipping fast-response test");
+            return;
+        };
+        let mut process =
+            SupervisedNativePluginProcess::start(echo_spec()).expect("echo plugin starts");
+        let request_ids = (0..32)
+            .map(|number| {
+                process
+                    .send_request("ping", serde_json::json!({"n": number}))
+                    .expect("request is sent")
+            })
+            .collect::<Vec<_>>();
+        for (number, request_id) in request_ids.into_iter().enumerate() {
+            assert_eq!(
+                process
+                    .await_response(request_id, Duration::from_secs(5))
+                    .expect("echo plugin answers"),
+                serde_json::json!({"n": number})
+            );
+        }
         process.terminate().ok();
     }
 
