@@ -5840,7 +5840,9 @@ fn main() {
     let startup_file = std::env::args().nth(1).map(PathBuf::from);
     Application::new().run(move |cx: &mut App| {
         gpui_component::init(cx);
-        gpui_component::Theme::sync_system_appearance(None, cx);
+        // Force dark mode for gpui-component so Button/Badge text is always light
+        // on our dark toolbar, bottom deck, and sidebar backgrounds.
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
 
         let settings_persistence = match NativeSettingsPersistence::for_current_user() {
             Ok(persistence) => persistence,
@@ -6709,6 +6711,7 @@ mod frontend_smoke {
         let mut cx = TestAppContext::build(dispatcher, None);
         cx.update(|cx| {
             gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         });
         let mut shell_slot: Option<Entity<ShellApp>> = None;
         let shell_ptr = &mut shell_slot as *mut Option<Entity<ShellApp>>;
@@ -6810,6 +6813,7 @@ mod frontend_smoke {
             .unwrap();
         cx.update(|cx| {
             gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         });
         let mut shell_slot: Option<Entity<ShellApp>> = None;
         let shell_ptr = &mut shell_slot as *mut Option<Entity<ShellApp>>;
