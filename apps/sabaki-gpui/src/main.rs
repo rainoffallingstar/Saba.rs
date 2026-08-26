@@ -44,7 +44,7 @@ use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogServic
 use crate::engine_console::{
     EngineLogEntry, EngineRole, EngineRoleAssignments, analysis_command_from_settings,
     best_analysis_entry, best_analysis_move, entry_for_response, format_console_command,
-    merge_analysis_entries, parse_engine_spec, parse_gtp_vertex, parse_stream_entries,
+    merge_analysis_entries, parse_gtp_vertex, parse_stream_entries,
 };
 use crate::external_file::{ExternalCheckOutcome, check_external_file, track_after_file_operation};
 use crate::file_workflow::{
@@ -70,8 +70,7 @@ use crate::node_inspector::{
 };
 use crate::plugin_panel::{PluginPanelEntry, apply_process_info, entry_from_record};
 use crate::settings::{
-    BOARD_SIZE_OPTIONS, THEME_CHOICES, ThemeChoice, theme_from_setting,
-    window_bounds_from_settings, window_maximized_from_settings,
+    ThemeChoice, theme_from_setting, window_bounds_from_settings, window_maximized_from_settings,
 };
 use crate::settings_form::{
     SettingEdit, SettingRow, apply_setting_edit, display_setting_value, number_edit,
@@ -228,8 +227,6 @@ struct ShellApp {
     engine_log: Vec<EngineLogEntry>,
     engine_input_focus_handle: FocusHandle,
     engine_draft: SharedString,
-    engine_spec_draft: SharedString,
-    engine_spec_focus_handle: FocusHandle,
     gtp_terminal_open: bool,
     gtp_input: NativeTextInput,
     fox_query_input: NativeTextInput,
@@ -597,8 +594,6 @@ impl ShellApp {
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
             engine_draft: "".into(),
-            engine_spec_draft: "".into(),
-            engine_spec_focus_handle: cx.focus_handle(),
             gtp_terminal_open: false,
             gtp_input: NativeTextInput::new(""),
             fox_query_input: NativeTextInput::new(""),
@@ -2595,98 +2590,6 @@ impl ShellApp {
 
     fn on_engine_move(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.generate_engine_move(cx);
-    }
-
-    /// Removes an engine from the configured list and persists the change
-    /// through the settings store.
-    fn on_engine_remove(&mut self, name: &str, cx: &mut Context<Self>) {
-        if !self.engine_store.remove(name) {
-            self.status = format!("engine {name} is not configured").into();
-            cx.notify();
-            return;
-        }
-        for role in EngineRole::ALL {
-            if self.engine_roles.get(role) == Some(name) {
-                self.disconnect_engine_role(role);
-            }
-        }
-        self.engine_roles.clear_engine(name);
-        match self.engine_store.save(&mut self.settings) {
-            Ok(()) => match self.persist_engine_roles() {
-                Ok(()) => self.status = format!("engine {name} removed").into(),
-                Err(error) => self.status = format!("engine not persisted: {error}").into(),
-            },
-            Err(error) => self.status = format!("engine list rejected: {error}").into(),
-        }
-        cx.notify();
-    }
-
-    /// Adds an engine from the spec input (`Name | path | args | commands`)
-    /// and persists the configured list.
-    fn commit_engine_spec(&mut self, cx: &mut Context<Self>) {
-        let spec = self.engine_spec_draft.to_string();
-        self.engine_spec_draft = "".into();
-        let record = match parse_engine_spec(&spec) {
-            Ok(record) => record,
-            Err(error) => {
-                self.status = format!("engine spec rejected: {error}").into();
-                cx.notify();
-                return;
-            }
-        };
-        match self.engine_store.add(record.clone()) {
-            Ok(()) => match self.engine_store.save(&mut self.settings) {
-                Ok(()) => match sabaki_host::persist_settings_store(
-                    &self.settings,
-                    &mut self.settings_persistence,
-                ) {
-                    Ok(()) => self.status = format!("engine {} added", record.name).into(),
-                    Err(error) => self.status = format!("engine not persisted: {error}").into(),
-                },
-                Err(error) => self.status = format!("engine list rejected: {error}").into(),
-            },
-            Err(error) => self.status = format!("engine not added: {error}").into(),
-        }
-        cx.notify();
-    }
-
-    fn on_engine_spec_focus(
-        &mut self,
-        _: &MouseDownEvent,
-        window: &mut Window,
-        _: &mut Context<Self>,
-    ) {
-        window.focus(&self.engine_spec_focus_handle);
-    }
-
-    fn on_engine_spec_key_down(
-        &mut self,
-        event: &gpui::KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mut draft = self.engine_spec_draft.to_string();
-        match event.keystroke.key.as_str() {
-            "backspace" => {
-                draft.pop();
-            }
-            "enter" => {
-                self.commit_engine_spec(cx);
-                return;
-            }
-            "escape" => {
-                self.engine_spec_draft = "".into();
-                cx.notify();
-                return;
-            }
-            _ => {
-                if let Some(key_char) = event.keystroke.key_char.as_ref() {
-                    draft.push_str(key_char);
-                }
-            }
-        }
-        self.engine_spec_draft = draft.into();
-        cx.notify();
     }
 
     /// Applies an installed theme package: swaps the active tokens and
