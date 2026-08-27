@@ -14,6 +14,10 @@ pub mod legacy_styles;
 pub mod move_grading;
 pub mod ogs;
 pub mod ogs_auth;
+pub mod ogs_client;
+pub mod ogs_credentials;
+pub mod ogs_rest;
+pub mod ogs_socket;
 pub mod persistence;
 pub mod plugin_commands;
 pub mod plugin_controller;
@@ -96,6 +100,22 @@ pub use ogs::{
     parse_ogs_public_game,
 };
 pub use ogs_auth::{OGS_LOGIN_URL, OgsAuthState, open_ogs_login_page};
+pub use ogs_client::{
+    LiveOgsClient, OgsClientSnapshot, OgsMatchmakingStatus, OgsOnlineGame, OgsSocketStatus,
+};
+pub use ogs_credentials::{
+    KeyringOgsCredentialStore, MemoryOgsCredentialStore, OGS_KEYCHAIN_SERVICE, OgsCredentialStore,
+    OgsCredentials,
+};
+pub use ogs_rest::{
+    OGS_SERVER_URL, OGS_USER_AGENT, OgsHttpResponse, OgsLoginResult, OgsRestFetch,
+    UreqOgsRestFetch, extract_csrf_token, login_via_rest, normalize_cookie_header,
+    parse_ogs_login_response,
+};
+pub use ogs_socket::{
+    OGS_SOCKET_URL, OgsIncoming, OgsWebSocketTransport, TungsteniteOgsWebSocketTransport,
+    build_authenticate_payload, decode_incoming, encode_event, encode_request,
+};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_commands::{BuiltinPluginCommand, BuiltinPluginCommandRegistry};
 pub use plugin_controller::{PluginController, PluginControllerOutcome};
