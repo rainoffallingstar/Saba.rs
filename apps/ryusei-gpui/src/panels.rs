@@ -2988,21 +2988,62 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                     ),
             )
             .child(if let Some(game) = snapshot.online_game.as_ref() {
+                let clock_text = game.clock.as_ref().map(|clock| {
+                    format!(
+                        "黑 {:.0}s / 白 {:.0}s{}",
+                        clock.black_main_remaining.as_secs_f64(),
+                        clock.white_main_remaining.as_secs_f64(),
+                        if clock.paused { " · 暂停" } else { "" }
+                    )
+                });
                 div()
-                    .text_xs()
-                    .text_color(rgb(shell.palette.muted))
-                    .child(format!(
-                        "已连接 OGS #{} · {} vs {} · 第 {} 手 · 行棋方 {}",
-                        game.game_id,
-                        game.black_name,
-                        game.white_name,
-                        game.move_number,
-                        match game.next_player {
-                            Some(ryusei_domain_core::Color::Black) => "黑",
-                            Some(ryusei_domain_core::Color::White) => "白",
-                            None => "?",
-                        },
-                    ))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.muted))
+                            .child(format!(
+                                "已连接 OGS #{} · {} vs {} · 第 {} 手 · 行棋方 {}",
+                                game.game_id,
+                                game.black_name,
+                                game.white_name,
+                                game.move_number,
+                                match game.next_player {
+                                    Some(ryusei_domain_core::Color::Black) => "黑",
+                                    Some(ryusei_domain_core::Color::White) => "白",
+                                    None => "?",
+                                },
+                            )),
+                    )
+                    .child(if let Some(clock_text) = clock_text {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.text))
+                            .child(clock_text)
+                    } else {
+                        div()
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("ogs-pass")
+                                    .small()
+                                    .outline()
+                                    .label("停一手")
+                                    .on_click(cx.listener(|shell, _, _, cx| shell.ogs_pass(cx))),
+                            )
+                            .child(
+                                Button::new("ogs-resign")
+                                    .small()
+                                    .warning()
+                                    .label("认输")
+                                    .on_click(cx.listener(|shell, _, _, cx| shell.ogs_resign(cx))),
+                            ),
+                    )
             } else {
                 div()
                     .text_xs()

@@ -53,6 +53,10 @@ pub struct OgsOnlineGame {
     pub white_name: String,
     pub phase: String,
     pub pending_move: bool,
+    pub width: u32,
+    pub height: u32,
+    /// Server-confirmed moves as OGS coordinates (`"dd"`, pass `".."`).
+    pub moves: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -481,6 +485,9 @@ impl LiveOgsClient {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
+        let moves = parse_ogs_moves(payload);
+        let width = payload.get("width").and_then(Value::as_u64).unwrap_or(19) as u32;
+        let height = payload.get("height").and_then(Value::as_u64).unwrap_or(19) as u32;
 
         let update = build_game_update(game_id, move_number, next_player, clock.as_ref());
         let mut inner = self.inner.lock().unwrap();
@@ -494,6 +501,9 @@ impl LiveOgsClient {
             white_name,
             phase,
             pending_move: false,
+            width,
+            height,
+            moves,
         });
         if let Some(update) = update {
             inner.competition = OgsCompetitionSession::new(game_id, update).ok();
@@ -514,6 +524,15 @@ impl LiveOgsClient {
         }
         game.move_number = move_number.unwrap_or(game.move_number + 1);
         game.pending_move = false;
+        let move_string = payload
+            .get("move")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        if let Some(coord) =
+            move_string.filter(|coord| !game.moves.last().is_some_and(|last| last == coord))
+        {
+            game.moves.push(coord);
+        }
         // After a move, the player to move flips.
         game.next_player = game.next_player.map(|color| match color {
             Color::Black => Color::White,
@@ -607,6 +626,47 @@ fn player_name(payload: &Value, color: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or(color)
         .to_owned()
+}
+
+/// Decodes OGS `moves` into coordinate strings (`"dd"`, pass `".."`). Items may
+/// be `[x, y]`, `[x, y, n]`, `[move_string, n]`, or a plain string.
+fn parse_ogs_moves(payload: &Value) -> Vec<String> {
+    let Some(moves) = payload.get("moves").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    moves.iter().filter_map(encode_ogs_move_item).collect()
+}
+
+fn encode_ogs_move_item(item: &Value) -> Option<String> {
+    match item {
+        Value::String(text) => {
+            let coord = text.chars().take(2).collect::<String>();
+            (coord.len() == 2 && coord.chars().all(|c| c.is_ascii_lowercase() || c == '.'))
+                .then_some(coord)
+        }
+        Value::Array(array) if !array.is_empty() => {
+            if let (Some(x), Some(y)) = (array[0].as_i64(), array[1].as_i64()) {
+                encode_ogs_coordinates(x, y)
+            } else if let Some(coord) = array[0].as_str() {
+                encode_ogs_move_item(&Value::String(coord.to_owned()))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn encode_ogs_coordinates(x: i64, y: i64) -> Option<String> {
+    if x == -1 && y == -1 {
+        return Some("..".to_owned());
+    }
+    if !(0..=25).contains(&x) || !(0..=25).contains(&y) {
+        return None;
+    }
+    let column = char::from_u32((b'a' + x as u8) as u32)?;
+    let row = char::from_u32((b'a' + y as u8) as u32)?;
+    Some(format!("{column}{row}"))
 }
 
 fn seconds_to_duration(seconds: f64) -> Duration {
@@ -742,6 +802,12 @@ mod tests {
         let payload = serde_json::json!({"moves": [[3, 3, 1]]});
         assert_eq!(player_to_move(&payload, 1), Some(Color::White));
         assert_eq!(player_to_move(&payload, 2), Some(Color::Black));
+    }
+
+    #[test]
+    fn parses_ogs_moves_in_array_forms() {
+        let payload = serde_json::json!({"moves": [[3, 3], [15, 15, 2], "pp", [-1, -1]]});
+        assert_eq!(parse_ogs_moves(&payload), vec!["dd", "pp", "pp", ".."]);
     }
 
     #[test]

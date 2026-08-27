@@ -302,6 +302,7 @@ struct ShellApp {
     ogs_game_id_focus_handle: FocusHandle,
     ogs_chat_input: NativeTextInput,
     ogs_login_in_progress: bool,
+    ogs_projected_moves: u32,
     library_id_input: NativeTextInput,
     library_id_focus_handle: FocusHandle,
     library_name_input: NativeTextInput,
@@ -844,6 +845,7 @@ impl ShellApp {
             ogs_game_id_focus_handle: cx.focus_handle(),
             ogs_chat_input: NativeTextInput::new(""),
             ogs_login_in_progress: false,
+            ogs_projected_moves: 0,
             library_id_input: NativeTextInput::new(""),
             library_id_focus_handle: cx.focus_handle(),
             library_name_input: NativeTextInput::new(""),
@@ -6846,6 +6848,84 @@ impl ShellApp {
         } else {
             ryusei_host::OgsAuthState::SignedOut
         };
+        if let Some(game) = snapshot.online_game.as_ref()
+            && game.connected
+            && game.moves.len() as u32 != self.ogs_projected_moves
+        {
+            self.project_ogs_server_moves(game);
+        }
+    }
+
+    /// Rebuilds the board as a read-only projection of the server-confirmed
+    /// move list. This is separate from local editing: the local document is
+    /// replaced, never marked editable, and analysis stays fair-play locked.
+    fn project_ogs_server_moves(&mut self, game: &ryusei_host::OgsOnlineGame) {
+        let width = if game.width > 0 { game.width } else { 19 };
+        let mut sgf = format!(
+            "(;GM[1]FF[4]SZ[{width}]PB[{}]PW[{}]",
+            game.black_name, game.white_name
+        );
+        let mut color_is_black = true;
+        for coord in &game.moves {
+            if coord == ".." {
+                sgf.push_str(if color_is_black { ";B[]" } else { ";W[]" });
+            } else if let Some(vertex) = crate::goban_view::parse_sgf_vertex(coord) {
+                let point = crate::goban_view::format_sgf_vertex(vertex);
+                sgf.push_str(if color_is_black { ";B[" } else { ";W[" });
+                sgf.push_str(&point);
+                sgf.push(']');
+            } else {
+                continue;
+            }
+            color_is_black = !color_is_black;
+        }
+        sgf.push(')');
+        let mut events = RecordingSink;
+        if self.host.restore_from_sgf(&sgf, &mut events).is_ok() {
+            self.ogs_projected_moves = game.moves.len() as u32;
+        }
+    }
+
+    fn ogs_pass(&mut self, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let client = Arc::clone(&self.ogs_client);
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.pass(game_id) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_resign(&mut self, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let client = Arc::clone(&self.ogs_client);
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.resign(game_id) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
     }
 
     /// App-internal OGS login. The password is consumed by the REST call on a
