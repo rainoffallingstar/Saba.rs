@@ -6,8 +6,9 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, PathBuilder,
-    Stateful, StatefulInteractiveElement, Window, canvas, div, hsla, point, prelude::*, px, rgb,
+    App, Context, Div, FocusHandle, FontWeight, InteractiveElement, MouseButton, MouseDownEvent,
+    PathBuilder, Stateful, StatefulInteractiveElement, Window, canvas, div, hsla, point,
+    prelude::*, px, rgb,
 };
 
 use ryusei_domain_core::{
@@ -413,16 +414,17 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
         .child(analysis_button)
         .child(remote_button)
         .child(
-            Button::new("ogs-login-browser")
+            Button::new("ogs-account")
                 .small()
                 .ghost()
+                .selected(shell.ogs_auth_state == ryusei_host::OgsAuthState::Authenticated)
                 .label(match shell.ogs_auth_state {
-                    ryusei_host::OgsAuthState::SignedOut => "OGS 登录",
+                    ryusei_host::OgsAuthState::SignedOut => "OGS 账户",
                     ryusei_host::OgsAuthState::BrowserLoginOnly => "OGS 浏览器已打开",
                     ryusei_host::OgsAuthState::Authenticated => "OGS 已登录",
                 })
-                .tooltip("在系统浏览器打开 OGS；不会导入浏览器 cookie")
-                .on_click(cx.listener(|shell, _, _, cx| shell.open_ogs_login_page(cx))),
+                .tooltip("打开 OGS 账户面板：应用内登录、对局连接与账户状态")
+                .on_click(cx.listener(|shell, _, _, cx| shell.open_ogs_account(cx))),
         )
         .child(
             Button::new("session-review-quick")
@@ -2802,6 +2804,211 @@ pub fn render_live_capture_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         "载入后会切换到‘实时’只读模式，并启用连续分析。".to_owned()
                     }),
             ),
+        shell,
+        cx,
+    )
+}
+
+/// OGS account workspace: app-internal login, account state, and game connect.
+pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let snapshot = shell.ogs_client.snapshot();
+    let signed_in = snapshot.user.is_some();
+    let credential_ok = shell.ogs_client.credential_storage_available();
+
+    let text_input = |id: &'static str,
+                      input: &crate::native_text_input::NativeTextInput,
+                      focus: &FocusHandle,
+                      active: crate::ActiveTextInput,
+                      placeholder: &'static str,
+                      on_focus: fn(
+        &mut ShellApp,
+        &MouseDownEvent,
+        &mut Window,
+        &mut Context<ShellApp>,
+    ),
+                      on_key: fn(
+        &mut ShellApp,
+        &gpui::KeyDownEvent,
+        &mut Window,
+        &mut Context<ShellApp>,
+    )| {
+        div()
+            .track_focus(focus)
+            .key_context(id)
+            .p_2p5()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if shell.active_text_input == Some(active) {
+                shell.palette.accent
+            } else {
+                shell.palette.border
+            }))
+            .bg(rgb(shell.palette.input))
+            .text_xs()
+            .text_color(rgb(shell.palette.text))
+            .child(if input.text().is_empty() {
+                div()
+                    .text_color(rgb(shell.palette.muted))
+                    .child(placeholder)
+            } else {
+                div()
+                    .text_color(rgb(shell.palette.text))
+                    .child(input.text().to_owned())
+            })
+            .child(NativeInputBinding::new(focus.clone(), cx.entity().clone()))
+            .on_mouse_down(MouseButton::Left, cx.listener(on_focus))
+            .on_key_down(cx.listener(on_key))
+    };
+
+    render_readonly_drawer(
+        "ogs-account",
+        9,
+        "OGS 账户",
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .when(!signed_in, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child("使用 OGS 账号登录。密码仅用于本次登录，绝不保存；会话令牌经系统钥匙串加密保存。"),
+                        )
+                        .child(text_input(
+                            "OgsUsernameInput",
+                            &shell.ogs_username_input,
+                            &shell.ogs_username_focus_handle,
+                            crate::ActiveTextInput::OgsUsername,
+                            "用户名",
+                            ShellApp::on_ogs_username_focus,
+                            ShellApp::on_ogs_username_key_down,
+                        ))
+                        .child(text_input(
+                            "OgsPasswordInput",
+                            &shell.ogs_password_input,
+                            &shell.ogs_password_focus_handle,
+                            crate::ActiveTextInput::OgsPassword,
+                            "密码",
+                            ShellApp::on_ogs_password_focus,
+                            ShellApp::on_ogs_password_key_down,
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("ogs-login-submit")
+                                        .small()
+                                        .primary()
+                                        .label("登录")
+                                        .disabled(shell.ogs_login_in_progress)
+                                        .on_click(cx.listener(|shell, _, _, cx| shell.ogs_login(cx))),
+                                )
+                                .child(
+                                    Button::new("ogs-login-browser")
+                                        .small()
+                                        .ghost()
+                                        .label("改用浏览器打开")
+                                        .on_click(cx.listener(|shell, _, _, cx| {
+                                            shell.open_ogs_login_page(cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
+            .when(signed_in, |this| {
+                let name = snapshot
+                    .user
+                    .as_ref()
+                    .and_then(|u| u.get("username"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("OGS user");
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(shell.palette.text))
+                                .child(name.to_owned()),
+                        )
+                        .child(
+                            Button::new("ogs-logout")
+                                .small()
+                                .warning()
+                                .label("登出")
+                                .on_click(cx.listener(|shell, _, _, cx| shell.ogs_logout(cx))),
+                        ),
+                )
+            })
+            .when(!credential_ok, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.danger_text))
+                        .child("未检测到可用的系统钥匙串，登录会话不会在重启后保留。"),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.muted))
+                            .child("连接 OGS 对局（登录后输入对局 ID）。连接后棋盘进入公平竞赛只读模式。"),
+                    )
+                    .child(text_input(
+                        "OgsGameIdInput",
+                        &shell.ogs_game_id_input,
+                        &shell.ogs_game_id_focus_handle,
+                        crate::ActiveTextInput::OgsGameId,
+                        "对局 ID",
+                        ShellApp::on_ogs_game_id_focus,
+                        ShellApp::on_ogs_game_id_key_down,
+                    ))
+                    .child(
+                        Button::new("ogs-connect-game")
+                            .small()
+                            .outline()
+                            .label("连接对局")
+                            .disabled(!signed_in)
+                            .on_click(cx.listener(|shell, _, _, cx| shell.connect_ogs_game(cx))),
+                    ),
+            )
+            .child(if let Some(game) = snapshot.online_game.as_ref() {
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child(format!(
+                        "已连接 OGS #{} · {} vs {} · 第 {} 手 · 行棋方 {}",
+                        game.game_id,
+                        game.black_name,
+                        game.white_name,
+                        game.move_number,
+                        match game.next_player {
+                            Some(ryusei_domain_core::Color::Black) => "黑",
+                            Some(ryusei_domain_core::Color::White) => "白",
+                            None => "?",
+                        },
+                    ))
+            } else {
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("尚未连接对局。")
+            }),
         shell,
         cx,
     )

@@ -26,6 +26,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 
@@ -180,6 +181,7 @@ enum ActiveDrawer {
     GameInfo,
     Score,
     About,
+    OgsAccount,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,6 +199,11 @@ enum ActiveTextInput {
     LibraryLicenseUrl,
     GtpInput,
     EngineSpec,
+    OgsUsername,
+    OgsPassword,
+    OgsGameId,
+    #[allow(dead_code)]
+    OgsChat,
 }
 
 struct ShellApp {
@@ -284,6 +291,17 @@ struct ShellApp {
     live_ogs_poll_task: Option<Task<()>>,
     live_ogs_poll_generation: u64,
     ogs_auth_state: ryusei_host::OgsAuthState,
+    ogs_client: Arc<ryusei_host::LiveOgsClient>,
+    #[allow(dead_code)]
+    ogs_state_task: Option<Task<()>>,
+    ogs_username_input: NativeTextInput,
+    ogs_password_input: NativeTextInput,
+    ogs_username_focus_handle: FocusHandle,
+    ogs_password_focus_handle: FocusHandle,
+    ogs_game_id_input: NativeTextInput,
+    ogs_game_id_focus_handle: FocusHandle,
+    ogs_chat_input: NativeTextInput,
+    ogs_login_in_progress: bool,
     library_id_input: NativeTextInput,
     library_id_focus_handle: FocusHandle,
     library_name_input: NativeTextInput,
@@ -735,6 +753,30 @@ impl ShellApp {
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default();
 
+        // OGS client: server events arrive on a foreign reader thread, so a
+        // one-shot channel wakes a GPUI task that notifies the shell.
+        let (ogs_state_tx, ogs_state_rx) = mpsc::channel::<()>();
+        let ogs_client = Arc::new(ryusei_host::LiveOgsClient::new());
+        ogs_client.set_on_state_change(Some(Box::new(move || {
+            let _ = ogs_state_tx.send(());
+        })));
+        let ogs_state_task = Some(cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        if ogs_state_rx.recv().is_err() {
+                            break;
+                        }
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            shell.refresh_ogs_account_state();
+                            cx.notify();
+                        });
+                    }
+                }
+            },
+        ));
+
         let mut shell = Self {
             host,
             workspace_tabs,
@@ -792,6 +834,16 @@ impl ShellApp {
             live_ogs_poll_task: None,
             live_ogs_poll_generation: 0,
             ogs_auth_state: ryusei_host::OgsAuthState::SignedOut,
+            ogs_client,
+            ogs_state_task,
+            ogs_username_input: NativeTextInput::new(""),
+            ogs_password_input: NativeTextInput::new(""),
+            ogs_username_focus_handle: cx.focus_handle(),
+            ogs_password_focus_handle: cx.focus_handle(),
+            ogs_game_id_input: NativeTextInput::new(""),
+            ogs_game_id_focus_handle: cx.focus_handle(),
+            ogs_chat_input: NativeTextInput::new(""),
+            ogs_login_in_progress: false,
             library_id_input: NativeTextInput::new(""),
             library_id_focus_handle: cx.focus_handle(),
             library_name_input: NativeTextInput::new(""),
@@ -995,6 +1047,81 @@ impl ShellApp {
             }
             InputKeyResult::Changed | InputKeyResult::Ignored => cx.notify(),
         }
+    }
+
+    fn on_ogs_username_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::OgsUsername);
+        window.focus(&self.ogs_username_focus_handle);
+        cx.notify();
+    }
+
+    fn on_ogs_username_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputKeyResult::Submit =
+            Self::handle_text_input_key(&mut self.ogs_username_input, event)
+        {
+            _window.focus(&self.ogs_password_focus_handle);
+        }
+        cx.notify();
+    }
+
+    fn on_ogs_password_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::OgsPassword);
+        window.focus(&self.ogs_password_focus_handle);
+        cx.notify();
+    }
+
+    fn on_ogs_password_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputKeyResult::Submit =
+            Self::handle_text_input_key(&mut self.ogs_password_input, event)
+        {
+            self.ogs_login(cx);
+        }
+        cx.notify();
+    }
+
+    fn on_ogs_game_id_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::OgsGameId);
+        window.focus(&self.ogs_game_id_focus_handle);
+        cx.notify();
+    }
+
+    fn on_ogs_game_id_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputKeyResult::Submit =
+            Self::handle_text_input_key(&mut self.ogs_game_id_input, event)
+        {
+            self.connect_ogs_game(cx);
+        }
+        cx.notify();
     }
 
     fn capture_public_live_game(&mut self, cx: &mut Context<Self>) {
@@ -6694,19 +6821,133 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::LiveCapture, "公共直播导入已打开", cx);
     }
 
+    fn open_ogs_account(&mut self, cx: &mut Context<Self>) {
+        self.refresh_ogs_account_state();
+        self.open_drawer(ActiveDrawer::OgsAccount, "OGS 账户已打开", cx);
+    }
+
     fn open_ogs_login_page(&mut self, cx: &mut Context<Self>) {
         match ryusei_host::open_ogs_login_page() {
             Ok(()) => {
                 self.ogs_auth_state = ryusei_host::OgsAuthState::BrowserLoginOnly;
                 self.status = "已打开 OGS 登录页；浏览器登录不会自动授权 Ryusei".into();
-                self.show_toast(
-                    "OGS 已在浏览器打开。当前 Ryusei 只支持公开观战，账户 token 尚未接入。"
-                        .to_owned(),
-                    cx,
-                );
             }
             Err(error) => self.show_toast(format!("无法打开 OGS 登录页：{error}"), cx),
         }
+        cx.notify();
+    }
+
+    /// Mirrors the OGS client snapshot into `ogs_auth_state` so the toolbar
+    /// label stays correct without the shell owning a second source of truth.
+    fn refresh_ogs_account_state(&mut self) {
+        let snapshot = self.ogs_client.snapshot();
+        self.ogs_auth_state = if snapshot.user.is_some() {
+            ryusei_host::OgsAuthState::Authenticated
+        } else {
+            ryusei_host::OgsAuthState::SignedOut
+        };
+    }
+
+    /// App-internal OGS login. The password is consumed by the REST call on a
+    /// background executor and never persisted.
+    fn ogs_login(&mut self, cx: &mut Context<Self>) {
+        if self.ogs_login_in_progress {
+            return;
+        }
+        let username = self.ogs_username_input.text().trim().to_owned();
+        let password = self.ogs_password_input.text().to_owned();
+        if username.is_empty() || password.is_empty() {
+            self.show_toast("请输入 OGS 用户名和密码".to_owned(), cx);
+            return;
+        }
+        self.ogs_login_in_progress = true;
+        self.status = "正在登录 OGS…".into();
+        let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { client.login(&username, &password) })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        shell.ogs_login_in_progress = false;
+                        shell.ogs_password_input.set_text("");
+                        match result {
+                            Ok(user) => {
+                                shell.ogs_auth_state = ryusei_host::OgsAuthState::Authenticated;
+                                let name = user
+                                    .get("username")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("OGS user");
+                                shell.status = format!("OGS 已登录：{name}").into();
+                                shell.show_toast(shell.status.clone(), cx);
+                            }
+                            Err(error) => {
+                                shell.ogs_auth_state = ryusei_host::OgsAuthState::SignedOut;
+                                shell.status = format!("OGS 登录失败：{error}").into();
+                                shell.show_toast(shell.status.clone(), cx);
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_logout(&mut self, cx: &mut Context<Self>) {
+        self.ogs_client.logout();
+        self.ogs_auth_state = ryusei_host::OgsAuthState::SignedOut;
+        self.status = "OGS 已登出".into();
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    /// Connects to an OGS game and switches the board into fair-play-locked
+    /// remote competition mode.
+    fn connect_ogs_game(&mut self, cx: &mut Context<Self>) {
+        let text = self.ogs_game_id_input.text().trim().to_owned();
+        let Ok(game_id) = text.parse::<u64>() else {
+            self.show_toast("请输入有效的 OGS 对局 ID".to_owned(), cx);
+            return;
+        };
+        if self.ogs_client.snapshot().user.is_none() {
+            self.show_toast("请先登录 OGS".to_owned(), cx);
+            return;
+        }
+        let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { client.connect_game(game_id) })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(()) => {
+                                shell.enter_ogs_remote_match(cx);
+                                shell.status = format!("正在连接 OGS 对局 #{game_id}…").into();
+                            }
+                            Err(error) => {
+                                shell.show_toast(format!("连接 OGS 对局失败：{error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
         cx.notify();
     }
 
@@ -7299,6 +7540,7 @@ impl Render for ShellApp {
                 }
                 Some(ActiveDrawer::Score) => panels::render_score_drawer(&snapshot, self, cx),
                 Some(ActiveDrawer::About) => panels::render_about_drawer(self, cx),
+                Some(ActiveDrawer::OgsAccount) => panels::render_ogs_account_drawer(self, cx),
                 None => div().id("drawer-hidden"),
             })
             .child(if self.split_drag.is_some() {
@@ -7374,6 +7616,10 @@ impl ShellApp {
             Some(ActiveTextInput::LibraryLicenseUrl) => Some(&mut self.library_license_url_input),
             Some(ActiveTextInput::GtpInput) => Some(&mut self.gtp_input),
             Some(ActiveTextInput::EngineSpec) => Some(&mut self.engine_spec_input),
+            Some(ActiveTextInput::OgsUsername) => Some(&mut self.ogs_username_input),
+            Some(ActiveTextInput::OgsPassword) => Some(&mut self.ogs_password_input),
+            Some(ActiveTextInput::OgsGameId) => Some(&mut self.ogs_game_id_input),
+            Some(ActiveTextInput::OgsChat) => Some(&mut self.ogs_chat_input),
             None => None,
         }
     }
@@ -8784,6 +9030,27 @@ mod headless_smoke {
             assert_eq!(
                 shell.session_policy.analysis,
                 ryusei_domain_core::AnalysisPolicy::Off
+            );
+        });
+    }
+
+    #[test]
+    fn ogs_account_starts_signed_out_and_tracks_client_state() {
+        with_headless_shell_cx("ogs-account", |shell, cx| {
+            assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);
+            assert_eq!(
+                shell.ogs_client.snapshot().socket_status,
+                ryusei_host::OgsSocketStatus::Disconnected
+            );
+            shell.refresh_ogs_account_state();
+            assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);
+
+            // Invalid game id must not enter remote mode.
+            shell.ogs_game_id_input.set_text("not-a-number");
+            shell.connect_ogs_game(cx);
+            assert_ne!(
+                shell.session_policy.source,
+                ryusei_domain_core::SessionSource::RemoteCompetition
             );
         });
     }
