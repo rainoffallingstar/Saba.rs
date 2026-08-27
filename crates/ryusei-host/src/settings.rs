@@ -52,11 +52,13 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "view.coordinates_type"
         | "view.move_numbers_type"
         | "game.opening_convention"
+        | "game.default_ruleset"
         | "katago.human_sl_profile"
         | "profile.display_name"
         | "profile.current_goal"
         | "profile.current_plan"
-        | "workspace.tabs" => Some(SettingKind::String),
+        | "workspace.tabs"
+        | "library.sources" => Some(SettingKind::String),
         "engines.analysis"
         | "engines.black"
         | "engines.white"
@@ -106,7 +108,8 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "view.show_siblings"
         | "view.show_winrategraph"
         | "view.winrategraph_invert"
-        | "window.maximized" => Some(SettingKind::Boolean),
+        | "window.maximized"
+        | "library.redistribution_allowed" => Some(SettingKind::Boolean),
         "app.hide_busy_delay"
         | "app.loadgame_delay"
         | "app.startup_check_updates_delay"

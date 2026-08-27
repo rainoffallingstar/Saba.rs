@@ -36,6 +36,7 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "game.default_komi",
     "game.default_handicap",
     "game.opening_convention",
+    "game.default_ruleset",
     "katago.human_sl_profile",
     "engines.analyze_commands",
 ];
@@ -143,34 +144,49 @@ pub fn display_setting_value(value: Option<&Value>) -> String {
     }
 }
 
+/// Formats a value without JSON quoting for an editable control.
+pub fn editable_setting_value(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Array(values)) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
+}
+
 /// Human-readable label for a panel key; unknown keys (never rendered) fall
 /// back to the key itself.
 pub fn setting_label(key: &str) -> &'static str {
     match key {
-        "board.show_analysis" => "Show analysis",
-        "view.show_coordinates" => "Show coordinates",
-        "view.coordinates_type" => "Coordinates style (A1 or 1-1)",
-        "view.show_move_numbers" => "Show move numbers",
-        "view.move_numbers_type" => "Move numbers (start, variation, or hotspot)",
-        "view.show_move_colorization" => "Colorize next moves",
-        "view.show_next_moves" => "Show next moves",
-        "view.show_siblings" => "Show sibling variations",
-        "view.show_comments" => "Show comments",
-        "view.show_graph" => "Show game graph",
-        "view.show_winrategraph" => "Show winrate graph",
-        "view.winrategraph_invert" => "Invert winrate graph",
-        "view.winrategraph_blunderthreshold" => "Winrate blunder threshold",
-        "view.winrategraph_blunderthreshold_scorelead" => "Score lead blunder threshold",
-        "graph.grid_size" => "Game graph grid size",
-        "graph.node_size" => "Game graph node size",
-        "gtp.console_log_enabled" => "Log GTP console",
-        "engines.analysis_max_visits" => "Analysis max visits (0 = unlimited)",
-        "game.default_board_size" => "Default board size",
-        "game.default_komi" => "Default komi",
-        "game.default_handicap" => "Default handicap",
-        "game.opening_convention" => "Opening convention",
-        "katago.human_sl_profile" => "KataGo HumanSL profile",
-        "engines.analyze_commands" => "Analyze commands",
+        "board.show_analysis" => "显示 AI 分析标记",
+        "view.show_coordinates" => "显示棋盘坐标",
+        "view.coordinates_type" => "坐标格式（A1 或 1-1）",
+        "view.show_move_numbers" => "显示手数",
+        "view.move_numbers_type" => "手数显示范围",
+        "view.show_move_colorization" => "着色后续变化",
+        "view.show_next_moves" => "显示下一手",
+        "view.show_siblings" => "显示同级变化",
+        "view.show_comments" => "显示评论",
+        "view.show_graph" => "显示棋谱树",
+        "view.show_winrategraph" => "显示胜率图",
+        "view.winrategraph_invert" => "反转胜率图",
+        "view.winrategraph_blunderthreshold" => "胜率恶手阈值",
+        "view.winrategraph_blunderthreshold_scorelead" => "目差恶手阈值",
+        "graph.grid_size" => "棋谱树网格大小",
+        "graph.node_size" => "棋谱树节点大小",
+        "gtp.console_log_enabled" => "记录 GTP 控制台",
+        "engines.analysis_max_visits" => "分析 visits（0 为不限）",
+        "game.default_board_size" => "默认棋盘大小",
+        "game.default_komi" => "默认贴目",
+        "game.default_handicap" => "默认让子",
+        "game.opening_convention" => "开局约定",
+        "game.default_ruleset" => "默认规则（Chinese/Japanese/Ancient...）",
+        "katago.human_sl_profile" => "KataGo HumanSL 风格",
+        "engines.analyze_commands" => "分析命令",
         _ => "Setting",
     }
 }

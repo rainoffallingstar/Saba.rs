@@ -10,10 +10,13 @@ use gpui::{
     Stateful, StatefulInteractiveElement, Window, canvas, div, hsla, point, prelude::*, px, rgb,
 };
 
-use ryusei_domain_core::{GameMode, GameSnapshot};
+use ryusei_domain_core::{
+    AnalysisPolicy, GameMode, GameSnapshot, MatchParticipants, PlayerKind, SessionMode, TimeControl,
+};
 
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{Disableable, Selectable, Sizable};
 
@@ -26,6 +29,7 @@ use crate::layout::SplitPane;
 use crate::native_text_input::NativeInputBinding;
 use crate::node_inspector::NodeInspectorMetadata;
 use crate::plugin_panel::PluginPanelEntry;
+use crate::settings_form::{SettingRow, editable_setting_value, panel_setting_rows};
 use crate::theme::UiPalette;
 use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
 use crate::winrate_graph::{GraphPlotPoint, WinrateGraphMetric};
@@ -72,6 +76,8 @@ fn mac_info_icon(color: u32) -> Div {
 pub fn render_titlebar(
     show_left_sidebar: bool,
     show_right_sidebar: bool,
+    title: &str,
+    session_mode: SessionMode,
     palette: UiPalette,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
@@ -144,7 +150,15 @@ pub fn render_titlebar(
                 .font_weight(FontWeight::MEDIUM)
                 .text_sm()
                 .text_color(rgb(palette.text))
-                .child("Sabaki"),
+                .child(format!(
+                    "Ryusei · {} · {}",
+                    match session_mode {
+                        SessionMode::Match => "对弈",
+                        SessionMode::Record => "打谱",
+                        SessionMode::Live => "实时",
+                    },
+                    title
+                )),
         )
         // Right: Info icon + Right sidebar toggle icon
         .child(
@@ -180,6 +194,246 @@ pub fn render_titlebar(
                         })),
                 ),
         )
+}
+
+/// Keeps the session model visible instead of hiding its controls in the
+/// application menu. This is intentionally compact: the board remains the
+/// primary surface while mode, opponent, clock, and analysis state stay
+/// discoverable and one click away.
+pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let policy = shell.session_policy;
+    let clock = shell.clock.state();
+    let tab = shell.workspace_tabs.active_tab();
+    let mode_button = |id: &'static str, label: &'static str, selected: bool, mode: SessionMode| {
+        Button::new(id)
+            .small()
+            .ghost()
+            .selected(selected)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| shell.set_session_mode(mode, cx)))
+    };
+    let participant_button =
+        |id: &'static str, label: &'static str, selected: bool, participants: MatchParticipants| {
+            Button::new(id)
+                .small()
+                .ghost()
+                .selected(selected)
+                .label(label)
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    shell.set_match_participants(participants, cx)
+                }))
+        };
+    let time_button =
+        |id: &'static str, label: &'static str, selected: bool, control: TimeControl| {
+            Button::new(id)
+                .small()
+                .ghost()
+                .selected(selected)
+                .label(label)
+                .on_click(cx.listener(move |shell, _, _, cx| shell.set_time_control(control, cx)))
+        };
+    let board_button = |id: &'static str, label: &'static str, selected: bool, mode: GameMode| {
+        Button::new(id)
+            .small()
+            .ghost()
+            .selected(selected)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| shell.set_mode(mode, cx)))
+    };
+    let analysis_running = shell.analysis_task.is_some();
+    let analysis_button = if analysis_running {
+        Button::new("session-stop-analysis")
+            .small()
+            .warning()
+            .label("停止分析")
+            .on_click(cx.listener(|shell, _, _, cx| shell.stop_analysis(cx)))
+    } else {
+        Button::new("session-start-analysis")
+            .small()
+            .outline()
+            .label("开始分析")
+            .disabled(policy.analysis == AnalysisPolicy::FairPlayLockedOff)
+            .on_click(cx.listener(|shell, _, _, cx| shell.start_analysis(cx)))
+    };
+    let live_button = Button::new("session-live-capture")
+        .small()
+        .ghost()
+        .label("导入直播")
+        .on_click(cx.listener(|shell, _, _, cx| shell.open_live_capture(cx)));
+    let remote_button = if policy.source == ryusei_domain_core::SessionSource::RemoteCompetition {
+        Button::new("session-leave-remote")
+            .small()
+            .warning()
+            .label("退出远程")
+            .on_click(cx.listener(|shell, _, _, cx| shell.leave_remote_match(cx)))
+    } else {
+        Button::new("session-enter-remote")
+            .small()
+            .ghost()
+            .label("OGS 远程")
+            .on_click(cx.listener(|shell, _, _, cx| shell.enter_ogs_remote_match(cx)))
+    };
+
+    div()
+        .id("session-toolbar")
+        .debug_selector(|| "session-toolbar".to_owned())
+        .flex_none()
+        .h(px(42.0))
+        .overflow_x_scroll()
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_3()
+        .border_b_1()
+        .border_color(rgb(shell.palette.border))
+        .bg(rgb(shell.palette.panel))
+        .child(
+            div()
+                .flex_none()
+                .max_w(px(180.0))
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(shell.palette.text))
+                .child(if tab.is_dirty {
+                    format!("● {}", tab.title)
+                } else {
+                    tab.title.clone()
+                }),
+        )
+        .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(shell.palette.border)))
+        .child(mode_button(
+            "session-mode-match",
+            "对弈",
+            policy.mode == SessionMode::Match,
+            SessionMode::Match,
+        ))
+        .child(mode_button(
+            "session-mode-record",
+            "打谱",
+            policy.mode == SessionMode::Record,
+            SessionMode::Record,
+        ))
+        .child(mode_button(
+            "session-mode-live",
+            "实时",
+            policy.mode == SessionMode::Live,
+            SessionMode::Live,
+        ))
+        .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(shell.palette.border)))
+        .child(participant_button(
+            "session-players-human",
+            "双人",
+            policy.participants == MatchParticipants::human_vs_human(),
+            MatchParticipants::human_vs_human(),
+        ))
+        .child(participant_button(
+            "session-players-human-ai",
+            "人机",
+            policy.participants == MatchParticipants::human_vs_ai(),
+            MatchParticipants::human_vs_ai(),
+        ))
+        .child(participant_button(
+            "session-players-ai-human",
+            "机人",
+            policy.participants
+                == MatchParticipants {
+                    black: PlayerKind::Ai,
+                    white: PlayerKind::Human,
+                },
+            MatchParticipants {
+                black: PlayerKind::Ai,
+                white: PlayerKind::Human,
+            },
+        ))
+        .child(participant_button(
+            "session-players-ai-ai",
+            "AI×AI",
+            policy.participants == MatchParticipants::ai_vs_ai(),
+            MatchParticipants::ai_vs_ai(),
+        ))
+        .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(shell.palette.border)))
+        .child(time_button(
+            "session-time-none",
+            "无时钟",
+            clock.control == TimeControl::None,
+            TimeControl::None,
+        ))
+        .child(time_button(
+            "session-time-absolute",
+            "10 分钟",
+            clock.control
+                == TimeControl::Absolute {
+                    main_time_secs: 600,
+                },
+            TimeControl::Absolute {
+                main_time_secs: 600,
+            },
+        ))
+        .child(time_button(
+            "session-time-byo-yomi",
+            "10m + 5×30s",
+            clock.control
+                == TimeControl::ByoYomi {
+                    main_time_secs: 600,
+                    period_time_secs: 30,
+                    periods: 5,
+                },
+            TimeControl::ByoYomi {
+                main_time_secs: 600,
+                period_time_secs: 30,
+                periods: 5,
+            },
+        ))
+        .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(shell.palette.border)))
+        .child(board_button(
+            "session-tool-play",
+            "落子",
+            shell.mode == GameMode::Play,
+            GameMode::Play,
+        ))
+        .child(board_button(
+            "session-tool-edit",
+            "编辑",
+            shell.mode == GameMode::Edit,
+            GameMode::Edit,
+        ))
+        .child(board_button(
+            "session-tool-score",
+            "点目",
+            shell.mode == GameMode::Scoring,
+            GameMode::Scoring,
+        ))
+        .child(board_button(
+            "session-tool-estimate",
+            "估目",
+            shell.mode == GameMode::Estimator,
+            GameMode::Estimator,
+        ))
+        .child(div().w(px(1.0)).h(px(20.0)).bg(rgb(shell.palette.border)))
+        .child(analysis_button)
+        .child(remote_button)
+        .child(
+            Button::new("ogs-login-browser")
+                .small()
+                .ghost()
+                .label(match shell.ogs_auth_state {
+                    ryusei_host::OgsAuthState::SignedOut => "OGS 登录",
+                    ryusei_host::OgsAuthState::BrowserLoginOnly => "OGS 浏览器已打开",
+                    ryusei_host::OgsAuthState::Authenticated => "OGS 已登录",
+                })
+                .tooltip("在系统浏览器打开 OGS；不会导入浏览器 cookie")
+                .on_click(cx.listener(|shell, _, _, cx| shell.open_ogs_login_page(cx))),
+        )
+        .child(
+            Button::new("session-review-quick")
+                .small()
+                .ghost()
+                .label("复盘 50")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.start_review_profile_action(ryusei_domain_core::ReviewProfile::Quick, cx)
+                })),
+        )
+        .child(live_button)
 }
 
 /// Renders the draggable divider between the center pane and a side pane.
@@ -334,7 +588,7 @@ pub fn render_player_bar(
                             status.to_owned()
                         })),
                 )
-                .child(
+                .children((shell.session_policy.mode != SessionMode::Live).then(|| {
                     div()
                         .flex()
                         .items_center()
@@ -364,8 +618,8 @@ pub fn render_player_bar(
                                 .on_click(cx.listener(|shell, _, window, cx| {
                                     shell.on_resign(&MouseDownEvent::default(), window, cx);
                                 })),
-                        ),
-                )
+                        )
+                }))
                 .children(
                     (shell.mode == GameMode::Scoring || shell.mode == GameMode::Estimator).then(
                         || {
@@ -762,6 +1016,35 @@ fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
                                 .get_str("katago.human_sl_profile")
                                 .unwrap_or("rank_5k"),
                         )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(
+                            ryusei_host::human_sl_profiles()
+                                .into_iter()
+                                .filter(|profile| profile.starts_with("rank_"))
+                                .map(|profile| {
+                                    let selected = shell
+                                        .settings
+                                        .get_str("katago.human_sl_profile")
+                                        == Some(profile.as_str());
+                                    let label = profile.strip_prefix("rank_").unwrap_or(&profile).to_owned();
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "human-sl-profile-{profile}"
+                                    )))
+                                    .xsmall()
+                                    .outline()
+                                    .selected(selected)
+                                    .label(label)
+                                    .tooltip(format!("HumanSL {profile}"))
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.set_human_sl_profile(&profile, cx);
+                                    }))
+                                }),
+                        ),
                 )
                 .children(shell.katago_weights.iter().enumerate().map(|(index, weight)| {
                     let name = weight.name.clone();
@@ -1977,6 +2260,20 @@ pub fn render_game_info_drawer(
             .cloned()
             .unwrap_or_default()
     };
+    let current_ruleset = ryusei_host::GoRuleset::from_setting(
+        snapshot
+            .root_properties
+            .get("RU")
+            .and_then(|values| values.first())
+            .map(String::as_str),
+    );
+    let handicap = snapshot
+        .root_properties
+        .get("HA")
+        .and_then(|values| values.first())
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_default();
+    let default_komi = current_ruleset.default_komi(handicap);
     let row = |label: &'static str, val: String| {
         div()
             .flex()
@@ -2016,6 +2313,53 @@ pub fn render_game_info_drawer(
             ))
             .child(row("Total Moves", format!("{}", snapshot.moves.len())))
             .child(row("Komi", property("KM")))
+            .child(row("Rules", property("RU")))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .pt_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.subtle))
+                            .child("规则集会写入当前 SGF，并在重新连接 KataGo 时生效。"),
+                    )
+                    .child(div().flex().flex_wrap().gap_1().children(
+                        ryusei_host::GoRuleset::ALL.into_iter().map(|ruleset| {
+                            let selected = property("RU") == ruleset.sgf_name();
+                            Button::new(gpui::SharedString::from(format!(
+                                "game-ruleset-{}",
+                                ruleset.katago_name()
+                            )))
+                            .xsmall()
+                            .outline()
+                            .selected(selected)
+                            .label(ruleset.sgf_name())
+                            .tooltip(ruleset.label())
+                            .on_click(cx.listener(
+                                move |shell, _, _, cx| {
+                                    shell.set_current_game_ruleset(ruleset, cx);
+                                },
+                            ))
+                        }),
+                    ))
+                    .child(
+                        Button::new("game-ruleset-default-komi")
+                            .xsmall()
+                            .outline()
+                            .label(format!(
+                                "按 {} 默认贴目设为 {:.1}",
+                                current_ruleset.sgf_name(),
+                                default_komi
+                            ))
+                            .tooltip("仅在明确点击后写入 KM；切换规则时不会自动改变贴目")
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                shell.apply_current_ruleset_default_komi(cx);
+                            })),
+                    ),
+            )
             .child(row("Black Player", property("PB")))
             .child(row("White Player", property("PW")))
             .child(row("Result", property("RE")))
@@ -2200,6 +2544,56 @@ pub fn render_score_drawer(
 /// Lists library material available from recent local games and managed Git sources.
 pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let recent_files = shell.recent_files.list();
+    let field = |id: &'static str,
+                 label: &'static str,
+                 placeholder: &'static str,
+                 kind: crate::ActiveTextInput,
+                 focus: &gpui::FocusHandle,
+                 input: &crate::native_text_input::NativeTextInput| {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .id(id)
+                    .track_focus(focus)
+                    .key_context("LibrarySourceInput")
+                    .p_2()
+                    .border_1()
+                    .border_color(rgb(if shell.active_text_input == Some(kind) {
+                        shell.palette.accent
+                    } else {
+                        shell.palette.border
+                    }))
+                    .bg(rgb(shell.palette.input))
+                    .text_xs()
+                    .child(if input.text().is_empty() {
+                        div()
+                            .text_color(rgb(shell.palette.muted))
+                            .child(placeholder)
+                    } else {
+                        div()
+                            .text_color(rgb(shell.palette.text))
+                            .child(input.text().to_owned())
+                    })
+                    .child(NativeInputBinding::new(focus.clone(), cx.entity().clone()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |shell, _, window, cx| {
+                            shell.on_library_input_focus(kind, window, cx)
+                        }),
+                    )
+                    .on_key_down(cx.listener(ShellApp::on_library_input_key_down)),
+            )
+    };
+    let syncing = shell.library_task.is_some();
     render_readonly_drawer(
         "library",
         4,
@@ -2208,29 +2602,206 @@ pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statef
             .flex()
             .flex_col()
             .gap_3()
+            .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                "仅同步明确允许再分发的公开 GitHub SGF 仓库。配置会保存在本机，Git 不会弹出凭据提示。",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .children(shell.library_sources.iter().map(|source| {
+                        let source_id = source.id.clone();
+                        Button::new(gpui::SharedString::from(format!("library-source-{source_id}")))
+                            .small()
+                            .ghost()
+                            .selected(shell.library_selected_source.as_deref() == Some(source.id.as_str()))
+                            .label(source.name.clone())
+                            .on_click(cx.listener(move |shell, _, _, cx| shell.select_library_source(&source_id, cx)))
+                    }))
+                    .child(
+                        Button::new("library-new-source")
+                            .small()
+                            .outline()
+                            .label("+ 新来源")
+                            .on_click(cx.listener(|shell, _, _, cx| shell.new_library_source(cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .border_1()
+                    .border_color(rgb(shell.palette.border))
+                    .bg(rgb(shell.palette.panel))
+                    .child(field("library-source-id", "来源 ID", "例如 pro-games", crate::ActiveTextInput::LibraryId, &shell.library_id_focus_handle, &shell.library_id_input))
+                    .child(field("library-source-name", "名称", "棋谱库名称", crate::ActiveTextInput::LibraryName, &shell.library_name_focus_handle, &shell.library_name_input))
+                    .child(field("library-source-url", "GitHub HTTPS URL", "https://github.com/owner/repository", crate::ActiveTextInput::LibraryGithubUrl, &shell.library_github_url_focus_handle, &shell.library_github_url_input))
+                    .child(field("library-source-ref", "Git ref", "main", crate::ActiveTextInput::LibraryReference, &shell.library_reference_focus_handle, &shell.library_reference_input))
+                    .child(field("library-license-name", "许可证名称", "例如 CC BY 4.0", crate::ActiveTextInput::LibraryLicenseName, &shell.library_license_name_focus_handle, &shell.library_license_name_input))
+                    .child(field("library-license-url", "许可证证据 URL", "公开许可证页面", crate::ActiveTextInput::LibraryLicenseUrl, &shell.library_license_url_focus_handle, &shell.library_license_url_input))
+                    .child(Checkbox::new("library-rights-confirmed").checked(shell.library_rights_confirmed).label("我已确认该来源明确允许棋谱再分发").on_click(cx.listener(|shell, checked: &bool, _, cx| shell.toggle_library_rights(*checked, cx))))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .child(Button::new("library-sync").small().primary().disabled(syncing).label(if syncing { "正在同步…" } else { "保存并同步" }).on_click(cx.listener(|shell, _, _, cx| shell.sync_library(cx))))
+                                    .children(shell.library_selected_source.is_some().then(|| {
+                                        Button::new("library-remove-source")
+                                            .small()
+                                            .danger()
+                                            .label("移除配置")
+                                            .disabled(syncing)
+                                            .on_click(cx.listener(|shell, _, _, cx| shell.remove_selected_library_source(cx)))
+                                    })),
+                            )
+                            .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(shell.library_status.clone())),
+                    ),
+            )
+            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(shell.palette.subtle)).child(format!("已同步棋谱（{}）", shell.library_entries.len())))
+            .child(div().flex().flex_col().gap_1().children(shell.library_entries.iter().take(200).map(|entry| {
+                let path = entry.path.clone();
+                Button::new(gpui::SharedString::from(format!("library-entry-{}-{}", entry.source_id, entry.relative_path)))
+                    .small()
+                    .ghost()
+                    .label(entry.relative_path.clone())
+                    .on_click(cx.listener(move |shell, _, _, cx| shell.open_library_entry(path.clone(), cx)))
+            })))
+            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(shell.palette.subtle)).child("最近打开"))
+            .child(div().flex().flex_col().gap_1().children(recent_files.into_iter().map(|entry| {
+                let entry_id = entry.id.clone();
+                Button::new(gpui::SharedString::from(format!("library-recent-{}", entry.id)))
+                    .small()
+                    .ghost()
+                    .label(if entry.is_missing {
+                        format!("{}（文件不存在）", entry.display_name)
+                    } else {
+                        entry.display_name
+                    })
+                    .disabled(entry.is_missing)
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        shell.open_recent_file(&entry_id, cx);
+                    }) )
+            }))),
+        shell,
+        cx,
+    )
+}
+
+/// Captures a public StarRiver/live page into the active read-only session.
+pub fn render_live_capture_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    render_readonly_drawer(
+        "live-capture",
+        8,
+        "公共直播",
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                "输入公开 HTTPS 直播页地址或 OGS 游戏地址（例如 https://online-go.com/game/42）。Ryusei 只读取公开页面与 SGF，不会连接私有接口。",
+            ))
+            .child(
+                div()
+                    .track_focus(&shell.live_url_focus_handle)
+                    .key_context("LiveUrlInput")
+                    .p_2p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(
+                        if shell.active_text_input == Some(crate::ActiveTextInput::LiveUrl) {
+                            shell.palette.accent
+                        } else {
+                            shell.palette.border
+                        },
+                    ))
+                    .bg(rgb(shell.palette.input))
+                    .text_xs()
+                    .text_color(rgb(shell.palette.text))
+                    .child(if shell.live_url_input.text().is_empty() {
+                        div()
+                            .text_color(rgb(shell.palette.muted))
+                            .child("https://example.com/live/...")
+                    } else {
+                        div()
+                            .text_color(rgb(shell.palette.text))
+                            .child(shell.live_url_input.text().to_owned())
+                    })
+                    .child(NativeInputBinding::new(
+                        shell.live_url_focus_handle.clone(),
+                        cx.entity().clone(),
+                    ))
+                    .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_live_url_focus))
+                    .on_key_down(cx.listener(ShellApp::on_live_url_key_down)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("live-capture-submit")
+                            .small()
+                            .primary()
+                            .label("载入直播棋谱")
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                shell.capture_public_live_game(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("live-capture-clear")
+                            .small()
+                            .ghost()
+                            .label("清空")
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                shell.live_url_input.set_text("");
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("live-capture-refresh")
+                            .small()
+                            .outline()
+                            .label("刷新 OGS")
+                            .disabled(
+                                shell
+                                    .live_source_url
+                                    .as_deref()
+                                    .and_then(ryusei_host::ogs_game_id_from_public_url)
+                                    .is_none(),
+                            )
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                if let Some(url) = shell.live_source_url.clone() {
+                                    shell.live_url_input.set_text(url);
+                                    shell.capture_public_live_game(cx);
+                                }
+                            })),
+                    ),
+            )
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(shell.palette.muted))
-                    .child("本地最近棋谱与已授权 Git SGF 来源会显示在这里。"),
-            )
-            .child(div().flex().flex_col().gap_1().children(
-                recent_files.into_iter().enumerate().map(|(index, entry)| {
-                    div()
-                        .id(("library-recent", index))
-                        .p_2()
-                        .bg(rgb(shell.palette.input))
-                        .border_1()
-                        .border_color(rgb(shell.palette.border))
-                        .text_sm()
-                        .text_color(rgb(if entry.is_missing {
-                            shell.palette.muted
-                        } else {
-                            shell.palette.text
-                        }))
-                        .child(entry.display_name)
-                }),
-            )),
+                    .child(if let Some(state) = shell.live_ogs_state.as_ref() {
+                        format!(
+                            "OGS #{} · {} vs {} · 第 {} 手 · {}",
+                            state.game_id,
+                            state.black_name,
+                            state.white_name,
+                            state.move_number,
+                            state.phase,
+                        )
+                    } else {
+                        "载入后会切换到‘实时’只读模式，并启用连续分析。".to_owned()
+                    }),
+            ),
         shell,
         cx,
     )
@@ -2350,8 +2921,12 @@ pub fn render_goals_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
     )
 }
 
-/// Gives the compact rail a real settings destination rather than a toast.
+/// Renders the validated host setting table as native, immediately persisted controls.
 pub fn render_preferences_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let mut settings = div().flex().flex_col().gap_2();
+    for row in panel_setting_rows(&shell.settings) {
+        settings = settings.child(render_preference_row(shell, cx, row));
+    }
     render_readonly_drawer(
         "preferences",
         6,
@@ -2359,22 +2934,116 @@ pub fn render_preferences_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(shell.palette.muted))
-                    .child("显示、棋盘、引擎与插件设置可从顶部菜单继续调整。"),
+                    .child("更改会立即校验并保存。文本或数值编辑按 Enter 应用，Esc 取消。"),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(shell.palette.text))
-                    .child(format!("当前主题: {:?}", shell.theme_choice)),
-            ),
+            .child(settings),
         shell,
         cx,
     )
+}
+
+fn render_preference_row(shell: &ShellApp, cx: &Context<ShellApp>, row: SettingRow) -> Div {
+    let row_key = row.key.clone();
+    let value = editable_setting_value(row.value.as_ref());
+    let display_value = if value.chars().count() > 28 {
+        format!("{}…", value.chars().take(27).collect::<String>())
+    } else {
+        value
+    };
+    let control = if row.kind == ryusei_host::SettingKind::Boolean {
+        let checked = row
+            .value
+            .as_ref()
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let listener_row = row.clone();
+        Checkbox::new(gpui::SharedString::from(format!(
+            "preference-toggle-{row_key}"
+        )))
+        .checked(checked)
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            shell.apply_settings_edit(crate::settings_form::toggle_boolean_edit(&listener_row));
+            cx.notify();
+        }))
+        .into_any_element()
+    } else if shell.settings_editing_key.as_deref() == Some(row_key.as_str()) {
+        div()
+            .id(gpui::SharedString::from(format!(
+                "preference-input-{row_key}"
+            )))
+            .track_focus(&shell.settings_input_focus_handle)
+            .key_context("SettingsInput")
+            .w(px(150.0))
+            .px_2()
+            .py_1p5()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(shell.palette.accent))
+            .bg(rgb(shell.palette.input))
+            .text_xs()
+            .text_color(rgb(shell.palette.text))
+            .child(shell.settings_draft.clone())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(ShellApp::on_settings_input_focus),
+            )
+            .on_key_down(cx.listener(ShellApp::on_settings_key_down))
+            .into_any_element()
+    } else {
+        let listener_row = row.clone();
+        Button::new(gpui::SharedString::from(format!(
+            "preference-edit-{row_key}"
+        )))
+        .xsmall()
+        .outline()
+        .label(display_value)
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            shell.settings_editing_key = Some(listener_row.key.clone());
+            shell.settings_draft = listener_row
+                .value
+                .as_ref()
+                .map(|value| editable_setting_value(Some(value)))
+                .unwrap_or_default()
+                .into();
+            window.focus(&shell.settings_input_focus_handle);
+            cx.notify();
+        }))
+        .into_any_element()
+    };
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .py_2()
+        .border_b_1()
+        .border_color(rgb(shell.palette.border))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(shell.palette.text))
+                        .child(row.label),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.muted))
+                        .child(row.key),
+                ),
+        )
+        .child(control)
 }
 
 /// Shows the native client's build and architecture identity.
@@ -2525,6 +3194,16 @@ pub fn render_bottom_deck_panel(
                                 })),
                         )
                         .child(
+                            Button::new("deck-tab-engines")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::Engines)
+                                .label("引擎管理")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::Engines, cx);
+                                })),
+                        )
+                        .child(
                             Button::new("deck-tab-plugins")
                                 .small()
                                 .ghost()
@@ -2564,6 +3243,7 @@ pub fn render_bottom_deck_panel(
                     crate::BottomDeckTab::FoxSync => render_fox_sync_dialog(shell, cx),
                     crate::BottomDeckTab::PositionSgf => render_position_to_sgf_dialog(shell, cx),
                     crate::BottomDeckTab::PluginManager => render_pinned_plugins_manager(shell, cx),
+                    crate::BottomDeckTab::Engines => render_engine_manager(shell, cx),
                     crate::BottomDeckTab::Generic(ref other_id) => {
                         if let Some(plugin) = shell
                             .installed_plugins
@@ -2576,6 +3256,214 @@ pub fn render_bottom_deck_panel(
                         }
                     }
                 }),
+        )
+}
+
+fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    let editing = shell.engine_spec_editing_name.as_deref();
+    div()
+        .w_full()
+        .h_full()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child("GTP 引擎管理"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.muted))
+                        .child("保存配置不会启动进程。分配角色后，在 GTP 终端连接该角色。"),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .track_focus(&shell.engine_spec_focus_handle)
+                        .px_3()
+                        .py_1p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(shell.palette.accent))
+                        .bg(rgb(shell.palette.input))
+                        .text_xs()
+                        .text_color(rgb(shell.palette.text))
+                        .child(if shell.engine_spec_input.text().is_empty() {
+                            "名称 | 可执行路径 | 参数 | 启动命令".to_owned()
+                        } else {
+                            shell.engine_spec_input.text().to_owned()
+                        })
+                        .child(NativeInputBinding::new(
+                            shell.engine_spec_focus_handle.clone(),
+                            cx.entity().clone(),
+                        ))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(ShellApp::on_engine_spec_focus),
+                        )
+                        .on_key_down(cx.listener(ShellApp::on_engine_spec_key_down)),
+                )
+                .child(
+                    Button::new("engine-spec-choose-file")
+                        .small()
+                        .outline()
+                        .label("选择文件")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.choose_engine_executable(cx);
+                        })),
+                )
+                .child(
+                    Button::new("engine-spec-save")
+                        .small()
+                        .primary()
+                        .label(if editing.is_some() {
+                            "保存修改"
+                        } else {
+                            "添加引擎"
+                        })
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.save_engine_spec(cx);
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .children(shell.engine_store.list().iter().map(|record| {
+                    let name = record.name.clone();
+                    let edit_name = name.clone();
+                    let test_name = name.clone();
+                    let remove_name = name.clone();
+                    let path = record.path.clone();
+                    let details = if record.args.is_empty() {
+                        record.commands.clone().unwrap_or_default()
+                    } else if let Some(commands) = &record.commands {
+                        format!("{} · {}", record.args, commands)
+                    } else {
+                        record.args.clone()
+                    };
+                    div()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(shell.palette.panel))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(shell.palette.text))
+                                        .child(name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "engine-edit-{name}"
+                                            )))
+                                            .xsmall()
+                                            .outline()
+                                            .label("编辑")
+                                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                                shell.edit_engine_spec(&edit_name, cx);
+                                            })),
+                                        )
+                                        .child(
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "engine-test-{name}"
+                                            )))
+                                            .xsmall()
+                                            .outline()
+                                            .label("测试")
+                                            .tooltip("启动进程并执行 GTP 握手，然后立即停止")
+                                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                                shell.test_engine_spec(&test_name, cx);
+                                            })),
+                                        )
+                                        .child(
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "engine-delete-{name}"
+                                            )))
+                                            .xsmall()
+                                            .ghost()
+                                            .label("删除")
+                                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                                shell.remove_engine_spec(&remove_name, cx);
+                                            })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(path),
+                        )
+                        .when(!details.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(shell.palette.subtle))
+                                    .child(details),
+                            )
+                        })
+                        .child(
+                            div().flex().flex_wrap().gap_1().children(
+                                crate::engine_console::EngineRole::ALL
+                                    .into_iter()
+                                    .map(|role| {
+                                        let selected =
+                                            shell.engine_roles.get(role) == Some(name.as_str());
+                                        let assign_name = name.clone();
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "engine-role-{name}-{}",
+                                            role.label()
+                                        )))
+                                        .xsmall()
+                                        .outline()
+                                        .selected(selected)
+                                        .label(role.label())
+                                        .on_click(
+                                            cx.listener(move |shell, _, _, cx| {
+                                                shell.assign_engine_role(role, &assign_name, cx);
+                                            }),
+                                        )
+                                    }),
+                            ),
+                        )
+                })),
         )
 }
 
@@ -3203,10 +4091,97 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             summary.white_blunder_count,
                             0xef4444,
                             shell,
-                        )),
+                        ))
+                        .when(summary.total_moves > 0, |this| {
+                            this.child(
+                                div()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(rgb(shell.palette.subtle))
+                                    .child(summary.verdict()),
+                            )
+                            .child(
+                                Button::new("review-write-sgf-comments")
+                                    .xsmall()
+                                    .outline()
+                                    .label("写入 SGF 复盘评论")
+                                    .disabled(summary.top_blunders.is_empty())
+                                    .tooltip("保留现有评论，并追加总评和前五个严重问题手")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.write_review_comments(cx);
+                                    })),
+                            )
+                        }),
                 ),
         )
-        // Card 2: 胜率与目差走势图卡片 (OGS 风格，置于 AI 评估卡片下方)
+        // Card 2: actionable top mistakes from the persisted per-move review.
+        .child({
+            let weak_blunder_shell = cx.entity().downgrade();
+            let rows = summary.top_blunders.iter().map(|eval| {
+                let node_id = eval.node_id.clone();
+                let played = eval.played_vertex.as_deref().unwrap_or("pass");
+                let recommendation = eval
+                    .ai_recommended_vertex
+                    .as_deref()
+                    .map(|move_| format!("推荐 {move_}"))
+                    .unwrap_or_else(|| "暂无推荐点".to_owned());
+                let pv = if eval.ai_pv.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " · PV {}",
+                        eval.ai_pv
+                            .iter()
+                            .take(4)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                };
+                let weak = weak_blunder_shell.clone();
+                Button::new(gpui::SharedString::from(format!(
+                    "blunder-report-{}",
+                    eval.node_id
+                )))
+                .small()
+                .ghost()
+                .label(format!(
+                    "第{}手 {} {} · 损失 {:.1}目 · {}{}",
+                    eval.move_number,
+                    match eval.player {
+                        ryusei_domain_core::Color::Black => "黑",
+                        ryusei_domain_core::Color::White => "白",
+                    },
+                    played,
+                    eval.points_lost,
+                    recommendation,
+                    pv,
+                ))
+                .tooltip("跳转到该手并查看上下文")
+                .on_click(move |_, _, cx| {
+                    weak.update(cx, |shell, cx| shell.navigate_to_node(node_id.clone(), cx))
+                        .ok();
+                })
+                .into_any_element()
+            });
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.subtle))
+                        .child(format!("问题手与推荐 · {}", summary.top_blunders.len())),
+                )
+                .children(rows)
+        })
+        // Card 3: 胜率与目差走势图卡片 (OGS 风格，置于 AI 评估卡片下方)
         .child(render_winrate_graph_panel(
             &graph_points,
             winrate_metric,

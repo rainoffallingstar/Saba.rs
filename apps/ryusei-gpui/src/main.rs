@@ -41,7 +41,7 @@ use ryusei_domain_core::{
     AnalysisPolicy, ClockController, ClockEvent, Color, GameMode, MatchParticipants, MoveDto,
     OpeningConvention, PlayerKind, SessionMode, SessionPolicy, SessionSource, TimeControl, Vertex,
 };
-use ryusei_host::{HostPersistence, replay_position_stream_commands};
+use ryusei_host::{HostPersistence, OgsPublicGameFetch, replay_position_stream_commands};
 
 use crate::dialog_service::{DialogService, NativeGameFileAccess, RfdDialogService};
 use crate::engine_console::{
@@ -73,9 +73,10 @@ use crate::plugin_panel::{PluginPanelEntry, apply_process_info, entry_from_recor
 use crate::settings::{
     ThemeChoice, theme_from_setting, window_bounds_from_settings, window_maximized_from_settings,
 };
+use crate::settings_form::editable_setting_value;
 use crate::settings_form::{
-    SettingEdit, SettingRow, apply_setting_edit, display_setting_value, number_edit,
-    panel_setting_rows, string_array_edit, toggle_boolean_edit,
+    SettingEdit, SettingRow, apply_setting_edit, number_edit, panel_setting_rows,
+    string_array_edit, toggle_boolean_edit,
 };
 use crate::sound_feedback::{SoundCue, SoundSink, platform_sound_sink, play_if_enabled};
 use crate::theme::{ThemeTokens, UiPalette, ui_palette};
@@ -164,6 +165,7 @@ pub enum BottomDeckTab {
     FoxSync,
     PositionSgf,
     PluginManager,
+    Engines,
     Generic(String),
 }
 
@@ -174,6 +176,7 @@ enum ActiveDrawer {
     Library,
     Profile,
     Goals,
+    LiveCapture,
     GameInfo,
     Score,
     About,
@@ -185,7 +188,15 @@ enum ActiveTextInput {
     #[allow(dead_code)]
     NodeTitle,
     FoxQuery,
+    LiveUrl,
+    LibraryId,
+    LibraryName,
+    LibraryGithubUrl,
+    LibraryReference,
+    LibraryLicenseName,
+    LibraryLicenseUrl,
     GtpInput,
+    EngineSpec,
 }
 
 struct ShellApp {
@@ -258,10 +269,40 @@ struct ShellApp {
     engine_log: Vec<EngineLogEntry>,
     engine_input_focus_handle: FocusHandle,
     engine_draft: SharedString,
+    engine_spec_input: NativeTextInput,
+    engine_spec_focus_handle: FocusHandle,
+    engine_spec_editing_name: Option<String>,
     gtp_terminal_open: bool,
     gtp_input: NativeTextInput,
     fox_query_input: NativeTextInput,
     fox_query_focus_handle: FocusHandle,
+    live_url_input: NativeTextInput,
+    live_url_focus_handle: FocusHandle,
+    live_source_url: Option<String>,
+    live_ogs_state: Option<ryusei_host::OgsPublicGameState>,
+    /// Polls public OGS broadcasts while this document remains the active live source.
+    live_ogs_poll_task: Option<Task<()>>,
+    live_ogs_poll_generation: u64,
+    ogs_auth_state: ryusei_host::OgsAuthState,
+    library_id_input: NativeTextInput,
+    library_id_focus_handle: FocusHandle,
+    library_name_input: NativeTextInput,
+    library_name_focus_handle: FocusHandle,
+    library_github_url_input: NativeTextInput,
+    library_github_url_focus_handle: FocusHandle,
+    library_reference_input: NativeTextInput,
+    library_reference_focus_handle: FocusHandle,
+    library_license_name_input: NativeTextInput,
+    library_license_name_focus_handle: FocusHandle,
+    library_license_url_input: NativeTextInput,
+    library_license_url_focus_handle: FocusHandle,
+    library_rights_confirmed: bool,
+    library_sources: Vec<ryusei_host::SgfLibrarySource>,
+    library_selected_source: Option<String>,
+    library_entries: Vec<ryusei_host::SgfLibraryEntry>,
+    library_status: SharedString,
+    library_task: Option<Task<()>>,
+    library_syncing_source: Option<String>,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
     palette: UiPalette,
@@ -428,6 +469,12 @@ fn default_new_game_properties_for_size(
         .unwrap_or(0);
 
     let mut properties = BTreeMap::new();
+    if let Some(value) = settings.get_str("game.default_ruleset")
+        && !value.trim().is_empty()
+    {
+        let ruleset = ryusei_host::GoRuleset::from_setting(Some(value));
+        properties.insert("RU".to_owned(), vec![ruleset.sgf_name().to_owned()]);
+    }
     properties.insert("KM".to_owned(), vec![komi.to_string()]);
     let stones = handicap_placement(size, handicap);
     if !stones.is_empty() {
@@ -683,6 +730,11 @@ impl ShellApp {
             clock.start(host.snapshot().board.next_player);
         }
 
+        let library_sources: Vec<ryusei_host::SgfLibrarySource> = settings
+            .get_str("library.sources")
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_default();
+
         let mut shell = Self {
             host,
             workspace_tabs,
@@ -726,10 +778,39 @@ impl ShellApp {
             engine_log: Vec::new(),
             engine_input_focus_handle: cx.focus_handle(),
             engine_draft: "".into(),
+            engine_spec_input: NativeTextInput::new(""),
+            engine_spec_focus_handle: cx.focus_handle(),
+            engine_spec_editing_name: None,
             gtp_terminal_open: false,
             gtp_input: NativeTextInput::new(""),
             fox_query_input: NativeTextInput::new(""),
             fox_query_focus_handle: cx.focus_handle(),
+            live_url_input: NativeTextInput::new(""),
+            live_url_focus_handle: cx.focus_handle(),
+            live_source_url: None,
+            live_ogs_state: None,
+            live_ogs_poll_task: None,
+            live_ogs_poll_generation: 0,
+            ogs_auth_state: ryusei_host::OgsAuthState::SignedOut,
+            library_id_input: NativeTextInput::new(""),
+            library_id_focus_handle: cx.focus_handle(),
+            library_name_input: NativeTextInput::new(""),
+            library_name_focus_handle: cx.focus_handle(),
+            library_github_url_input: NativeTextInput::new(""),
+            library_github_url_focus_handle: cx.focus_handle(),
+            library_reference_input: NativeTextInput::new("main"),
+            library_reference_focus_handle: cx.focus_handle(),
+            library_license_name_input: NativeTextInput::new(""),
+            library_license_name_focus_handle: cx.focus_handle(),
+            library_license_url_input: NativeTextInput::new(""),
+            library_license_url_focus_handle: cx.focus_handle(),
+            library_rights_confirmed: false,
+            library_selected_source: library_sources.first().map(|source| source.id.clone()),
+            library_sources,
+            library_entries: Vec::new(),
+            library_status: "尚未同步".into(),
+            library_task: None,
+            library_syncing_source: None,
             theme_choice,
             theme,
             palette,
@@ -889,6 +970,294 @@ impl ShellApp {
         }
     }
 
+    fn on_live_url_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::LiveUrl);
+        window.focus(&self.live_url_focus_handle);
+        cx.notify();
+    }
+
+    fn on_live_url_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match Self::handle_text_input_key(&mut self.live_url_input, event) {
+            InputKeyResult::Submit => self.capture_public_live_game(cx),
+            InputKeyResult::Cancel => {
+                self.live_url_input.set_text("");
+                cx.notify();
+            }
+            InputKeyResult::Changed | InputKeyResult::Ignored => cx.notify(),
+        }
+    }
+
+    fn capture_public_live_game(&mut self, cx: &mut Context<Self>) {
+        let url = self.live_url_input.text().trim().to_owned();
+        if let Err(error) = ryusei_host::validate_public_https_url(&url) {
+            self.show_toast(format!("公共直播地址无效: {error}"), cx);
+            return;
+        }
+        self.show_toast("正在读取公共直播棋谱…".to_owned(), cx);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let mut fetch = ryusei_host::CurlPublicPageFetch;
+                            ryusei_host::capture_public_live_sgf(&url, &mut fetch)
+                                .map_err(|error| error.to_string())
+                        })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        shell.apply_public_live_capture(result, cx)
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn apply_public_live_capture(
+        &mut self,
+        result: Result<ryusei_host::StarRiverCapture, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(capture) => {
+                let mut events = RecordingSink;
+                match self.host.restore_from_sgf(&capture.sgf, &mut events) {
+                    Ok(_) => {
+                        self.external_file.detach_file();
+                        self.disconnect_all_engine_sessions();
+                        self.stop_ogs_public_poll();
+                        self.last_vertex = None;
+                        self.live_source_url = Some(capture.page_url.clone());
+                        self.mode = GameMode::Play;
+                        self.session_policy =
+                            SessionPolicy::new(SessionMode::Live, SessionSource::LiveBroadcast);
+                        self.analysis_enabled = true;
+                        self.active_drawer = None;
+                        self.synchronize_recovery();
+                        self.status = "公共直播棋谱已载入，只读观察模式".into();
+                        self.show_toast("公共直播棋谱已载入".to_owned(), cx);
+                        self.start_analysis(cx);
+                        self.refresh_ogs_public_state(cx);
+                        self.start_ogs_public_poll(cx);
+                    }
+                    Err(error) => self.show_toast(format!("直播棋谱解析失败: {error}"), cx),
+                }
+            }
+            Err(error) => self.show_toast(format!("公共直播读取失败: {error}"), cx),
+        }
+        cx.notify();
+    }
+
+    fn refresh_ogs_public_state(&mut self, cx: &mut Context<Self>) {
+        let Some(url) = self.live_source_url.clone() else {
+            return;
+        };
+        let Some(game_id) = ryusei_host::ogs_game_id_from_public_url(&url) else {
+            self.live_ogs_state = None;
+            return;
+        };
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let mut fetch = ryusei_host::CurlOgsPublicGameFetch;
+                            fetch.fetch_public_game(game_id)
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(state) => {
+                                shell.status = format!(
+                                    "OGS #{} · {} vs {} · 第 {} 手 · {}",
+                                    state.game_id,
+                                    state.black_name,
+                                    state.white_name,
+                                    state.move_number,
+                                    state.phase,
+                                )
+                                .into();
+                                shell.live_ogs_state = Some(state);
+                            }
+                            Err(error) => {
+                                shell.status = format!("OGS 公共状态读取失败：{error}").into();
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn stop_ogs_public_poll(&mut self) {
+        self.live_ogs_poll_generation = self.live_ogs_poll_generation.wrapping_add(1);
+        self.live_ogs_poll_task = None;
+    }
+
+    /// Polls only public OGS metadata. A changed move number triggers one SGF
+    /// capture; unchanged states never reload the board or restart KataGo.
+    fn start_ogs_public_poll(&mut self, cx: &mut Context<Self>) {
+        if self.live_ogs_poll_task.is_some() {
+            return;
+        }
+        let Some(url) = self.live_source_url.clone() else {
+            return;
+        };
+        if ryusei_host::ogs_game_id_from_public_url(&url).is_none() {
+            return;
+        }
+        self.live_ogs_poll_generation = self.live_ogs_poll_generation.wrapping_add(1);
+        let generation = self.live_ogs_poll_generation;
+        let weak = cx.entity().downgrade();
+        self.live_ogs_poll_task = Some(cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                let url = url.clone();
+                async move {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_secs(20))
+                            .await;
+                        let Some(game_id) = ryusei_host::ogs_game_id_from_public_url(&url) else {
+                            break;
+                        };
+                        let state = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut fetch = ryusei_host::CurlOgsPublicGameFetch;
+                                fetch.fetch_public_game(game_id)
+                            })
+                            .await;
+                        let reload = weak
+                            .update(&mut cx, |shell, cx| {
+                                if shell.live_ogs_poll_generation != generation
+                                    || shell.live_source_url.as_deref() != Some(url.as_str())
+                                {
+                                    return false;
+                                }
+                                match state {
+                                    Ok(state) => {
+                                        let changed =
+                                            shell.live_ogs_state.as_ref().is_some_and(|previous| {
+                                                previous.move_number != state.move_number
+                                            });
+                                        shell.live_ogs_state = Some(state);
+                                        cx.notify();
+                                        changed
+                                    }
+                                    Err(error) => {
+                                        shell.status = format!("OGS 自动刷新失败：{error}").into();
+                                        cx.notify();
+                                        false
+                                    }
+                                }
+                            })
+                            .unwrap_or(false);
+                        if !reload {
+                            continue;
+                        }
+                        let refresh_url = url.clone();
+                        let capture = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut fetch = ryusei_host::CurlPublicPageFetch;
+                                ryusei_host::capture_public_live_sgf(&refresh_url, &mut fetch)
+                                    .map_err(|error| error.to_string())
+                            })
+                            .await;
+                        let still_current = weak
+                            .update(&mut cx, |shell, cx| {
+                                if shell.live_ogs_poll_generation != generation
+                                    || shell.live_source_url.as_deref() != Some(url.as_str())
+                                {
+                                    return false;
+                                }
+                                shell.apply_public_live_capture(capture, cx);
+                                false
+                            })
+                            .unwrap_or(false);
+                        if !still_current {
+                            break;
+                        }
+                    }
+                }
+            },
+        ));
+    }
+
+    fn on_library_input_focus(
+        &mut self,
+        field: ActiveTextInput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(field);
+        let focus = match field {
+            ActiveTextInput::LibraryId => &self.library_id_focus_handle,
+            ActiveTextInput::LibraryName => &self.library_name_focus_handle,
+            ActiveTextInput::LibraryGithubUrl => &self.library_github_url_focus_handle,
+            ActiveTextInput::LibraryReference => &self.library_reference_focus_handle,
+            ActiveTextInput::LibraryLicenseName => &self.library_license_name_focus_handle,
+            ActiveTextInput::LibraryLicenseUrl => &self.library_license_url_focus_handle,
+            _ => return,
+        };
+        window.focus(focus);
+        cx.notify();
+    }
+
+    fn on_library_input_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = match self.active_text_input {
+            Some(ActiveTextInput::LibraryId) => {
+                Self::handle_text_input_key(&mut self.library_id_input, event)
+            }
+            Some(ActiveTextInput::LibraryName) => {
+                Self::handle_text_input_key(&mut self.library_name_input, event)
+            }
+            Some(ActiveTextInput::LibraryGithubUrl) => {
+                Self::handle_text_input_key(&mut self.library_github_url_input, event)
+            }
+            Some(ActiveTextInput::LibraryReference) => {
+                Self::handle_text_input_key(&mut self.library_reference_input, event)
+            }
+            Some(ActiveTextInput::LibraryLicenseName) => {
+                Self::handle_text_input_key(&mut self.library_license_name_input, event)
+            }
+            Some(ActiveTextInput::LibraryLicenseUrl) => {
+                Self::handle_text_input_key(&mut self.library_license_url_input, event)
+            }
+            _ => InputKeyResult::Ignored,
+        };
+        if result == InputKeyResult::Submit {
+            self.sync_library(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
     fn fetch_fox_query(&mut self, cx: &mut Context<Self>) {
         let query = self.fox_query_input.text().trim().to_owned();
         if query.is_empty() {
@@ -986,6 +1355,265 @@ impl ShellApp {
                 cx.notify();
             }
         }
+    }
+
+    fn on_engine_spec_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::EngineSpec);
+        window.focus(&self.engine_spec_focus_handle);
+        cx.notify();
+    }
+
+    fn on_engine_spec_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match Self::handle_text_input_key(&mut self.engine_spec_input, event) {
+            InputKeyResult::Submit => self.save_engine_spec(cx),
+            InputKeyResult::Cancel => {
+                self.engine_spec_input.set_text("");
+                self.engine_spec_editing_name = None;
+                cx.notify();
+            }
+            InputKeyResult::Changed | InputKeyResult::Ignored => cx.notify(),
+        }
+    }
+
+    fn persist_engine_configuration(&mut self) -> Result<(), String> {
+        self.engine_store
+            .save(&mut self.settings)
+            .map_err(|error| error.to_string())?;
+        for role in EngineRole::ALL {
+            self.settings
+                .set(
+                    role.setting_key(),
+                    serde_json::json!(self.engine_roles.get(role)),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+    }
+
+    pub fn save_engine_spec(&mut self, cx: &mut Context<Self>) {
+        let spec = self.engine_spec_input.text().trim().to_owned();
+        let record = match crate::engine_console::parse_engine_spec(&spec) {
+            Ok(record) => record,
+            Err(error) => {
+                self.show_toast(format!("引擎配置无效: {error}"), cx);
+                return;
+            }
+        };
+        let previous_store = self.engine_store.clone();
+        let previous_roles = self.engine_roles.clone();
+        let prior_name = self.engine_spec_editing_name.take();
+        if prior_name
+            .as_deref()
+            .is_some_and(|old_name| old_name != record.name)
+            && self
+                .engine_store
+                .list()
+                .iter()
+                .any(|existing| existing.name == record.name)
+        {
+            self.engine_spec_editing_name = prior_name;
+            self.show_toast(format!("保存引擎失败: 重复名称 '{}'", record.name), cx);
+            return;
+        }
+        if let Some(old_name) = prior_name.as_deref()
+            && old_name != record.name
+        {
+            self.engine_store.remove(old_name);
+            self.engine_roles.clear_engine(old_name);
+            for role in EngineRole::ALL {
+                if self.engine_roles.get(role).is_none() {
+                    self.disconnect_engine_role(role);
+                }
+            }
+        }
+        let result = if prior_name.is_some() {
+            self.engine_store.upsert(record.clone());
+            Ok(())
+        } else {
+            self.engine_store
+                .add(record.clone())
+                .map_err(|error| error.to_string())
+        };
+        if let Err(error) = result.and_then(|_| self.persist_engine_configuration()) {
+            self.engine_store = previous_store;
+            self.engine_roles = previous_roles;
+            self.show_toast(format!("保存引擎失败: {error}"), cx);
+            return;
+        }
+        self.engine_spec_input.set_text("");
+        self.status = format!("已保存 GTP 引擎: {}", record.name).into();
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    pub fn choose_engine_executable(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("选择 GTP 引擎可执行文件")
+            .pick_file()
+        else {
+            return;
+        };
+        let path = path.display().to_string();
+        let current = self.engine_spec_input.text().trim();
+        let next = if current.split('|').count() >= 2 {
+            let mut fields = current.splitn(4, '|').map(str::trim);
+            let name = fields.next().unwrap_or_default();
+            let _old_path = fields.next();
+            let args = fields.next().unwrap_or_default();
+            let commands = fields.next().unwrap_or_default();
+            format!("{name} | {path} | {args} | {commands}")
+        } else {
+            let name = std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("GTP Engine");
+            format!("{name} | {path} |  | ")
+        };
+        self.engine_spec_input.set_text(&next);
+        self.status = "已选择 GTP 引擎可执行文件；请确认规格后保存".into();
+        cx.notify();
+    }
+
+    pub fn edit_engine_spec(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(record) = self
+            .engine_store
+            .list()
+            .iter()
+            .find(|record| record.name == name)
+        else {
+            return;
+        };
+        let spec = format!(
+            "{} | {} | {} | {}",
+            record.name,
+            record.path,
+            record.args,
+            record.commands.as_deref().unwrap_or_default()
+        );
+        self.engine_spec_input.set_text(&spec);
+        self.engine_spec_editing_name = Some(name.to_owned());
+        self.status = format!("正在编辑引擎: {name}").into();
+        cx.notify();
+    }
+
+    pub fn remove_engine_spec(&mut self, name: &str, cx: &mut Context<Self>) {
+        let previous_store = self.engine_store.clone();
+        let previous_roles = self.engine_roles.clone();
+        if !self.engine_store.remove(name) {
+            return;
+        }
+        self.engine_roles.clear_engine(name);
+        for role in EngineRole::ALL {
+            if previous_roles.get(role) == Some(name) {
+                self.disconnect_engine_role(role);
+            }
+        }
+        if let Err(error) = self.persist_engine_configuration() {
+            self.engine_store = previous_store;
+            self.engine_roles = previous_roles;
+            self.show_toast(format!("删除引擎失败: {error}"), cx);
+            return;
+        }
+        if self.engine_spec_editing_name.as_deref() == Some(name) {
+            self.engine_spec_input.set_text("");
+            self.engine_spec_editing_name = None;
+        }
+        self.status = format!("已删除 GTP 引擎: {name}").into();
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    pub fn test_engine_spec(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(record) = self
+            .engine_store
+            .list()
+            .iter()
+            .find(|record| record.name == name)
+            .cloned()
+        else {
+            self.show_toast(format!("找不到引擎配置: {name}"), cx);
+            return;
+        };
+        let arguments = crate::engine_console::parse_engine_arguments(&record.args);
+        let runtime_dir = self.engine_runtime_directory();
+        let display_name = record.name.clone();
+        self.status = format!("正在测试 {display_name} 的 GTP 握手…").into();
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let transport = ryusei_host::ProcessGtpTransport::start_in(
+                                &record.path,
+                                &arguments,
+                                Some(&runtime_dir),
+                            )
+                            .map_err(|error| format!("进程启动失败: {error}"))?;
+                            let mut session =
+                                ryusei_host::EngineSession::start(transport, &record, 19)
+                                    .map_err(|error| format!("握手失败: {error}"))?;
+                            let label = match session.state() {
+                                ryusei_host::EngineSessionState::Ready { name, version } => {
+                                    format!("{name} {version}")
+                                }
+                                ryusei_host::EngineSessionState::Stopped => "stopped".to_owned(),
+                            };
+                            session
+                                .stop()
+                                .map_err(|error| format!("握手完成但停止失败: {error}"))?;
+                            Ok::<_, String>(label)
+                        })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| match result {
+                        Ok(label) => {
+                            shell.status = format!("GTP 握手成功: {label}").into();
+                            shell.show_toast(shell.status.clone(), cx);
+                        }
+                        Err(error) => {
+                            shell.status = format!("GTP 握手诊断失败: {error}").into();
+                            shell.show_toast(shell.status.clone(), cx);
+                        }
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    pub fn assign_engine_role(&mut self, role: EngineRole, name: &str, cx: &mut Context<Self>) {
+        if self.engine_roles.get(role) == Some(name) {
+            self.engine_roles.toggle(role, name);
+            self.disconnect_engine_role(role);
+        } else {
+            self.disconnect_engine_role(role);
+            self.engine_roles.assign(role, name);
+        }
+        if let Err(error) = self.persist_engine_configuration() {
+            self.show_toast(format!("保存引擎角色失败: {error}"), cx);
+            return;
+        }
+        self.status = self
+            .engine_roles
+            .get(role)
+            .map(|assigned| format!("{} 角色使用 {assigned}", role.label()))
+            .unwrap_or_else(|| format!("已清空 {} 引擎角色", role.label()))
+            .into();
+        cx.notify();
     }
 
     fn toggle_gtp_terminal(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1269,8 +1897,13 @@ impl ShellApp {
         }
 
         let arguments = crate::engine_console::parse_engine_arguments(&record.args);
-        let board_size = self.host.snapshot().board.width;
-        let moves = self.host.snapshot().moves.clone();
+        let snapshot = self.host.snapshot();
+        let board_size = snapshot.board.width;
+        let rule_config = ryusei_host::GameRuleConfig::from_root_properties(
+            &snapshot.root_properties,
+            board_size,
+        );
+        let moves = snapshot.moves.clone();
         let runtime_dir = self.engine_runtime_directory();
         let display_name = record.name.clone();
         let connection_generation = {
@@ -1302,7 +1935,13 @@ impl ShellApp {
                             ryusei_host::EngineController::<
                                 EngineRole,
                                 ryusei_host::ProcessGtpTransport,
-                            >::prepare_session(transport, &record, board_size, &moves)
+                            >::prepare_session_with_rules(
+                                transport,
+                                &record,
+                                board_size,
+                                &moves,
+                                Some(&rule_config),
+                            )
                             .map_err(|error| format!("引擎连接握手失败: {error}"))
                         })
                         .await;
@@ -3269,6 +3908,32 @@ impl ShellApp {
         cx.notify();
     }
 
+    pub fn set_human_sl_profile(&mut self, profile: &str, cx: &mut Context<Self>) {
+        if !ryusei_host::is_valid_human_sl_profile(profile) {
+            self.show_toast(format!("不支持的 HumanSL 档位: {profile}"), cx);
+            return;
+        }
+        if let Err(error) = self
+            .settings
+            .set("katago.human_sl_profile", serde_json::json!(profile))
+            .and_then(|_| {
+                ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+                    .map_err(|message| ryusei_host::SettingValidationError {
+                        key: "katago.human_sl_profile".to_owned(),
+                        expected: "a persistable HumanSL profile".to_owned(),
+                        found: message,
+                    })
+            })
+        {
+            self.show_toast(format!("保存 HumanSL 档位失败: {error}"), cx);
+            return;
+        }
+        self.katago_panel_status =
+            format!("HumanSL 档位已选择为 {profile}；重新启用 HumanSL 权重后生效").into();
+        self.show_toast(self.katago_panel_status.clone(), cx);
+        cx.notify();
+    }
+
     fn activate_katago_weight(&mut self, name: &str, cx: &mut Context<Self>) {
         let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
             return;
@@ -3894,7 +4559,12 @@ impl ShellApp {
             return;
         }
         self.settings_editing_key = Some(row.key.clone());
-        self.settings_draft = display_setting_value(row.value.as_ref()).into();
+        self.settings_draft = row
+            .value
+            .as_ref()
+            .map(|value| editable_setting_value(Some(value)))
+            .unwrap_or_default()
+            .into();
         window.focus(&self.settings_input_focus_handle);
         cx.notify();
     }
@@ -4636,6 +5306,11 @@ impl ShellApp {
         if self.gtp_terminal_open {
             return;
         }
+        if self.session_policy.mode == SessionMode::Live {
+            self.status = "实时会话为只读观察模式".into();
+            cx.notify();
+            return;
+        }
         self.on_board_hover(vertex, cx);
         if self.active_tool.is_line_tool() && self.mode == GameMode::Edit {
             self.line_start = Some(vertex);
@@ -5019,6 +5694,135 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Adds the persisted review summary and its five largest mistakes to SGF
+    /// comments. This is explicit because comments may be user-authored.
+    pub fn write_review_comments(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.session_policy.source,
+            SessionSource::LiveBroadcast | SessionSource::RemoteCompetition
+        ) {
+            self.show_toast("直播和远程竞赛棋谱不能写入复盘评论", cx);
+            return;
+        }
+        let snapshot = self.host.snapshot();
+        let evaluations = ryusei_host::compute_game_move_evaluations(&snapshot);
+        let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+        if summary.top_blunders.is_empty() {
+            self.show_toast("尚无可写入的问题手评价", cx);
+            return;
+        }
+        let comment_for = |existing: Option<&String>, annotation: String| {
+            existing
+                .filter(|comment| !comment.trim().is_empty())
+                .map(|comment| format!("{comment}\n\nRyusei Review\n{annotation}"))
+                .unwrap_or_else(|| format!("Ryusei Review\n{annotation}"))
+        };
+        let root_comment = comment_for(
+            snapshot
+                .root_properties
+                .get("C")
+                .and_then(|values| values.first()),
+            summary.verdict(),
+        );
+        let nodes = snapshot
+            .nodes
+            .iter()
+            .map(|node| (node.id.clone(), node.properties.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut events = RecordingSink;
+        let mut written = 0;
+        for evaluation in &summary.top_blunders {
+            let existing = nodes
+                .get(&evaluation.node_id)
+                .and_then(|properties| properties.get("C"))
+                .and_then(|values| values.first());
+            let comment = comment_for(existing, evaluation.format_sgf_comment());
+            if self
+                .host
+                .apply_transaction(
+                    crate::node_inspector::create_property_transaction(
+                        &evaluation.node_id,
+                        "C",
+                        vec![comment],
+                    ),
+                    &mut events,
+                )
+                .is_ok()
+            {
+                written += 1;
+            }
+        }
+        self.host.set_root_property("C", vec![root_comment]);
+        self.synchronize_recovery();
+        self.status = format!("已写入 {written} 条问题手复盘评论").into();
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    /// Updates the active local record's SGF ruleset and restarts analysis so
+    /// any new KataGo session receives the revised `kata-set-rules` command.
+    pub fn set_current_game_ruleset(
+        &mut self,
+        ruleset: ryusei_host::GoRuleset,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            self.session_policy.source,
+            SessionSource::LiveBroadcast | SessionSource::RemoteCompetition
+        ) {
+            self.show_toast("直播和远程竞赛棋谱不能修改规则", cx);
+            return;
+        }
+
+        self.host
+            .set_root_property("RU", vec![ruleset.sgf_name().to_owned()]);
+        let resume_analysis = self.analysis_enabled;
+        self.disconnect_all_engine_sessions();
+        self.synchronize_recovery();
+        self.status = format!("当前棋局规则: {}", ruleset.label()).into();
+        self.show_toast(self.status.clone(), cx);
+        if resume_analysis {
+            self.start_analysis(cx);
+        }
+        cx.notify();
+    }
+
+    pub fn apply_current_ruleset_default_komi(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.session_policy.source,
+            SessionSource::LiveBroadcast | SessionSource::RemoteCompetition
+        ) {
+            self.show_toast("直播和远程竞赛棋谱不能修改贴目", cx);
+            return;
+        }
+        let snapshot = self.host.snapshot();
+        let ruleset = ryusei_host::GoRuleset::from_setting(
+            snapshot
+                .root_properties
+                .get("RU")
+                .and_then(|values| values.first())
+                .map(String::as_str),
+        );
+        let handicap = snapshot
+            .root_properties
+            .get("HA")
+            .and_then(|values| values.first())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or_default();
+        let komi = ruleset.default_komi(handicap);
+        self.host
+            .set_root_property("KM", vec![format!("{komi:.1}")]);
+        let resume_analysis = self.analysis_enabled;
+        self.disconnect_all_engine_sessions();
+        self.synchronize_recovery();
+        self.status = format!("已按 {} 设置默认贴目 {komi:.1}", ruleset.sgf_name()).into();
+        self.show_toast(self.status.clone(), cx);
+        if resume_analysis {
+            self.start_analysis(cx);
+        }
+        cx.notify();
+    }
+
     fn set_time_control(&mut self, control: TimeControl, cx: &mut Context<Self>) {
         self.clock = ClockController::new(control);
         self.clock_last_updated = Instant::now();
@@ -5105,7 +5909,17 @@ impl ShellApp {
     }
 
     fn set_session_mode(&mut self, mode: SessionMode, cx: &mut Context<Self>) {
-        self.session_policy = SessionPolicy::new(mode, self.session_policy.source);
+        let source = match mode {
+            SessionMode::Live => SessionSource::LiveBroadcast,
+            SessionMode::Match if self.session_policy.source == SessionSource::LiveBroadcast => {
+                SessionSource::Local
+            }
+            SessionMode::Record if self.session_policy.source == SessionSource::LiveBroadcast => {
+                SessionSource::Local
+            }
+            _ => self.session_policy.source,
+        };
+        self.session_policy = SessionPolicy::new(mode, source);
         self.analysis_enabled = self.session_policy.analysis == AnalysisPolicy::Continuous;
         if !self.analysis_enabled && self.analysis_task.is_some() {
             self.analysis_run.request_stop();
@@ -5121,6 +5935,33 @@ impl ShellApp {
             self.request_configured_engine_turn(cx);
             cx.notify();
         }
+    }
+
+    fn enter_ogs_remote_match(&mut self, cx: &mut Context<Self>) {
+        self.session_policy =
+            SessionPolicy::new(SessionMode::Match, SessionSource::RemoteCompetition)
+                .lock_fair_play(true);
+        self.analysis_enabled = false;
+        self.restart_analysis_after_position_change = false;
+        if self.analysis_task.is_some() {
+            self.analysis_run.request_stop();
+        }
+        self.analysis.clear();
+        self.analysis_best_move = None;
+        self.status = "OGS 远程对局模式：公平竞赛锁定，AI 分析已禁用".into();
+        self.synchronize_recovery();
+        self.show_toast(
+            "已进入 OGS 远程对局模式；等待生产 transport 接管服务器状态".to_owned(),
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn leave_remote_match(&mut self, cx: &mut Context<Self>) {
+        self.session_policy = SessionPolicy::new(SessionMode::Match, SessionSource::Local);
+        self.status = "已返回本地对弈模式".into();
+        self.synchronize_recovery();
+        cx.notify();
     }
 
     fn set_mode(&mut self, mode: GameMode, cx: &mut Context<Self>) {
@@ -5517,7 +6358,356 @@ impl ShellApp {
     }
 
     fn open_library(&mut self, cx: &mut Context<Self>) {
+        self.refresh_library_form();
         self.open_drawer(ActiveDrawer::Library, "棋谱库已打开", cx);
+        self.refresh_library_entries(cx);
+    }
+
+    fn refresh_library_entries(&mut self, cx: &mut Context<Self>) {
+        if self.library_task.is_some() || self.library_sources.is_empty() {
+            return;
+        }
+        let sources = self.library_sources.clone();
+        let base = match crate::file_workflow::current_user_config_directory() {
+            Ok(base) => base.join("libraries"),
+            Err(error) => {
+                self.library_status = format!("无法确定数据目录：{error}").into();
+                return;
+            }
+        };
+        self.library_status = "正在读取本地棋谱索引…".into();
+        let weak = cx.entity().downgrade();
+        self.library_task = Some(cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let mut entries = Vec::new();
+                            for source in sources {
+                                entries.extend(
+                                    ryusei_host::scan_sgf_library(
+                                        &source.id,
+                                        &base.join(&source.id),
+                                    )
+                                    .map_err(|error| error.to_string())?,
+                                );
+                            }
+                            Ok::<_, String>(entries)
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        shell.library_task = None;
+                        match result {
+                            Ok(entries) => {
+                                shell.library_entries = entries;
+                                shell.library_status =
+                                    format!("已载入 {} 个本地 SGF", shell.library_entries.len())
+                                        .into();
+                            }
+                            Err(error) => {
+                                shell.library_status = format!("索引读取失败：{error}").into();
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        ));
+    }
+
+    fn refresh_library_form(&mut self) {
+        let source = self
+            .library_selected_source
+            .as_deref()
+            .and_then(|selected| {
+                self.library_sources
+                    .iter()
+                    .find(|source| source.id == selected)
+            })
+            .or_else(|| self.library_sources.first());
+        self.library_id_input.set_text(
+            source
+                .map(|source| source.id.as_str())
+                .unwrap_or("local-sgf"),
+        );
+        self.library_name_input.set_text(
+            source
+                .map(|source| source.name.as_str())
+                .unwrap_or("授权 SGF 棋谱库"),
+        );
+        self.library_github_url_input.set_text(
+            source
+                .map(|source| source.github_url.as_str())
+                .unwrap_or(""),
+        );
+        self.library_reference_input.set_text(
+            source
+                .map(|source| source.reference.as_str())
+                .unwrap_or("main"),
+        );
+        self.library_license_name_input.set_text(
+            source
+                .and_then(|source| source.license_name.as_deref())
+                .unwrap_or(""),
+        );
+        self.library_license_url_input.set_text(
+            source
+                .and_then(|source| source.license_url.as_deref())
+                .unwrap_or(""),
+        );
+        self.library_rights_confirmed = source
+            .is_some_and(|source| source.rights == ryusei_host::RedistributionRights::Permitted);
+    }
+
+    fn toggle_library_rights(&mut self, checked: bool, cx: &mut Context<Self>) {
+        self.library_rights_confirmed = checked;
+        cx.notify();
+    }
+
+    fn select_library_source(&mut self, source_id: &str, cx: &mut Context<Self>) {
+        if self
+            .library_sources
+            .iter()
+            .any(|source| source.id == source_id)
+        {
+            self.library_selected_source = Some(source_id.to_owned());
+            self.refresh_library_form();
+            self.library_status = format!("正在编辑来源 {source_id}").into();
+            cx.notify();
+        }
+    }
+
+    fn new_library_source(&mut self, cx: &mut Context<Self>) {
+        self.library_selected_source = None;
+        self.library_id_input.set_text("");
+        self.library_name_input.set_text("");
+        self.library_github_url_input.set_text("");
+        self.library_reference_input.set_text("main");
+        self.library_license_name_input.set_text("");
+        self.library_license_url_input.set_text("");
+        self.library_rights_confirmed = false;
+        self.library_status = "填写新来源并确认再分发权".into();
+        cx.notify();
+    }
+
+    fn remove_selected_library_source(&mut self, cx: &mut Context<Self>) {
+        let Some(source_id) = self.library_selected_source.clone() else {
+            return;
+        };
+        self.library_sources.retain(|source| source.id != source_id);
+        self.library_entries
+            .retain(|entry| entry.source_id != source_id);
+        self.library_selected_source = self.library_sources.first().map(|source| source.id.clone());
+        let serialized = serde_json::to_string(&self.library_sources).unwrap_or_default();
+        let result = self
+            .settings
+            .set("library.sources", serialized.into())
+            .map_err(|error| error.to_string())
+            .and_then(|_| {
+                ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+            });
+        match result {
+            Ok(()) => self.library_status = format!("已移除来源配置 {source_id}").into(),
+            Err(error) => self.library_status = format!("来源移除未持久化：{error}").into(),
+        }
+        self.refresh_library_form();
+        cx.notify();
+    }
+
+    fn library_source_from_form(&self) -> Result<ryusei_host::SgfLibrarySource, String> {
+        let source = ryusei_host::SgfLibrarySource {
+            id: self.library_id_input.text().trim().to_owned(),
+            name: self.library_name_input.text().trim().to_owned(),
+            github_url: self.library_github_url_input.text().trim().to_owned(),
+            reference: self.library_reference_input.text().trim().to_owned(),
+            rights: if self.library_rights_confirmed {
+                ryusei_host::RedistributionRights::Permitted
+            } else {
+                ryusei_host::RedistributionRights::Unknown
+            },
+            license_name: Some(self.library_license_name_input.text().trim().to_owned()),
+            license_url: Some(self.library_license_url_input.text().trim().to_owned()),
+        };
+        source
+            .validate_for_sync()
+            .map_err(|error| error.to_string())?;
+        Ok(source)
+    }
+
+    fn persist_library_source(
+        &mut self,
+        source: &ryusei_host::SgfLibrarySource,
+    ) -> Result<(), String> {
+        if let Some(selected) = self.library_selected_source.as_deref()
+            && selected != source.id
+        {
+            self.library_sources
+                .retain(|existing| existing.id != selected);
+            self.library_entries
+                .retain(|entry| entry.source_id != selected);
+        }
+        if let Some(existing) = self
+            .library_sources
+            .iter_mut()
+            .find(|existing| existing.id == source.id)
+        {
+            *existing = source.clone();
+        } else {
+            self.library_sources.push(source.clone());
+        }
+        self.library_selected_source = Some(source.id.clone());
+        self.settings
+            .set(
+                "library.sources",
+                serde_json::to_string(&self.library_sources)
+                    .unwrap_or_default()
+                    .into(),
+            )
+            .map_err(|error| error.to_string())?;
+        ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence)
+    }
+
+    fn sync_library(&mut self, cx: &mut Context<Self>) {
+        if self.library_task.is_some() {
+            return;
+        }
+        let source = match self.library_source_from_form() {
+            Ok(source) => source,
+            Err(error) => {
+                self.library_status = format!("配置无效：{error}").into();
+                self.show_toast(format!("棋谱库配置无效：{error}"), cx);
+                cx.notify();
+                return;
+            }
+        };
+        if let Err(error) = self.persist_library_source(&source) {
+            self.library_status = format!("配置保存失败：{error}").into();
+            self.show_toast(format!("棋谱库配置保存失败：{error}"), cx);
+            cx.notify();
+            return;
+        }
+        let base = match crate::file_workflow::current_user_config_directory() {
+            Ok(base) => base,
+            Err(error) => {
+                self.library_status = format!("无法确定数据目录：{error}").into();
+                cx.notify();
+                return;
+            }
+        };
+        let destination = base.join("libraries").join(&source.id);
+        let source_id = source.id.clone();
+        self.library_syncing_source = Some(source.id.clone());
+        self.library_status = "正在同步 Git 棋谱库…".into();
+        let weak = cx.entity().downgrade();
+        self.library_task = Some(cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let mut adapter = ryusei_host::ProcessGitSyncAdapter;
+                            let report =
+                                ryusei_host::sync_sgf_library(&source, &destination, &mut adapter)
+                                    .map_err(|error| error.to_string())?;
+                            let entries = ryusei_host::scan_sgf_library(&source_id, &destination)
+                                .map_err(|error| error.to_string())?;
+                            Ok::<_, String>((report, entries))
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        shell.library_task = None;
+                        shell.library_syncing_source = None;
+                        match result {
+                            Ok((report, entries)) => {
+                                shell.library_entries = entries;
+                                shell.library_status = format!(
+                                    "同步完成：{} 个 SGF（{:?}）",
+                                    shell.library_entries.len(),
+                                    report.operation
+                                )
+                                .into();
+                                shell.show_toast("授权 SGF 棋谱库同步完成".to_owned(), cx);
+                            }
+                            Err(error) => {
+                                shell.library_status = format!("同步失败：{error}").into();
+                                shell.show_toast(format!("棋谱库同步失败：{error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        ));
+        cx.notify();
+    }
+
+    fn open_recent_file(&mut self, identifier: &str, cx: &mut Context<Self>) {
+        let Some(path) = self.recent_files.resolve_path(identifier) else {
+            self.status = "最近文件记录已失效".into();
+            cx.notify();
+            return;
+        };
+        if !path.is_file() {
+            self.status = format!("文件不存在: {}", path.display()).into();
+            cx.notify();
+            return;
+        }
+        self.open_record_path(path, SessionSource::Local, "最近棋谱", cx);
+    }
+
+    fn open_library_entry(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_record_path(path, SessionSource::Library, "棋谱库", cx);
+    }
+
+    fn open_record_path(
+        &mut self,
+        path: PathBuf,
+        source: SessionSource,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let mut events = RecordingSink;
+        match self.host.open(path.clone(), &self.file_access, &mut events) {
+            Ok(_) => {
+                self.disconnect_all_engine_sessions();
+                self.stop_ogs_public_poll();
+                self.live_source_url = None;
+                self.live_ogs_state = None;
+                self.session_policy = SessionPolicy::new(SessionMode::Record, source);
+                self.status = format!("已打开{label}：{}", path.display()).into();
+                self.record_recent(&path);
+                if let Err(error) = track_after_file_operation(&mut self.external_file, &path) {
+                    self.status = format!("外部文件跟踪失败：{error}").into();
+                }
+                self.synchronize_recovery();
+                self.active_drawer = None;
+            }
+            Err(error) => self.show_toast(format!("棋谱库棋谱打开失败：{error}"), cx),
+        }
+        cx.notify();
+    }
+
+    fn open_live_capture(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::LiveCapture, "公共直播导入已打开", cx);
+    }
+
+    fn open_ogs_login_page(&mut self, cx: &mut Context<Self>) {
+        match ryusei_host::open_ogs_login_page() {
+            Ok(()) => {
+                self.ogs_auth_state = ryusei_host::OgsAuthState::BrowserLoginOnly;
+                self.status = "已打开 OGS 登录页；浏览器登录不会自动授权 Ryusei".into();
+                self.show_toast(
+                    "OGS 已在浏览器打开。当前 Ryusei 只支持公开观战，账户 token 尚未接入。"
+                        .to_owned(),
+                    cx,
+                );
+            }
+            Err(error) => self.show_toast(format!("无法打开 OGS 登录页：{error}"), cx),
+        }
+        cx.notify();
     }
 
     fn open_profile(&mut self, cx: &mut Context<Self>) {
@@ -5579,6 +6769,7 @@ impl ShellApp {
                 "org.ryusei.fox-kifu-sync" => BottomDeckTab::FoxSync,
                 "org.ryusei.position-to-sgf" => BottomDeckTab::PositionSgf,
                 "all" => BottomDeckTab::PluginManager,
+                "engines" => BottomDeckTab::Engines,
                 other => BottomDeckTab::Generic(other.to_owned()),
             }
         } else {
@@ -5612,6 +6803,11 @@ impl ShellApp {
             BottomDeckTab::PluginManager => {
                 self.gtp_terminal_open = false;
                 self.active_plugin_popover = Some("all".to_owned());
+            }
+            BottomDeckTab::Engines => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("engines".to_owned());
+                self.active_text_input = Some(ActiveTextInput::EngineSpec);
             }
             BottomDeckTab::Generic(id) => {
                 self.gtp_terminal_open = false;
@@ -5836,30 +7032,6 @@ impl Render for ShellApp {
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or(2.0),
         );
-        let blunder_evals: Vec<ryusei_host::ReviewedPosition> = winrate_points
-            .iter()
-            .enumerate()
-            .map(|(idx, pt)| {
-                let winrate = pt.black_winrate.unwrap_or(0.5);
-                let score = pt.black_score_lead;
-                let node_id = pt.node_id.clone();
-                let player = if idx % 2 == 1 {
-                    Color::Black
-                } else {
-                    Color::White
-                };
-                (idx, node_id, player, None, winrate, score, None, vec![])
-            })
-            .collect();
-        let _blunders = ryusei_host::find_blunders(
-            &blunder_evals,
-            10.0,
-            self.settings
-                .get("view.winrategraph_blunderthreshold")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(5.0),
-        );
-
         let inspector_metadata = current_node_metadata(&snapshot);
         let _settings_rows = panel_setting_rows(&self.settings);
         let external_status = self.external_file.status();
@@ -5927,7 +7099,7 @@ impl Render for ShellApp {
         };
         let available_width = (window_width - side_panels - 16.0).max(240.0);
         let available_height =
-            (window_height - 40.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
+            (window_height - 40.0 - 42.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
         let board_pixel_size = available_width.min(available_height).max(BOARD_PIXEL_SIZE);
 
         div()
@@ -5940,9 +7112,12 @@ impl Render for ShellApp {
             .child(panels::render_titlebar(
                 show_left_sidebar,
                 show_right_sidebar,
+                &self.workspace_tabs.active_tab().title,
+                self.session_policy.mode,
                 palette,
                 cx,
             ))
+            .child(panels::render_session_toolbar(self, cx))
             .child(
                 div()
                     .id("workspace")
@@ -6118,6 +7293,7 @@ impl Render for ShellApp {
                 Some(ActiveDrawer::Library) => panels::render_library_drawer(self, cx),
                 Some(ActiveDrawer::Profile) => panels::render_profile_drawer(self, cx),
                 Some(ActiveDrawer::Goals) => panels::render_goals_drawer(self, cx),
+                Some(ActiveDrawer::LiveCapture) => panels::render_live_capture_drawer(self, cx),
                 Some(ActiveDrawer::GameInfo) => {
                     panels::render_game_info_drawer(&snapshot, self, cx)
                 }
@@ -6189,7 +7365,15 @@ impl ShellApp {
             Some(ActiveTextInput::Comment) => Some(&mut self.comment_input),
             Some(ActiveTextInput::NodeTitle) => Some(&mut self.node_title_input),
             Some(ActiveTextInput::FoxQuery) => Some(&mut self.fox_query_input),
+            Some(ActiveTextInput::LiveUrl) => Some(&mut self.live_url_input),
+            Some(ActiveTextInput::LibraryId) => Some(&mut self.library_id_input),
+            Some(ActiveTextInput::LibraryName) => Some(&mut self.library_name_input),
+            Some(ActiveTextInput::LibraryGithubUrl) => Some(&mut self.library_github_url_input),
+            Some(ActiveTextInput::LibraryReference) => Some(&mut self.library_reference_input),
+            Some(ActiveTextInput::LibraryLicenseName) => Some(&mut self.library_license_name_input),
+            Some(ActiveTextInput::LibraryLicenseUrl) => Some(&mut self.library_license_url_input),
             Some(ActiveTextInput::GtpInput) => Some(&mut self.gtp_input),
+            Some(ActiveTextInput::EngineSpec) => Some(&mut self.engine_spec_input),
             None => None,
         }
     }
@@ -7170,7 +8354,18 @@ mod tests {
 
         assert_eq!(size, 19);
         assert_eq!(properties.get("KM").unwrap(), &vec!["6.5".to_owned()]);
+        assert!(!properties.contains_key("RU"));
         assert!(!properties.contains_key("HA"));
+    }
+
+    #[test]
+    fn new_game_defaults_can_select_a_ruleset_for_katago_and_sgf() {
+        let mut settings = SettingsStore::default();
+        settings
+            .set("game.default_ruleset", json!("Japanese"))
+            .unwrap();
+        let (_, properties) = default_new_game_properties(&settings);
+        assert_eq!(properties.get("RU").unwrap(), &vec!["Japanese".to_owned()]);
     }
 
     #[test]
@@ -7428,6 +8623,193 @@ mod headless_smoke {
         with_headless_shell("analysis-visible-defaults", |shell| {
             assert_eq!(shell.settings.get_bool("board.show_analysis"), Some(true));
             assert_eq!(shell.settings.get_bool("view.show_leftsidebar"), Some(true));
+        });
+    }
+
+    #[test]
+    fn live_session_is_read_only_at_the_board_boundary() {
+        with_headless_shell_cx("live-read-only", |shell, cx| {
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Live, cx);
+            assert_eq!(
+                shell.session_policy.source,
+                ryusei_domain_core::SessionSource::LiveBroadcast
+            );
+            let before = shell.host.snapshot();
+            shell.on_board_vertex_mouse_down(Vertex { column: 3, row: 3 }, cx);
+            let after = shell.host.snapshot();
+            assert_eq!(after.moves.len(), before.moves.len());
+            assert_eq!(after.current_node_id, before.current_node_id);
+        });
+    }
+
+    #[test]
+    fn human_sl_profile_picker_only_saves_valid_profiles() {
+        with_headless_shell_cx("human-sl-profile", |shell, cx| {
+            shell.set_human_sl_profile("rank_3d", cx);
+            assert_eq!(
+                shell.settings.get_str("katago.human_sl_profile"),
+                Some("rank_3d")
+            );
+            shell.set_human_sl_profile("invalid", cx);
+            assert_eq!(
+                shell.settings.get_str("katago.human_sl_profile"),
+                Some("rank_3d")
+            );
+        });
+    }
+
+    #[test]
+    fn engine_manager_saves_records_and_assigns_roles() {
+        with_headless_shell_cx("engine-manager", |shell, cx| {
+            shell.switch_bottom_tab(super::BottomDeckTab::Engines, cx);
+            assert_eq!(shell.active_bottom_tab(), super::BottomDeckTab::Engines);
+
+            shell
+                .engine_spec_input
+                .set_text("GNU Go | /usr/local/bin/gnugo | --mode gtp | level 10");
+            shell.save_engine_spec(cx);
+            assert!(
+                shell
+                    .engine_store
+                    .list()
+                    .iter()
+                    .any(|record| record.name == "GNU Go")
+            );
+
+            shell.assign_engine_role(crate::engine_console::EngineRole::Black, "GNU Go", cx);
+            assert_eq!(
+                shell
+                    .engine_roles
+                    .get(crate::engine_console::EngineRole::Black),
+                Some("GNU Go")
+            );
+        });
+    }
+
+    #[test]
+    fn current_game_ruleset_updates_local_sgf_and_blocks_live_sources() {
+        with_headless_shell_cx("current-ruleset", |shell, cx| {
+            shell.set_current_game_ruleset(ryusei_host::GoRuleset::Japanese, cx);
+            assert_eq!(
+                shell
+                    .host
+                    .snapshot()
+                    .root_properties
+                    .get("RU")
+                    .and_then(|values| values.first()),
+                Some(&"Japanese".to_owned())
+            );
+            shell.apply_current_ruleset_default_komi(cx);
+            assert_eq!(
+                shell
+                    .host
+                    .snapshot()
+                    .root_properties
+                    .get("KM")
+                    .and_then(|values| values.first()),
+                Some(&"6.5".to_owned())
+            );
+
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Live, cx);
+            shell.set_current_game_ruleset(ryusei_host::GoRuleset::Korean, cx);
+            assert_eq!(
+                shell
+                    .host
+                    .snapshot()
+                    .root_properties
+                    .get("RU")
+                    .and_then(|values| values.first()),
+                Some(&"Japanese".to_owned())
+            );
+        });
+    }
+
+    #[test]
+    fn review_comment_writeback_preserves_existing_comments() {
+        with_headless_shell_cx("review-comments", |shell, cx| {
+            let mut events = RecordingSink;
+            shell
+                .host
+                .restore_from_sgf(
+                    "(;GM[1]FF[4]SZ[19]C[Original root]SBKV[90]SBKS[8];B[dd]C[Original move]SBKV[30]SBKS[-1])",
+                    &mut events,
+                )
+                .expect("review fixture loads");
+            shell.write_review_comments(cx);
+            let snapshot = shell.host.snapshot();
+            assert!(
+                snapshot
+                    .root_properties
+                    .get("C")
+                    .and_then(|values| values.first())
+                    .is_some_and(|comment| comment.contains("Original root")
+                        && comment.contains("Ryusei Review"))
+            );
+            assert!(
+                snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == snapshot.current_node_id)
+                    .and_then(|node| node.properties.get("C"))
+                    .and_then(|values| values.first())
+                    .is_some_and(|comment| comment.contains("Original move")
+                        && comment.contains("Ryusei Review"))
+            );
+        });
+    }
+
+    #[test]
+    fn remote_match_exposes_fair_play_lock_and_can_return_local() {
+        with_headless_shell_cx("remote-fair-play", |shell, cx| {
+            shell.enter_ogs_remote_match(cx);
+            assert_eq!(
+                shell.session_policy.mode,
+                ryusei_domain_core::SessionMode::Match
+            );
+            assert_eq!(
+                shell.session_policy.source,
+                ryusei_domain_core::SessionSource::RemoteCompetition
+            );
+            assert_eq!(
+                shell.session_policy.analysis,
+                ryusei_domain_core::AnalysisPolicy::FairPlayLockedOff
+            );
+            assert!(!shell.analysis_enabled);
+
+            shell.leave_remote_match(cx);
+            assert_eq!(
+                shell.session_policy.source,
+                ryusei_domain_core::SessionSource::Local
+            );
+            assert_eq!(
+                shell.session_policy.analysis,
+                ryusei_domain_core::AnalysisPolicy::Off
+            );
+        });
+    }
+
+    #[test]
+    fn library_sources_round_trip_as_persisted_authorized_configurations() {
+        with_headless_shell("library-sources", |shell| {
+            let source = ryusei_host::SgfLibrarySource {
+                id: "licensed-games".to_owned(),
+                name: "Licensed Games".to_owned(),
+                github_url: "https://github.com/example/licensed-games".to_owned(),
+                reference: "main".to_owned(),
+                rights: ryusei_host::RedistributionRights::Permitted,
+                license_name: Some("CC BY 4.0".to_owned()),
+                license_url: Some("https://creativecommons.org/licenses/by/4.0/".to_owned()),
+            };
+            shell
+                .persist_library_source(&source)
+                .expect("source persists");
+            let encoded = shell
+                .settings
+                .get_str("library.sources")
+                .expect("source setting exists");
+            let decoded: Vec<ryusei_host::SgfLibrarySource> =
+                serde_json::from_str(encoded).expect("source setting decodes");
+            assert_eq!(decoded, vec![source]);
         });
     }
 
@@ -7722,6 +9104,10 @@ mod frontend_smoke {
         });
         vcx.run_until_parked();
 
+        let session_toolbar = vcx
+            .debug_bounds("session-toolbar")
+            .expect("the session context toolbar must remain visible");
+        assert_eq!(session_toolbar.size.height, px(42.0));
         let goban_bounds = vcx
             .debug_bounds("goban")
             .expect("the rendered goban must have a debug selector");

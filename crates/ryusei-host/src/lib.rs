@@ -13,6 +13,7 @@ pub mod katago_setup;
 pub mod legacy_styles;
 pub mod move_grading;
 pub mod ogs;
+pub mod ogs_auth;
 pub mod persistence;
 pub mod plugin_commands;
 pub mod plugin_controller;
@@ -89,9 +90,12 @@ pub use move_grading::{
     GameAnalyticsSummary, MoveEvaluation, MoveQuality, compute_game_move_evaluations,
 };
 pub use ogs::{
-    OGS_GAME_API_ROOT, OgsCompetitionSession, OgsError, OgsGameUpdate, OgsMoveSubmission,
-    OgsServerClock, OgsTransport,
+    CurlOgsPublicGameFetch, OGS_GAME_API_ROOT, OgsCompetitionSession, OgsError, OgsGameUpdate,
+    OgsMoveSubmission, OgsPublicGameFetch, OgsPublicGameState, OgsServerClock, OgsTransport,
+    ogs_game_id_from_public_url, ogs_game_id_from_url, ogs_public_game_api_url,
+    parse_ogs_public_game,
 };
+pub use ogs_auth::{OGS_LOGIN_URL, OgsAuthState, open_ogs_login_page};
 pub use persistence::{HostPersistence, record_recent_file, synchronize_autosave};
 pub use plugin_commands::{BuiltinPluginCommand, BuiltinPluginCommandRegistry};
 pub use plugin_controller::{PluginController, PluginControllerOutcome};
@@ -115,12 +119,13 @@ pub use settings::{
     setting_kind, validate_setting_value, validate_settings,
 };
 pub use sgf_library::{
-    ProcessGitSyncAdapter, RedistributionRights, SgfGitSyncAdapter, SgfLibraryError,
-    SgfLibrarySource, SgfLibrarySyncOperation, SgfLibrarySyncReport, sync_sgf_library,
+    ProcessGitSyncAdapter, RedistributionRights, SgfGitSyncAdapter, SgfLibraryEntry,
+    SgfLibraryError, SgfLibrarySource, SgfLibrarySyncOperation, SgfLibrarySyncReport,
+    scan_sgf_library, sync_sgf_library,
 };
 pub use starriver_capture::{
-    PublicPageFetch, StarRiverCapture, StarRiverCaptureError, capture_public_live_sgf,
-    extract_sgf_collection, validate_public_https_url,
+    CurlPublicPageFetch, PublicPageFetch, StarRiverCapture, StarRiverCaptureError,
+    capture_public_live_sgf, extract_sgf_collection, validate_public_https_url,
 };
 pub use territory_estimator::{TerritoryEstimate, estimate_territory};
 pub use theme_workflow::{

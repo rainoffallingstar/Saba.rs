@@ -13,7 +13,7 @@ use std::{
 use ryusei_domain_core::gtp::{GtpError, GtpResponse};
 use ryusei_domain_core::{Color, MoveDto, TimeControl};
 
-use crate::{EngineRecord, EngineSession, EngineSessionError, GtpTransport};
+use crate::{EngineRecord, EngineSession, EngineSessionError, GameRuleConfig, GtpTransport};
 
 /// A role-keyed deep Module for connected GTP sessions. `R` belongs to the
 /// presentation/domain policy; the controller only needs stable ordering.
@@ -70,7 +70,20 @@ impl<R: Copy + Ord, T: GtpTransport> EngineController<R, T> {
         board_size: usize,
         moves: &[MoveDto],
     ) -> Result<EngineSession<T>, EngineControllerError> {
+        Self::prepare_session_with_rules(transport, record, board_size, moves, None)
+    }
+
+    pub fn prepare_session_with_rules(
+        transport: T,
+        record: &EngineRecord,
+        board_size: usize,
+        moves: &[MoveDto],
+        rules: Option<&GameRuleConfig>,
+    ) -> Result<EngineSession<T>, EngineControllerError> {
         let mut session = EngineSession::start(transport, record, board_size)?;
+        if let Some(rules) = rules {
+            session.set_game_rules(rules)?;
+        }
         if let Err(error) = replay_position(&mut session, board_size, moves) {
             session.stop().ok();
             return Err(EngineControllerError::Transport(error));
@@ -409,7 +422,7 @@ mod tests {
     use ryusei_domain_core::{Color, MoveDto, Vertex};
 
     use super::{EngineController, EngineControllerError};
-    use crate::{EngineRecord, GtpTransport};
+    use crate::{EngineRecord, GameRuleConfig, GoRuleset, GtpTransport};
 
     #[derive(Debug)]
     struct FixtureTransport {
@@ -483,6 +496,36 @@ mod tests {
         assert_eq!(response.content, "D4");
         assert!(controller.detach(1));
         assert!(!controller.is_attached(1));
+    }
+
+    #[test]
+    fn prepared_session_applies_game_rules_before_position_replay() {
+        let config = GameRuleConfig {
+            ruleset: GoRuleset::Japanese,
+            komi: 6.5,
+            handicap: 0,
+            board_size: 19,
+        };
+        let session = EngineController::<u8, FixtureTransport>::prepare_session_with_rules(
+            FixtureTransport::ready(),
+            &EngineRecord::new("KataGo", "katago", ""),
+            19,
+            &[],
+            Some(&config),
+        )
+        .expect("session prepares");
+        assert!(
+            session
+                .transport()
+                .commands
+                .contains(&("kata-set-rules".to_owned(), vec!["japanese".to_owned()],))
+        );
+        assert!(
+            session
+                .transport()
+                .commands
+                .contains(&("komi".to_owned(), vec!["6.5".to_owned()]))
+        );
     }
 
     #[test]

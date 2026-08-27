@@ -30,11 +30,56 @@ pub trait PublicPageFetch {
     fn get(&mut self, url: &str) -> Result<String, String>;
 }
 
+/// Production transport for public live pages. Redirects are deliberately not
+/// followed: the capture validator can prove the supplied URL is public, but a
+/// redirect target would otherwise need a second host-level validation result.
+/// Callers may retry with the final public URL shown by the source page.
+pub struct CurlPublicPageFetch;
+
+impl PublicPageFetch for CurlPublicPageFetch {
+    fn get(&mut self, url: &str) -> Result<String, String> {
+        let output = std::process::Command::new("curl")
+            .args([
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "15",
+                "--max-redirs",
+                "0",
+                "--proto",
+                "=https",
+                url,
+            ])
+            .output()
+            .map_err(|error| format!("curl command failed: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "public page request failed with exit code {:?}",
+                output.status.code()
+            ));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|error| format!("public page response was not UTF-8: {error}"))
+    }
+}
+
 pub fn capture_public_live_sgf(
     page_url: &str,
     fetch: &mut impl PublicPageFetch,
 ) -> Result<StarRiverCapture, StarRiverCaptureError> {
     let page_url = parse_public_https_url(page_url)?;
+    if let Some(sgf_url) = ogs_public_sgf_url(&page_url) {
+        let sgf = fetch
+            .get(sgf_url.as_str())
+            .map_err(StarRiverCaptureError::Fetch)?;
+        let sgf = extract_sgf_collection(&sgf).ok_or(StarRiverCaptureError::InvalidSgfResponse)?;
+        return Ok(StarRiverCapture {
+            page_url: page_url.to_string(),
+            sgf,
+            fetched_sgf_url: Some(sgf_url.to_string()),
+        });
+    }
     let page = fetch
         .get(page_url.as_str())
         .map_err(StarRiverCaptureError::Fetch)?;
@@ -72,6 +117,26 @@ fn parse_public_https_url(url: &str) -> Result<Url, StarRiverCaptureError> {
     let parsed = Url::parse(url.trim()).map_err(|_| StarRiverCaptureError::NonPublicUrl)?;
     ensure_public_https(&parsed)?;
     Ok(parsed)
+}
+
+/// Maps an explicitly supplied public OGS game URL onto OGS's public SGF REST
+/// endpoint. This is observation-only and never requests or stores game auth.
+fn ogs_public_sgf_url(page_url: &Url) -> Option<Url> {
+    if !matches!(
+        page_url.host_str(),
+        Some("online-go.com" | "www.online-go.com")
+    ) {
+        return None;
+    }
+    let segments = page_url.path_segments()?.collect::<Vec<_>>();
+    let game_id = match segments.as_slice() {
+        ["game", game_id]
+        | ["api", "v1", "games", game_id]
+        | ["api", "v1", "games", game_id, "sgf"] => *game_id,
+        _ => return None,
+    };
+    let game_id = game_id.parse::<u64>().ok().filter(|game_id| *game_id > 0)?;
+    Url::parse(&format!("https://online-go.com/api/v1/games/{game_id}/sgf")).ok()
 }
 
 /// Resolves a (possibly relative) SGF link against the validated page URL and
@@ -289,6 +354,20 @@ mod tests {
         let capture = capture_public_live_sgf(url, &mut fetch).expect("capture succeeds");
         assert_eq!(capture.sgf, "(;SZ[9]PB[Black];B[dd];W[ee])");
         assert_eq!(capture.fetched_sgf_url, None);
+    }
+
+    #[test]
+    fn imports_a_public_ogs_game_url_through_the_verified_sgf_endpoint() {
+        let page_url = "https://online-go.com/game/42";
+        let sgf_url = "https://online-go.com/api/v1/games/42/sgf";
+        let mut fetch = FixtureFetch(BTreeMap::from([(
+            sgf_url.to_owned(),
+            "(;SZ[19]PB[Black];B[pd])".to_owned(),
+        )]));
+        let capture = capture_public_live_sgf(page_url, &mut fetch).expect("OGS SGF imports");
+        assert_eq!(capture.page_url, page_url);
+        assert_eq!(capture.fetched_sgf_url.as_deref(), Some(sgf_url));
+        assert_eq!(capture.sgf, "(;SZ[19]PB[Black];B[pd])");
     }
 
     #[test]

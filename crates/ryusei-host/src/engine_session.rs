@@ -329,6 +329,33 @@ impl<T: GtpTransport> EngineSession<T> {
     }
 
     /// Configures the engine's clock before a local or remote game starts.
+    /// Applies SGF rule, komi, and handicap-independent game settings before
+    /// the position is replayed. The JSON Ancient Chinese ruleset is passed as
+    /// one GTP argument, not split on whitespace.
+    pub fn set_game_rules(
+        &mut self,
+        config: &crate::GameRuleConfig,
+    ) -> Result<(), EngineSessionError> {
+        let rules = self.send_ordinary(
+            "kata-set-rules",
+            vec![config.ruleset.katago_name().to_owned()],
+        )?;
+        if !rules.success {
+            return Err(EngineSessionError::Handshake(
+                "kata-set-rules".to_owned(),
+                rules.content,
+            ));
+        }
+        let komi = self.send_ordinary("komi", vec![format!("{:.1}", config.komi)])?;
+        if !komi.success {
+            return Err(EngineSessionError::Handshake(
+                "komi".to_owned(),
+                komi.content,
+            ));
+        }
+        Ok(())
+    }
+
     pub fn set_time_control(&mut self, control: TimeControl) -> Result<GtpResponse, GtpError> {
         let arguments = match control {
             TimeControl::None => vec!["0".to_owned(), "0".to_owned(), "0".to_owned()],

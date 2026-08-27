@@ -4,7 +4,7 @@
 //! redistributed. Sources must carry an explicit compatible license before any
 //! clone, fetch, or packaging workflow is allowed to use them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -37,6 +37,15 @@ impl SgfLibrarySource {
         if self.id.trim().is_empty() {
             return Err(SgfLibraryError::InvalidSource(
                 "source id is empty".to_owned(),
+            ));
+        }
+        if !self
+            .id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(SgfLibraryError::InvalidSource(
+                "source id may contain only ASCII letters, numbers, '-' and '_'".to_owned(),
             ));
         }
         if self.name.trim().is_empty() {
@@ -139,6 +148,73 @@ pub struct SgfLibrarySyncReport {
 pub enum SgfLibrarySyncOperation {
     Cloned,
     Fetched,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SgfLibraryEntry {
+    pub source_id: String,
+    pub relative_path: String,
+    pub path: PathBuf,
+}
+
+/// Finds regular SGF files without following symlinks out of the synchronized
+/// repository. Results are stable and capped so a malformed source cannot make
+/// the desktop library allocate without bound.
+pub fn scan_sgf_library(
+    source_id: &str,
+    root: &Path,
+) -> Result<Vec<SgfLibraryEntry>, SgfLibraryError> {
+    const MAX_LIBRARY_FILES: usize = 10_000;
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut pending = vec![root.to_path_buf()];
+    let mut entries = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let children = std::fs::read_dir(&directory).map_err(|error| {
+            SgfLibraryError::Scan(format!("could not read {}: {error}", directory.display()))
+        })?;
+        for child in children {
+            let child = child.map_err(|error| SgfLibraryError::Scan(error.to_string()))?;
+            let path = child.path();
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| SgfLibraryError::Scan(error.to_string()))?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                if child.file_name() != ".git" {
+                    pending.push(path);
+                }
+                continue;
+            }
+            let is_sgf = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("sgf"));
+            if !metadata.is_file() || !is_sgf {
+                continue;
+            }
+            let relative_path = path
+                .strip_prefix(root)
+                .map_err(|error| SgfLibraryError::Scan(error.to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            entries.push(SgfLibraryEntry {
+                source_id: source_id.to_owned(),
+                relative_path,
+                path,
+            });
+            if entries.len() >= MAX_LIBRARY_FILES {
+                return Err(SgfLibraryError::Scan(format!(
+                    "source `{source_id}` exceeds the {MAX_LIBRARY_FILES} SGF file limit"
+                )));
+            }
+        }
+    }
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(entries)
 }
 
 /// Real Git adapter. It deliberately disables terminal prompts: the library
@@ -319,6 +395,8 @@ pub enum SgfLibraryError {
     MissingLicenseEvidence { source_id: String },
     #[error("Git synchronization failed: {0}")]
     Git(String),
+    #[error("SGF library scan failed: {0}")]
+    Scan(String),
     #[error(
         "SGF library source `{source_id}` origin `{origin}` does not match declared `{declared}`"
     )]
@@ -406,6 +484,16 @@ mod tests {
         assert!(matches!(
             source.validate_for_sync(),
             Err(SgfLibraryError::RedistributionNotPermitted { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_source_ids_that_could_escape_the_managed_directory() {
+        let mut source = licensed_source();
+        source.id = "../outside".to_owned();
+        assert!(matches!(
+            source.validate_for_sync(),
+            Err(SgfLibraryError::InvalidSource(message)) if message.contains("ASCII")
         ));
     }
 
@@ -529,6 +617,28 @@ mod tests {
         );
         assert!(git.clone_calls.is_empty());
         let _ = std::fs::remove_dir_all(&destination);
+    }
+
+    #[test]
+    fn scans_sgf_files_without_following_git_or_symlink_directories() {
+        let root = std::env::temp_dir().join("ryusei-sgf-library-scan-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).expect("scan fixture directories");
+        std::fs::write(root.join("a.sgf"), "(;GM[1])").expect("scan fixture sgf");
+        std::fs::write(root.join("nested/b.SGF"), "(;GM[1])").expect("scan fixture sgf");
+        std::fs::create_dir_all(root.join(".git")).expect("scan fixture git dir");
+        std::fs::write(root.join("notes.txt"), "not an sgf").expect("scan fixture text");
+
+        let entries = scan_sgf_library("scan-test", &root).expect("scan succeeds");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.sgf", "nested/b.SGF"]
+        );
+        assert!(entries.iter().all(|entry| entry.source_id == "scan-test"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

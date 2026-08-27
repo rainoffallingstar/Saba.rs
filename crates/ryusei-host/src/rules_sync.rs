@@ -18,6 +18,30 @@ pub enum GoRuleset {
 }
 
 impl GoRuleset {
+    /// Every ruleset supported by the current editor and KataGo setup path.
+    pub const ALL: [Self; 7] = [
+        Self::Chinese,
+        Self::AncientChinese,
+        Self::Japanese,
+        Self::Korean,
+        Self::Aga,
+        Self::TrompTaylor,
+        Self::NewZealand,
+    ];
+
+    /// Canonical SGF rules label used for new game defaults.
+    pub fn sgf_name(self) -> &'static str {
+        match self {
+            Self::Chinese => "Chinese",
+            Self::AncientChinese => "Ancient Chinese",
+            Self::Japanese => "Japanese",
+            Self::Korean => "Korean",
+            Self::Aga => "AGA",
+            Self::TrompTaylor => "Tromp-Taylor",
+            Self::NewZealand => "New Zealand",
+        }
+    }
+
     /// Canonical KataGo rules argument used with `kata-set-rules`.
     pub fn katago_name(self) -> &'static str {
         match self {
@@ -62,6 +86,11 @@ impl GoRuleset {
                 GoRuleset::Japanese | GoRuleset::Korean => 6.5,
             }
         }
+    }
+
+    /// Parses a user setting or SGF `RU` property value into a standard Go ruleset.
+    pub fn from_setting(value: Option<&str>) -> Self {
+        value.map_or(Self::Chinese, Self::from_sgf_ru)
     }
 
     /// Parses an SGF `RU` property value into a standard Go ruleset.

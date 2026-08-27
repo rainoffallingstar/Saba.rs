@@ -54,7 +54,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                     Button::new("nav-library")
                         .small()
                         .ghost()
-                        .label("LIB")
+                        .label("谱")
                         .tooltip("棋谱库")
                         .on_click(cx.listener(|shell, _, _, cx| shell.open_library(cx))),
                 )
@@ -69,13 +69,26 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                             let tab_id = tab.id.clone();
                             let tab_title = tab.title.clone();
                             let active = tab.id == active_tab_id;
-                            let button = Button::new(("nav-session", index))
-                                .small()
-                                .label((index + 1).to_string())
-                                .tooltip(tab_title)
-                                .on_click(cx.listener(move |shell, _, _, cx| {
+                            let mode = match tab.policy.mode {
+                                ryusei_domain_core::SessionMode::Match => "对弈",
+                                ryusei_domain_core::SessionMode::Record => "打谱",
+                                ryusei_domain_core::SessionMode::Live => "实时",
+                            };
+                            let button = Button::new(gpui::SharedString::from(format!(
+                                "nav-session-{tab_id}"
+                            )))
+                            .small()
+                            .label(format!(
+                                "{}{}",
+                                index + 1,
+                                if tab.is_dirty { "•" } else { "" }
+                            ))
+                            .tooltip(format!("{mode} · {tab_title}"))
+                            .on_click(cx.listener(
+                                move |shell, _, _, cx| {
                                     shell.activate_workspace_tab(&tab_id, cx);
-                                }));
+                                },
+                            ));
                             if active {
                                 button.primary()
                             } else {
