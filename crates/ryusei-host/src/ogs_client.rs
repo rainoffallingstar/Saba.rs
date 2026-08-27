@@ -60,6 +60,10 @@ pub struct OgsOnlineGame {
     pub chat: Vec<OgsChatLine>,
     /// Server is asking players to mark/accept dead stones.
     pub stone_removal_mode: bool,
+    /// The most recent server-confirmed move coordinate (pass = `".."`).
+    pub last_move: Option<String>,
+    /// Whether the most recent move was our own pending-move confirmation.
+    pub last_move_was_ours: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -513,6 +517,8 @@ impl LiveOgsClient {
             pending_move: false,
             width,
             height,
+            last_move: moves.last().cloned(),
+            last_move_was_ours: false,
             moves,
             chat: Vec::new(),
             stone_removal_mode,
@@ -534,12 +540,15 @@ impl LiveOgsClient {
         if game.game_id != game_id {
             return;
         }
+        let was_ours = game.pending_move;
         game.move_number = move_number.unwrap_or(game.move_number + 1);
         game.pending_move = false;
         let move_string = payload
             .get("move")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        game.last_move = move_string.clone();
+        game.last_move_was_ours = was_ours;
         if let Some(coord) =
             move_string.filter(|coord| !game.moves.last().is_some_and(|last| last == coord))
         {

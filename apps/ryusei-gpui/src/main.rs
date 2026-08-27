@@ -305,6 +305,7 @@ struct ShellApp {
     ogs_projected_moves: u32,
     ogs_marking_dead: bool,
     ogs_removed_stones: BTreeSet<String>,
+    ogs_last_pass_notified_move: u32,
     library_id_input: NativeTextInput,
     library_id_focus_handle: FocusHandle,
     library_name_input: NativeTextInput,
@@ -772,7 +773,7 @@ impl ShellApp {
                             break;
                         }
                         let _ = weak.update(&mut cx, |shell, cx| {
-                            shell.refresh_ogs_account_state();
+                            shell.refresh_ogs_account_state(cx);
                             cx.notify();
                         });
                     }
@@ -851,6 +852,7 @@ impl ShellApp {
             ogs_projected_moves: 0,
             ogs_marking_dead: false,
             ogs_removed_stones: BTreeSet::new(),
+            ogs_last_pass_notified_move: 0,
             library_id_input: NativeTextInput::new(""),
             library_id_focus_handle: cx.focus_handle(),
             library_name_input: NativeTextInput::new(""),
@@ -6861,7 +6863,7 @@ impl ShellApp {
     }
 
     fn open_ogs_account(&mut self, cx: &mut Context<Self>) {
-        self.refresh_ogs_account_state();
+        self.refresh_ogs_account_state(cx);
         self.open_drawer(ActiveDrawer::OgsAccount, "OGS 账户已打开", cx);
     }
 
@@ -6878,18 +6880,25 @@ impl ShellApp {
 
     /// Mirrors the OGS client snapshot into `ogs_auth_state` so the toolbar
     /// label stays correct without the shell owning a second source of truth.
-    fn refresh_ogs_account_state(&mut self) {
+    fn refresh_ogs_account_state(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.ogs_client.snapshot();
         self.ogs_auth_state = if snapshot.user.is_some() {
             ryusei_host::OgsAuthState::Authenticated
         } else {
             ryusei_host::OgsAuthState::SignedOut
         };
-        if let Some(game) = snapshot.online_game.as_ref()
-            && game.connected
-            && game.moves.len() as u32 != self.ogs_projected_moves
-        {
-            self.project_ogs_server_moves(game);
+        if let Some(game) = snapshot.online_game.as_ref() {
+            if game.connected && game.moves.len() as u32 != self.ogs_projected_moves {
+                self.project_ogs_server_moves(game);
+            }
+            if game.last_move.as_deref() == Some("..")
+                && !game.last_move_was_ours
+                && game.move_number != self.ogs_last_pass_notified_move
+            {
+                self.ogs_last_pass_notified_move = game.move_number;
+                self.status = format!("对手第 {} 手停一手（pass）", game.move_number).into();
+                self.show_toast(self.status.clone(), cx);
+            }
         }
     }
 
@@ -9392,7 +9401,7 @@ mod headless_smoke {
                 shell.ogs_client.snapshot().socket_status,
                 ryusei_host::OgsSocketStatus::Disconnected
             );
-            shell.refresh_ogs_account_state();
+            shell.refresh_ogs_account_state(cx);
             assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);
 
             // Invalid game id must not enter remote mode.
