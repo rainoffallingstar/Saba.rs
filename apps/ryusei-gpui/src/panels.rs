@@ -3086,22 +3086,54 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             .flex()
                             .gap_2()
                             .child(
-                                Button::new("ogs-accept-stones")
+                                Button::new("ogs-toggle-dead-marking")
                                     .small()
-                                    .ghost()
-                                    .label("确认死子(空)")
-                                    .tooltip("向服务器确认当前死子标记（尚未接入棋盘选子，先提交空标记）")
+                                    .outline()
+                                    .selected(shell.ogs_marking_dead)
+                                    .label(if shell.ogs_marking_dead {
+                                        "标记死子中…"
+                                    } else {
+                                        "标记死子"
+                                    })
+                                    .tooltip("开启后点击棋盘切换死子标记")
                                     .on_click(cx.listener(|shell, _, _, cx| {
-                                        shell.ogs_accept_removed_stones(cx);
+                                        shell.ogs_toggle_dead_marking(cx);
                                     })),
                             )
                             .child(
-                                Button::new("ogs-send-chat")
+                                Button::new("ogs-clear-stones")
                                     .small()
                                     .ghost()
-                                    .label("发送聊天")
-                                    .on_click(cx.listener(|shell, _, _, cx| shell.ogs_send_chat(cx))),
+                                    .label("清空标记")
+                                    .disabled(shell.ogs_removed_stones.is_empty())
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.ogs_clear_dead_marking(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("ogs-accept-stones")
+                                    .small()
+                                    .primary()
+                                    .label(format!(
+                                        "确认死子{}",
+                                        if shell.ogs_removed_stones.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!("({})", shell.ogs_removed_stones.len())
+                                        }
+                                    ))
+                                    .tooltip("向服务器确认当前死子标记")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.ogs_accept_removed_stones(cx);
+                                    })),
                             ),
+                    )
+                    .child(
+                        Button::new("ogs-send-chat")
+                            .small()
+                            .ghost()
+                            .label("发送聊天")
+                            .on_click(cx.listener(|shell, _, _, cx| shell.ogs_send_chat(cx))),
                     )
                     .child(
                         div()

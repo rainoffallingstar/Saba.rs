@@ -23,7 +23,7 @@ mod winrate_graph;
 
 use std::{
     cell::Cell,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
@@ -303,6 +303,8 @@ struct ShellApp {
     ogs_chat_focus_handle: FocusHandle,
     ogs_login_in_progress: bool,
     ogs_projected_moves: u32,
+    ogs_marking_dead: bool,
+    ogs_removed_stones: BTreeSet<String>,
     library_id_input: NativeTextInput,
     library_id_focus_handle: FocusHandle,
     library_name_input: NativeTextInput,
@@ -847,6 +849,8 @@ impl ShellApp {
             ogs_chat_focus_handle: cx.focus_handle(),
             ogs_login_in_progress: false,
             ogs_projected_moves: 0,
+            ogs_marking_dead: false,
+            ogs_removed_stones: BTreeSet::new(),
             library_id_input: NativeTextInput::new(""),
             library_id_focus_handle: cx.focus_handle(),
             library_name_input: NativeTextInput::new(""),
@@ -5466,7 +5470,11 @@ impl ShellApp {
             return;
         }
         if self.session_policy.source == SessionSource::RemoteCompetition {
-            self.ogs_submit_move_at(vertex, cx);
+            if self.ogs_marking_dead {
+                self.ogs_toggle_dead_stone(vertex, cx);
+            } else {
+                self.ogs_submit_move_at(vertex, cx);
+            }
             return;
         }
         self.on_board_hover(vertex, cx);
@@ -7018,19 +7026,105 @@ impl ShellApp {
         cx.notify();
     }
 
-    fn ogs_accept_removed_stones(&mut self, cx: &mut Context<Self>) {
+    fn ogs_removed_stones_string(&self) -> String {
+        self.ogs_removed_stones.iter().cloned().collect::<String>()
+    }
+
+    /// Toggles one board stone as dead and sends the updated marking.
+    fn ogs_toggle_dead_stone(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
         let Some(game_id) = self.ogs_client.competition_game_id() else {
             self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
             return;
         };
+        let coordinate = crate::goban_view::format_sgf_vertex(vertex);
+        let now_removed = if self.ogs_removed_stones.remove(&coordinate) {
+            false
+        } else {
+            self.ogs_removed_stones.insert(coordinate.clone());
+            true
+        };
+        let stones = self.ogs_removed_stones_string();
         let client = Arc::clone(&self.ogs_client);
+        self.status = format!(
+            "死子标记：{coordinate} {}（共 {} 子）",
+            if now_removed {
+                "标记为死"
+            } else {
+                "取消标记"
+            },
+            self.ogs_removed_stones.len()
+        )
+        .into();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                 let cx = cx.clone();
                 async move {
                     let _ = cx
                         .background_executor()
-                        .spawn(async move { client.accept_removed_stones(game_id, "") })
+                        .spawn(
+                            async move { client.set_removed_stones(game_id, &stones, now_removed) },
+                        )
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_toggle_dead_marking(&mut self, cx: &mut Context<Self>) {
+        self.ogs_marking_dead = !self.ogs_marking_dead;
+        if !self.ogs_marking_dead {
+            self.ogs_removed_stones.clear();
+        }
+        self.status = if self.ogs_marking_dead {
+            "死子标记模式：点击棋盘切换死子".into()
+        } else {
+            "已退出死子标记模式".into()
+        };
+        self.show_toast(self.status.clone(), cx);
+        cx.notify();
+    }
+
+    fn ogs_clear_dead_marking(&mut self, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let stones = self.ogs_removed_stones_string();
+        self.ogs_removed_stones.clear();
+        let client = Arc::clone(&self.ogs_client);
+        self.status = "已清空死子标记".into();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.set_removed_stones(game_id, &stones, false) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_accept_removed_stones(&mut self, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let stones = self.ogs_removed_stones_string();
+        let client = Arc::clone(&self.ogs_client);
+        self.ogs_marking_dead = false;
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.accept_removed_stones(game_id, &stones) })
                         .await;
                 }
             },
@@ -9126,6 +9220,21 @@ mod headless_smoke {
             shell.on_board_vertex_mouse_down(Vertex { column: 3, row: 3 }, cx);
             let after = shell.host.snapshot();
             assert_eq!(after.moves.len(), before.moves.len());
+        });
+    }
+
+    #[test]
+    fn ogs_dead_stone_marking_toggles_and_serializes() {
+        with_headless_shell_cx("ogs-dead-stones", |shell, cx| {
+            assert!(!shell.ogs_marking_dead);
+            shell.ogs_toggle_dead_marking(cx);
+            assert!(shell.ogs_marking_dead);
+            shell.ogs_removed_stones.insert("dd".to_owned());
+            shell.ogs_removed_stones.insert("pp".to_owned());
+            assert_eq!(shell.ogs_removed_stones_string(), "ddpp");
+            shell.ogs_toggle_dead_marking(cx);
+            assert!(!shell.ogs_marking_dead);
+            assert!(shell.ogs_removed_stones.is_empty());
         });
     }
 

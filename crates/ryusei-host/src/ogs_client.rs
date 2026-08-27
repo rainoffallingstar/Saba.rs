@@ -58,6 +58,8 @@ pub struct OgsOnlineGame {
     /// Server-confirmed moves as OGS coordinates (`"dd"`, pass `".."`).
     pub moves: Vec<String>,
     pub chat: Vec<OgsChatLine>,
+    /// Server is asking players to mark/accept dead stones.
+    pub stone_removal_mode: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -475,15 +477,12 @@ impl LiveOgsClient {
     }
 
     fn apply_gamedata(&self, game_id: u64, payload: &Value) {
-        let move_number = payload.get("moves").and_then(Value::as_array).map_or_else(
-            || {
-                payload
-                    .get("move_number")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32
-            },
-            |moves| moves.len() as u32,
-        );
+        let moves = parse_ogs_moves(payload);
+        let move_number = payload
+            .get("move_number")
+            .and_then(Value::as_u64)
+            .map(|n| n as u32)
+            .unwrap_or(moves.len() as u32);
         let next_player = player_to_move(payload, move_number);
         let clock = parse_clock(payload.get("clock"));
         let black_name = player_name(payload, "black");
@@ -493,9 +492,12 @@ impl LiveOgsClient {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        let moves = parse_ogs_moves(payload);
         let width = payload.get("width").and_then(Value::as_u64).unwrap_or(19) as u32;
         let height = payload.get("height").and_then(Value::as_u64).unwrap_or(19) as u32;
+        let stone_removal_mode = payload
+            .pointer("/clock/stone_removal_mode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let update = build_game_update(game_id, move_number, next_player, clock.as_ref());
         let mut inner = self.inner.lock().unwrap();
@@ -513,6 +515,7 @@ impl LiveOgsClient {
             height,
             moves,
             chat: Vec::new(),
+            stone_removal_mode,
         });
         if let Some(update) = update {
             inner.competition = OgsCompetitionSession::new(game_id, update).ok();
@@ -564,6 +567,10 @@ impl LiveOgsClient {
 
     fn apply_clock(&self, game_id: u64, payload: &Value) {
         let clock = parse_clock(Some(payload));
+        let stone_removal_mode = payload
+            .get("stone_removal_mode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut inner = self.inner.lock().unwrap();
         let Some(game) = inner.snapshot.online_game.as_mut() else {
             return;
@@ -573,6 +580,7 @@ impl LiveOgsClient {
         }
         game.next_player = clock.as_ref().and_then(|c| c.active_color);
         game.clock = clock;
+        game.stone_removal_mode = stone_removal_mode;
     }
 
     fn apply_chat(&self, game_id: u64, payload: &Value) {
@@ -665,10 +673,23 @@ fn player_name(payload: &Value, color: &str) -> String {
 /// Decodes OGS `moves` into coordinate strings (`"dd"`, pass `".."`). Items may
 /// be `[x, y]`, `[x, y, n]`, `[move_string, n]`, or a plain string.
 fn parse_ogs_moves(payload: &Value) -> Vec<String> {
-    let Some(moves) = payload.get("moves").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    moves.iter().filter_map(encode_ogs_move_item).collect()
+    match payload.get("moves") {
+        Some(Value::Array(moves)) => moves.iter().filter_map(encode_ogs_move_item).collect(),
+        // OGS may pack moves into a single string of two-character coordinates
+        // (e.g. `"ddpp"` = `dd` then `pp`, with `..` for a pass).
+        Some(Value::String(text)) => text
+            .as_bytes()
+            .chunks(2)
+            .filter(|chunk| {
+                chunk.len() == 2
+                    && chunk
+                        .iter()
+                        .all(|byte| byte.is_ascii_lowercase() || *byte == b'.')
+            })
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn encode_ogs_move_item(item: &Value) -> Option<String> {
@@ -842,6 +863,14 @@ mod tests {
     fn parses_ogs_moves_in_array_forms() {
         let payload = serde_json::json!({"moves": [[3, 3], [15, 15, 2], "pp", [-1, -1]]});
         assert_eq!(parse_ogs_moves(&payload), vec!["dd", "pp", "pp", ".."]);
+    }
+
+    #[test]
+    fn parses_string_packed_ogs_moves() {
+        let payload = serde_json::json!({"moves": "ddpp"});
+        assert_eq!(parse_ogs_moves(&payload), vec!["dd", "pp"]);
+        let pass_payload = serde_json::json!({"moves": "dd.."});
+        assert_eq!(parse_ogs_moves(&pass_payload), vec!["dd", ".."]);
     }
 
     #[test]
