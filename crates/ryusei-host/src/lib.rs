@@ -101,7 +101,8 @@ pub use ogs::{
 };
 pub use ogs_auth::{OGS_LOGIN_URL, OgsAuthState, open_ogs_login_page};
 pub use ogs_client::{
-    LiveOgsClient, OgsClientSnapshot, OgsMatchmakingStatus, OgsOnlineGame, OgsSocketStatus,
+    LiveOgsClient, OgsChatLine, OgsClientSnapshot, OgsMatchmakingStatus, OgsOnlineGame,
+    OgsSocketStatus,
 };
 pub use ogs_credentials::{
     KeyringOgsCredentialStore, MemoryOgsCredentialStore, OGS_KEYCHAIN_SERVICE, OgsCredentialStore,

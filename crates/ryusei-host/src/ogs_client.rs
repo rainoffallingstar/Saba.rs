@@ -57,6 +57,13 @@ pub struct OgsOnlineGame {
     pub height: u32,
     /// Server-confirmed moves as OGS coordinates (`"dd"`, pass `".."`).
     pub moves: Vec<String>,
+    pub chat: Vec<OgsChatLine>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct OgsChatLine {
+    pub username: String,
+    pub body: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -458,7 +465,8 @@ impl LiveOgsClient {
                     "gamedata" | "data" => self.apply_gamedata(game_id, payload),
                     "move" => self.apply_move(game_id, payload),
                     "clock" => self.apply_clock(game_id, payload),
-                    "chat" | "latency" | "removed_stones" => {}
+                    "chat" => self.apply_chat(game_id, payload),
+                    "latency" | "removed_stones" => {}
                     _ => {}
                 }
             }
@@ -504,6 +512,7 @@ impl LiveOgsClient {
             width,
             height,
             moves,
+            chat: Vec::new(),
         });
         if let Some(update) = update {
             inner.competition = OgsCompetitionSession::new(game_id, update).ok();
@@ -564,6 +573,31 @@ impl LiveOgsClient {
         }
         game.next_player = clock.as_ref().and_then(|c| c.active_color);
         game.clock = clock;
+    }
+
+    fn apply_chat(&self, game_id: u64, payload: &Value) {
+        let line = payload.get("line").unwrap_or(payload);
+        let username = line
+            .get("username")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_owned();
+        let body = line
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if body.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let Some(game) = inner.snapshot.online_game.as_mut() else {
+            return;
+        };
+        if game.game_id != game_id {
+            return;
+        }
+        game.chat.push(OgsChatLine { username, body });
     }
 }
 

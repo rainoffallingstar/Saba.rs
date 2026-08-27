@@ -2987,6 +2987,43 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             .on_click(cx.listener(|shell, _, _, cx| shell.connect_ogs_game(cx))),
                     ),
             )
+            .when(signed_in, |this| {
+                let searching = snapshot.matchmaking_status
+                    == ryusei_host::OgsMatchmakingStatus::Searching;
+                this.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(match snapshot.matchmaking_status {
+                                    ryusei_host::OgsMatchmakingStatus::Idle => "自动匹配：空闲",
+                                    ryusei_host::OgsMatchmakingStatus::Searching => "自动匹配：寻找中…",
+                                    ryusei_host::OgsMatchmakingStatus::Matched => "自动匹配：已匹配",
+                                }),
+                        )
+                        .child(if searching {
+                            Button::new("ogs-cancel-automatch")
+                                .small()
+                                .warning()
+                                .label("取消自动匹配")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.ogs_cancel_automatch(cx);
+                                }))
+                        } else {
+                            Button::new("ogs-start-automatch")
+                                .small()
+                                .outline()
+                                .label("开始自动匹配")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.ogs_start_automatch(cx);
+                                }))
+                        }),
+                )
+            })
             .child(if let Some(game) = snapshot.online_game.as_ref() {
                 let clock_text = game.clock.as_ref().map(|clock| {
                     format!(
@@ -3043,6 +3080,76 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                                     .label("认输")
                                     .on_click(cx.listener(|shell, _, _, cx| shell.ogs_resign(cx))),
                             ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("ogs-accept-stones")
+                                    .small()
+                                    .ghost()
+                                    .label("确认死子(空)")
+                                    .tooltip("向服务器确认当前死子标记（尚未接入棋盘选子，先提交空标记）")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.ogs_accept_removed_stones(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("ogs-send-chat")
+                                    .small()
+                                    .ghost()
+                                    .label("发送聊天")
+                                    .on_click(cx.listener(|shell, _, _, cx| shell.ogs_send_chat(cx))),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .track_focus(&shell.ogs_chat_focus_handle)
+                            .key_context("OgsChatInput")
+                            .p_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(if shell.active_text_input
+                                == Some(crate::ActiveTextInput::OgsChat)
+                            {
+                                shell.palette.accent
+                            } else {
+                                shell.palette.border
+                            }))
+                            .bg(rgb(shell.palette.input))
+                            .text_xs()
+                            .text_color(rgb(shell.palette.text))
+                            .child(if shell.ogs_chat_input.text().is_empty() {
+                                div()
+                                    .text_color(rgb(shell.palette.muted))
+                                    .child("输入聊天…")
+                            } else {
+                                div()
+                                    .text_color(rgb(shell.palette.text))
+                                    .child(shell.ogs_chat_input.text().to_owned())
+                            })
+                            .child(NativeInputBinding::new(
+                                shell.ogs_chat_focus_handle.clone(),
+                                cx.entity().clone(),
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(ShellApp::on_ogs_chat_focus),
+                            )
+                            .on_key_down(cx.listener(ShellApp::on_ogs_chat_key_down)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(game.chat.iter().rev().take(20).map(|line| {
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(shell.palette.text))
+                                    .child(format!("{}: {}", line.username, line.body))
+                            })),
                     )
             } else {
                 div()

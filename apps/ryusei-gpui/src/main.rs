@@ -202,7 +202,6 @@ enum ActiveTextInput {
     OgsUsername,
     OgsPassword,
     OgsGameId,
-    #[allow(dead_code)]
     OgsChat,
 }
 
@@ -301,6 +300,7 @@ struct ShellApp {
     ogs_game_id_input: NativeTextInput,
     ogs_game_id_focus_handle: FocusHandle,
     ogs_chat_input: NativeTextInput,
+    ogs_chat_focus_handle: FocusHandle,
     ogs_login_in_progress: bool,
     ogs_projected_moves: u32,
     library_id_input: NativeTextInput,
@@ -844,6 +844,7 @@ impl ShellApp {
             ogs_game_id_input: NativeTextInput::new(""),
             ogs_game_id_focus_handle: cx.focus_handle(),
             ogs_chat_input: NativeTextInput::new(""),
+            ogs_chat_focus_handle: cx.focus_handle(),
             ogs_login_in_progress: false,
             ogs_projected_moves: 0,
             library_id_input: NativeTextInput::new(""),
@@ -1122,6 +1123,30 @@ impl ShellApp {
             Self::handle_text_input_key(&mut self.ogs_game_id_input, event)
         {
             self.connect_ogs_game(cx);
+        }
+        cx.notify();
+    }
+
+    fn on_ogs_chat_focus(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_text_input = Some(ActiveTextInput::OgsChat);
+        window.focus(&self.ogs_chat_focus_handle);
+        cx.notify();
+    }
+
+    fn on_ogs_chat_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputKeyResult::Submit = Self::handle_text_input_key(&mut self.ogs_chat_input, event)
+        {
+            self.ogs_send_chat(cx);
         }
         cx.notify();
     }
@@ -5440,6 +5465,10 @@ impl ShellApp {
             cx.notify();
             return;
         }
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.ogs_submit_move_at(vertex, cx);
+            return;
+        }
         self.on_board_hover(vertex, cx);
         if self.active_tool.is_line_tool() && self.mode == GameMode::Edit {
             self.line_start = Some(vertex);
@@ -6920,6 +6949,127 @@ impl ShellApp {
                     let _ = cx
                         .background_executor()
                         .spawn(async move { client.resign(game_id) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    /// Submits a board click to the connected OGS game instead of playing
+    /// locally. The server confirms the move before it is projected.
+    fn ogs_submit_move_at(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let coordinate = crate::goban_view::format_sgf_vertex(vertex);
+        let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
+        self.status = format!("正在提交落子 {coordinate}…").into();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { client.play_move(game_id, Some(coordinate)) })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        if let Err(error) = result {
+                            shell.show_toast(format!("提交落子失败：{error}"), cx);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_send_chat(&mut self, cx: &mut Context<Self>) {
+        let body = self.ogs_chat_input.text().trim().to_owned();
+        if body.is_empty() {
+            return;
+        }
+        let Some(game) = self.ogs_client.snapshot().online_game else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let client = Arc::clone(&self.ogs_client);
+        let game_id = game.game_id;
+        let move_number = game.move_number;
+        self.ogs_chat_input.set_text("");
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.send_chat(game_id, move_number, &body) })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_accept_removed_stones(&mut self, cx: &mut Context<Self>) {
+        let Some(game_id) = self.ogs_client.competition_game_id() else {
+            self.show_toast("尚未连接 OGS 对局".to_owned(), cx);
+            return;
+        };
+        let client = Arc::clone(&self.ogs_client);
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.accept_removed_stones(game_id, "") })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_start_automatch(&mut self, cx: &mut Context<Self>) {
+        let client = Arc::clone(&self.ogs_client);
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move {
+                            client.start_automatch(&serde_json::json!({
+                                "size": "19x19",
+                                "speed": "live",
+                            }))
+                        })
+                        .await;
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn ogs_cancel_automatch(&mut self, cx: &mut Context<Self>) {
+        let client = Arc::clone(&self.ogs_client);
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                async move {
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move { client.cancel_automatch() })
                         .await;
                 }
             },
@@ -8965,6 +9115,17 @@ mod headless_smoke {
             let after = shell.host.snapshot();
             assert_eq!(after.moves.len(), before.moves.len());
             assert_eq!(after.current_node_id, before.current_node_id);
+        });
+    }
+
+    #[test]
+    fn remote_competition_board_clicks_do_not_play_locally() {
+        with_headless_shell_cx("remote-board-readonly", |shell, cx| {
+            shell.enter_ogs_remote_match(cx);
+            let before = shell.host.snapshot();
+            shell.on_board_vertex_mouse_down(Vertex { column: 3, row: 3 }, cx);
+            let after = shell.host.snapshot();
+            assert_eq!(after.moves.len(), before.moves.len());
         });
     }
 
