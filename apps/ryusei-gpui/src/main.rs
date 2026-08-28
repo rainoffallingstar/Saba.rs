@@ -26,7 +26,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, mpsc},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -757,25 +757,27 @@ impl ShellApp {
             .and_then(|value| serde_json::from_str(value).ok())
             .unwrap_or_default();
 
-        // OGS client: server events arrive on a foreign reader thread, so a
-        // one-shot channel wakes a GPUI task that notifies the shell.
-        let (ogs_state_tx, ogs_state_rx) = mpsc::channel::<()>();
+        // OGS callbacks run on a socket reader thread. A bounded async channel
+        // coalesces notifications without ever blocking GPUI's foreground executor.
+        let (ogs_state_tx, ogs_state_rx) = async_channel::bounded::<()>(1);
         let ogs_client = Arc::new(ryusei_host::LiveOgsClient::new());
         ogs_client.set_on_state_change(Some(Box::new(move || {
-            let _ = ogs_state_tx.send(());
+            let _ = ogs_state_tx.try_send(());
         })));
         let ogs_state_task = Some(cx.spawn(
             move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    loop {
-                        if ogs_state_rx.recv().is_err() {
+                    while ogs_state_rx.recv().await.is_ok() {
+                        if weak
+                            .update(&mut cx, |shell, cx| {
+                                shell.refresh_ogs_account_state(cx);
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
                             break;
                         }
-                        let _ = weak.update(&mut cx, |shell, cx| {
-                            shell.refresh_ogs_account_state(cx);
-                            cx.notify();
-                        });
                     }
                 }
             },
@@ -3316,6 +3318,10 @@ impl ShellApp {
         profile: ryusei_domain_core::ReviewProfile,
         cx: &mut Context<Self>,
     ) {
+        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff {
+            self.show_toast("OGS 远程对局期间禁止 AI 全盘复盘".to_owned(), cx);
+            return;
+        }
         if self
             .batch_review_progress
             .is_some_and(|progress| progress.is_running)
@@ -4927,6 +4933,10 @@ impl ShellApp {
     }
 
     fn on_pass(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.ogs_pass(cx);
+            return;
+        }
         let color = self.host.snapshot().board.next_player;
         if self.configured_engine_role(color).is_some() {
             self.status = "当前轮到 AI 落子".into();
@@ -4965,6 +4975,10 @@ impl ShellApp {
     }
 
     fn on_resign(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.ogs_resign(cx);
+            return;
+        }
         self.status = "resign is not implemented yet".into();
         cx.notify();
     }
@@ -5811,6 +5825,10 @@ impl ShellApp {
     }
 
     fn set_match_participants(&mut self, participants: MatchParticipants, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.show_toast("OGS 远程对局期间不能修改参与者设置".to_owned(), cx);
+            return;
+        }
         self.session_policy.participants = participants;
         self.status = format!("对局模式: {}", participants.label()).into();
         self.show_toast(self.status.clone(), cx);
@@ -5992,6 +6010,10 @@ impl ShellApp {
     }
 
     fn set_time_control(&mut self, control: TimeControl, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.show_toast("OGS 远程对局使用服务器时钟，不能本地修改".to_owned(), cx);
+            return;
+        }
         self.clock = ClockController::new(control);
         self.clock_last_updated = Instant::now();
         if !matches!(control, TimeControl::None) {
@@ -6077,6 +6099,10 @@ impl ShellApp {
     }
 
     fn set_session_mode(&mut self, mode: SessionMode, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            self.show_toast("OGS 远程对局期间不能切换会话模式".to_owned(), cx);
+            return;
+        }
         let source = match mode {
             SessionMode::Live => SessionSource::LiveBroadcast,
             SessionMode::Match if self.session_policy.source == SessionSource::LiveBroadcast => {
@@ -6133,6 +6159,11 @@ impl ShellApp {
     }
 
     fn set_mode(&mut self, mode: GameMode, cx: &mut Context<Self>) {
+        if self.session_policy.source == SessionSource::RemoteCompetition && mode != GameMode::Play
+        {
+            self.show_toast("OGS 远程对局期间不能切换本地点目或编辑工具".to_owned(), cx);
+            return;
+        }
         self.mode = mode;
         self.line_start = None;
         if mode == GameMode::Play {
@@ -6907,11 +6938,44 @@ impl ShellApp {
     /// replaced, never marked editable, and analysis stays fair-play locked.
     fn project_ogs_server_moves(&mut self, game: &ryusei_host::OgsOnlineGame) {
         let width = if game.width > 0 { game.width } else { 19 };
+        let height = if game.height > 0 { game.height } else { 19 };
+        // Rectangular boards use `SZ[width:height]`; square boards use `SZ[n]`.
+        let size = if height != width {
+            format!("{width}:{height}")
+        } else {
+            format!("{width}")
+        };
         let mut sgf = format!(
-            "(;GM[1]FF[4]SZ[{width}]PB[{}]PW[{}]",
+            "(;GM[1]FF[4]SZ[{size}]PB[{}]PW[{}]",
             game.black_name, game.white_name
         );
-        let mut color_is_black = true;
+        // Handicap games start with white to move and carry setup stones.
+        if let Some(handicap) = game.handicap.filter(|h| *h > 0) {
+            sgf.push_str(&format!("HA[{handicap}]"));
+        }
+        if let Some(komi) = game.komi {
+            sgf.push_str(&format!("KM[{komi}]"));
+        }
+        if game.initial_player == "white" {
+            sgf.push_str("PL[W]");
+        }
+        for coord in &game.initial_black {
+            if let Some(vertex) = crate::goban_view::parse_sgf_vertex(coord) {
+                sgf.push_str(&format!(
+                    "AB[{}]",
+                    crate::goban_view::format_sgf_vertex(vertex)
+                ));
+            }
+        }
+        for coord in &game.initial_white {
+            if let Some(vertex) = crate::goban_view::parse_sgf_vertex(coord) {
+                sgf.push_str(&format!(
+                    "AW[{}]",
+                    crate::goban_view::format_sgf_vertex(vertex)
+                ));
+            }
+        }
+        let mut color_is_black = game.initial_player != "white";
         for coord in &game.moves {
             if coord == ".." {
                 sgf.push_str(if color_is_black { ";B[]" } else { ";W[]" });
@@ -6938,14 +7002,22 @@ impl ShellApp {
             return;
         };
         let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
-                let cx = cx.clone();
+                let mut cx = cx.clone();
                 async move {
-                    let _ = cx
+                    let result = cx
                         .background_executor()
                         .spawn(async move { client.pass(game_id) })
                         .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        if let Err(error) = result {
+                            shell.show_toast(format!("停一手失败：{error}"), cx);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
                 }
             },
         )
@@ -6959,14 +7031,22 @@ impl ShellApp {
             return;
         };
         let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
-                let cx = cx.clone();
+                let mut cx = cx.clone();
                 async move {
-                    let _ = cx
+                    let result = cx
                         .background_executor()
                         .spawn(async move { client.resign(game_id) })
                         .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        if let Err(error) = result {
+                            shell.show_toast(format!("认输失败：{error}"), cx);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
                 }
             },
         )
@@ -7144,19 +7224,32 @@ impl ShellApp {
 
     fn ogs_start_automatch(&mut self, cx: &mut Context<Self>) {
         let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
-                let cx = cx.clone();
+                let mut cx = cx.clone();
                 async move {
-                    let _ = cx
+                    let result = cx
                         .background_executor()
                         .spawn(async move {
                             client.start_automatch(&serde_json::json!({
-                                "size": "19x19",
-                                "speed": "live",
+                                "size_speed_options": [
+                                    {"size": "19x19", "speed": "live", "system": "byoyomi"}
+                                ],
+                                "lower_rank_diff": 3,
+                                "upper_rank_diff": 3,
+                                "rules": {"condition": "preferred", "value": "japanese"},
+                                "handicap": {"condition": "preferred", "value": "disabled"},
                             }))
                         })
                         .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        if let Err(error) = result {
+                            shell.show_toast(format!("自动匹配失败：{error}"), cx);
+                        }
+                        cx.notify();
+                    })
+                    .ok();
                 }
             },
         )
@@ -7235,10 +7328,32 @@ impl ShellApp {
     }
 
     fn ogs_logout(&mut self, cx: &mut Context<Self>) {
-        self.ogs_client.logout();
-        self.ogs_auth_state = ryusei_host::OgsAuthState::SignedOut;
-        self.status = "OGS 已登出".into();
-        self.show_toast(self.status.clone(), cx);
+        let client = Arc::clone(&self.ogs_client);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    // Revoke the server session first (it reads the cookie that
+                    // `logout` clears), then tear down local state.
+                    let _ = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let _ = client.revoke_server_session();
+                            client.logout();
+                        })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        shell.ogs_auth_state = ryusei_host::OgsAuthState::SignedOut;
+                        shell.status = "OGS 已登出".into();
+                        shell.show_toast(shell.status.clone(), cx);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
         cx.notify();
     }
 
@@ -7252,6 +7367,15 @@ impl ShellApp {
         };
         if self.ogs_client.snapshot().user.is_none() {
             self.show_toast("请先登录 OGS".to_owned(), cx);
+            return;
+        }
+        // The remote projection replaces the local document, so refuse to
+        // connect while there are unsaved local changes that would be lost.
+        if self.host.snapshot().file_state.is_dirty {
+            self.show_toast(
+                "当前棋谱有未保存的修改，请先保存或放弃后再连接 OGS 对局".to_owned(),
+                cx,
+            );
             return;
         }
         let client = Arc::clone(&self.ogs_client);

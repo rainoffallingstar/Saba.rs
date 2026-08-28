@@ -2820,6 +2820,7 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                       focus: &FocusHandle,
                       active: crate::ActiveTextInput,
                       placeholder: &'static str,
+                      secure: bool,
                       on_focus: fn(
         &mut ShellApp,
         &MouseDownEvent,
@@ -2850,6 +2851,12 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 div()
                     .text_color(rgb(shell.palette.muted))
                     .child(placeholder)
+            } else if secure {
+                // Mask the password so it never appears on screen, in a
+                // screenshot, or in a screen share.
+                div()
+                    .text_color(rgb(shell.palette.text))
+                    .child("•".repeat(input.text().chars().count()))
             } else {
                 div()
                     .text_color(rgb(shell.palette.text))
@@ -2886,6 +2893,7 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             &shell.ogs_username_focus_handle,
                             crate::ActiveTextInput::OgsUsername,
                             "用户名",
+                            false,
                             ShellApp::on_ogs_username_focus,
                             ShellApp::on_ogs_username_key_down,
                         ))
@@ -2895,6 +2903,7 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             &shell.ogs_password_focus_handle,
                             crate::ActiveTextInput::OgsPassword,
                             "密码",
+                            true,
                             ShellApp::on_ogs_password_focus,
                             ShellApp::on_ogs_password_key_down,
                         ))
@@ -2975,6 +2984,7 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                         &shell.ogs_game_id_focus_handle,
                         crate::ActiveTextInput::OgsGameId,
                         "对局 ID",
+                        false,
                         ShellApp::on_ogs_game_id_focus,
                         ShellApp::on_ogs_game_id_key_down,
                     ))

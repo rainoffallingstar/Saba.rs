@@ -24,8 +24,15 @@ pub const OGS_CLIENT_VERSION: &str = "0.1";
 /// An inbound message classified as either a server event or a request reply.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OgsIncoming {
-    Event { event: String, payload: Value },
-    Response { id: u64, payload: Value },
+    Event {
+        event: String,
+        payload: Value,
+    },
+    Response {
+        id: u64,
+        payload: Value,
+        error: Option<Value>,
+    },
 }
 
 /// Encodes a fire-and-forget event: `[event, payload]`.
@@ -56,6 +63,7 @@ pub fn decode_incoming(text: &str) -> Result<OgsIncoming, String> {
         Ok(OgsIncoming::Response {
             id,
             payload: array.get(1).cloned().unwrap_or(Value::Null),
+            error: array.get(2).cloned().filter(|error| !error.is_null()),
         })
     } else {
         Err("OGS socket message had an unsupported first element".to_owned())
@@ -82,6 +90,22 @@ pub trait OgsWebSocketTransport: Send + Sync {
     /// clean close. A fatal transport error is returned as `Err`.
     fn recv_text(&self, timeout: Duration) -> Result<Option<String>, String>;
     fn close(&self);
+}
+
+/// Constructs a fresh one-shot transport for each OGS connection attempt.
+/// Keeping this boundary injectable makes session lifecycle tests independent
+/// from the network and prevents a reconnect from reusing a stale socket.
+pub trait OgsWebSocketTransportFactory: Send + Sync {
+    fn create(&self) -> Arc<dyn OgsWebSocketTransport>;
+}
+
+#[derive(Default)]
+pub struct TungsteniteOgsWebSocketTransportFactory;
+
+impl OgsWebSocketTransportFactory for TungsteniteOgsWebSocketTransportFactory {
+    fn create(&self) -> Arc<dyn OgsWebSocketTransport> {
+        Arc::new(TungsteniteOgsWebSocketTransport::new())
+    }
 }
 
 enum SocketCommand {
@@ -299,6 +323,7 @@ mod tests {
             OgsIncoming::Response {
                 id: 3,
                 payload: serde_json::json!({"jwt": "t"}),
+                error: None,
             }
         );
     }

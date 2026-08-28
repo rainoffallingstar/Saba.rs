@@ -5,8 +5,18 @@
 //! cookie. The returned `user_jwt` becomes the WebSocket `authenticate` token.
 //! The password is used once and never stored.
 
+use std::io::Read;
+use std::time::Duration;
+
 pub const OGS_SERVER_URL: &str = "https://online-go.com";
 pub const OGS_USER_AGENT: &str = "Ryusei/0.1";
+
+/// Upper bound on a config/login response body; a larger body is rejected
+/// rather than buffered without limit.
+const MAX_RESPONSE_BODY_BYTES: u64 = 1024 * 1024;
+/// Global timeout for the login HTTP requests so a stalled endpoint cannot
+/// hang the login flow (and the password-bearing task) indefinitely.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct OgsHttpResponse {
@@ -18,6 +28,11 @@ pub struct OgsHttpResponse {
 /// Injection seam so the login flow is testable without network access.
 pub trait OgsRestFetch: Send {
     fn get(&mut self, url: &str) -> Result<OgsHttpResponse, String>;
+    fn get_with_headers(
+        &mut self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<OgsHttpResponse, String>;
     fn post_json(
         &mut self,
         url: &str,
@@ -34,8 +49,11 @@ pub struct UreqOgsRestFetch {
 
 impl UreqOgsRestFetch {
     pub fn new() -> Self {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(REQUEST_TIMEOUT))
+            .build();
         Self {
-            agent: ureq::Agent::new_with_defaults(),
+            agent: config.new_agent(),
         }
     }
 }
@@ -56,8 +74,17 @@ fn collect_set_cookie(headers: &ureq::http::HeaderMap) -> Vec<String> {
 }
 
 fn read_response_body(response: ureq::http::Response<ureq::Body>) -> Result<String, String> {
-    let mut body = response.into_body();
-    body.read_to_string().map_err(|error| error.to_string())
+    let mut body = response
+        .into_body()
+        .into_reader()
+        .take(MAX_RESPONSE_BODY_BYTES + 1);
+    let mut text = String::new();
+    body.read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    if text.len() as u64 > MAX_RESPONSE_BODY_BYTES {
+        return Err("OGS response body exceeded the size limit".to_owned());
+    }
+    Ok(text)
 }
 
 impl OgsRestFetch for UreqOgsRestFetch {
@@ -67,6 +94,28 @@ impl OgsRestFetch for UreqOgsRestFetch {
             .get(url)
             .call()
             .map_err(|error| format!("OGS config request failed: {error}"))?;
+        let status = response.status().as_u16();
+        let set_cookie = collect_set_cookie(response.headers());
+        let body = read_response_body(response)?;
+        Ok(OgsHttpResponse {
+            status,
+            body,
+            set_cookie,
+        })
+    }
+
+    fn get_with_headers(
+        &mut self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<OgsHttpResponse, String> {
+        let mut request = self.agent.get(url);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request
+            .call()
+            .map_err(|error| format!("OGS request failed: {error}"))?;
         let status = response.status().as_u16();
         let set_cookie = collect_set_cookie(response.headers());
         let body = read_response_body(response)?;
@@ -242,6 +291,18 @@ mod tests {
                 status: self.config_status,
                 body: self.config_body.clone(),
                 set_cookie: vec!["csrftoken=abc123; Path=/".to_owned()],
+            })
+        }
+
+        fn get_with_headers(
+            &mut self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+        ) -> Result<OgsHttpResponse, String> {
+            Ok(OgsHttpResponse {
+                status: 200,
+                body: "{}".to_owned(),
+                set_cookie: Vec::new(),
             })
         }
 
