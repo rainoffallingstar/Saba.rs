@@ -60,8 +60,9 @@ use crate::layout::{
     SplitPane, clamp_pane_size, pane_size_for_drag, pane_size_from_settings, right_pane_visible,
 };
 use crate::markup::{
-    MarkupTool, create_line_transaction, create_markup_transaction, create_scoring_transaction,
-    create_setup_transactions, next_scoring_override,
+    MarkupTool, create_clear_markup_transactions, create_line_transaction,
+    create_markup_transaction, create_scoring_transaction, create_setup_transactions,
+    next_scoring_override,
 };
 use crate::native_text_input::{InputKeyResult, NativeTextInput};
 use crate::navigation::{
@@ -161,6 +162,8 @@ actions!(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BottomDeckTab {
+    WinrateGraph,
+    VariationTree,
     GtpTerminal,
     KataGo,
     FoxSync,
@@ -182,6 +185,8 @@ enum ActiveDrawer {
     Score,
     About,
     OgsAccount,
+    Review,
+    Export,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -227,6 +232,14 @@ struct ShellApp {
     analysis_best_move: Option<Vertex>,
     analysis_run: ryusei_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
+    /// Timed playback through the active main line. Kept separate from analysis
+    /// so review/analysis streams never collide with the demo/autoplay loop.
+    autoplay_task: Option<Task<()>>,
+    /// Timed principal-variation playback: `(candidate vertex, visible steps)`.
+    /// The board truncates the hovered candidate's PV to the visible step count
+    /// while a 400ms timer advances it, giving the prototype's animated PV demo.
+    pv_animation: Option<(String, usize)>,
+    pv_animation_task: Option<Task<()>>,
     /// Background handshake/replay task. Blocking GTP I/O must never run on
     /// GPUI's foreground event loop.
     engine_connect_tasks: BTreeMap<EngineRole, Task<()>>,
@@ -803,6 +816,9 @@ impl ShellApp {
             analysis_best_move: active_tab_analysis_best_move,
             analysis_run: ryusei_host::AnalysisRunController::default(),
             analysis_task: None,
+            autoplay_task: None,
+            pv_animation: None,
+            pv_animation_task: None,
             engine_connect_tasks: BTreeMap::new(),
             engine_generations: EngineRole::ALL.into_iter().map(|role| (role, 0)).collect(),
             engine_command_tasks: BTreeMap::new(),
@@ -3709,9 +3725,20 @@ impl ShellApp {
         cx.notify();
     }
 
+    pub(crate) fn append_comment_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
+        let current = self.comment_input.text().to_owned();
+        let updated = if current.is_empty() {
+            tag.to_owned()
+        } else {
+            format!("{current} {tag}")
+        };
+        self.comment_input.set_text(&updated);
+        self.save_comment(&updated, cx);
+    }
+
     /// Selects a theme, swaps the active tokens and persists the choice under
     /// the `theme.current` setting key through the host settings workflow.
-    fn on_theme_selected(&mut self, choice: ThemeChoice, cx: &mut Context<Self>) {
+    pub(crate) fn on_theme_selected(&mut self, choice: ThemeChoice, cx: &mut Context<Self>) {
         self.theme_choice = choice;
         self.theme = choice.tokens();
         self.palette = ui_palette(&self.theme);
@@ -6352,6 +6379,141 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Clears every markup, label, line and arrow annotation from the current
+    /// node with a single click. The document is only changed when at least one
+    /// annotation property exists, so clicking on an already-clean node stays a
+    /// no-op (matching the prototype's conditional clear button).
+    fn clear_current_node_markups(&mut self, cx: &mut Context<Self>) {
+        let metadata = current_node_metadata(&self.host.snapshot());
+        let transactions = create_clear_markup_transactions(&metadata.node_id);
+        let mut changed = false;
+        for transaction in transactions {
+            let mut events = RecordingSink;
+            match self.host.apply_transaction(transaction, &mut events) {
+                Ok(_) => changed = true,
+                Err(error) => self.status = format!("clear markups failed: {error}").into(),
+            }
+        }
+        if changed {
+            self.status = "markups cleared".into();
+            self.synchronize_recovery();
+            cx.notify();
+        }
+    }
+
+    /// Toggles a timed playback loop through the active main line. Each step
+    /// advances one node every 850ms and stops cleanly at the branch end. The
+    /// loop re-checks navigation availability per step, so inserting variations
+    /// or reaching a leaf never leaves a stale timer behind.
+    fn toggle_autoplay(&mut self, cx: &mut Context<Self>) {
+        if self.autoplay_task.take().is_some() {
+            self.status = "autoplay stopped".into();
+            cx.notify();
+            return;
+        }
+        self.autoplay_task = Some(cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(850))
+                            .await;
+                        let should_continue = weak
+                            .update(&mut cx, |shell, cx| {
+                                let snapshot = shell.host.snapshot();
+                                if !navigation_availability(&snapshot).can_go_next {
+                                    shell.autoplay_task = None;
+                                    shell.status = "autoplay finished".into();
+                                    cx.notify();
+                                    return false;
+                                }
+                                shell.navigate(NavigationDirection::Next, cx);
+                                play_if_enabled(
+                                    &shell.settings,
+                                    shell.sound_sink.as_mut(),
+                                    SoundCue::StonePlaced,
+                                );
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !should_continue {
+                            break;
+                        }
+                    }
+                }
+            },
+        ));
+        self.status = "autoplay started".into();
+        cx.notify();
+    }
+    /// Starts or stops the animated principal-variation playback. Each visible
+    /// step appears on the board every 400ms; the run stops automatically after
+    /// the candidate's PV is exhausted. The document is never mutated, matching
+    /// the prototype's transient 推演 PV animation.
+    fn toggle_pv_animation(&mut self, vertex: String, cx: &mut Context<Self>) {
+        if let Some((current, _)) = self.pv_animation.as_ref()
+            && current == &vertex
+        {
+            self.pv_animation_task = None;
+            self.pv_animation = None;
+            self.status = "PV 推演已停止".into();
+            cx.notify();
+            return;
+        }
+
+        self.pv_animation_task = None;
+        self.pv_animation = Some((vertex.clone(), 1));
+        self.pv_animation_task = Some(cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(400))
+                            .await;
+                        let should_continue = weak
+                            .update(&mut cx, |shell, cx| {
+                                let Some((animation_vertex, step)) = shell.pv_animation.clone()
+                                else {
+                                    return false;
+                                };
+                                let total_steps = shell
+                                    .analysis
+                                    .iter()
+                                    .find(|entry| {
+                                        entry.vertex.as_deref() == Some(animation_vertex.as_str())
+                                    })
+                                    .map(|entry| entry.pv.len())
+                                    .unwrap_or(0);
+                                if step >= total_steps {
+                                    shell.pv_animation = None;
+                                    shell.pv_animation_task = None;
+                                    shell.status = "PV 推演完成".into();
+                                    cx.notify();
+                                    return false;
+                                }
+                                shell.pv_animation = Some((animation_vertex, step + 1));
+                                play_if_enabled(
+                                    &shell.settings,
+                                    shell.sound_sink.as_mut(),
+                                    SoundCue::StonePlaced,
+                                );
+                                cx.notify();
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !should_continue {
+                            break;
+                        }
+                    }
+                }
+            },
+        ));
+        self.status = format!("正在推演 PV: {vertex}").into();
+        cx.notify();
+    }
+
     fn set_hovered_candidate(&mut self, vertex: Option<String>, cx: &mut Context<Self>) {
         if self.hovered_candidate_vertex != vertex {
             self.hovered_candidate_vertex = vertex;
@@ -7420,6 +7582,14 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::Preferences, "设置已打开", cx);
     }
 
+    fn open_review(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::Review, "全谱 AI 复盘", cx);
+    }
+
+    fn open_export(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::Export, "导出与分享棋谱", cx);
+    }
+
     fn set_goal_from_active_session(&mut self, cx: &mut Context<Self>) {
         let title = self.workspace_tabs.active_tab().title.clone();
         self.apply_settings_edit(SettingEdit::Set {
@@ -7463,6 +7633,8 @@ impl ShellApp {
             BottomDeckTab::GtpTerminal
         } else if let Some(target) = self.active_plugin_popover.as_deref() {
             match target {
+                "winrate-graph" => BottomDeckTab::WinrateGraph,
+                "variation-tree" => BottomDeckTab::VariationTree,
                 "org.ryusei.katago-setup-hub" => BottomDeckTab::KataGo,
                 "org.ryusei.fox-kifu-sync" => BottomDeckTab::FoxSync,
                 "org.ryusei.position-to-sgf" => BottomDeckTab::PositionSgf,
@@ -7471,12 +7643,20 @@ impl ShellApp {
                 other => BottomDeckTab::Generic(other.to_owned()),
             }
         } else {
-            BottomDeckTab::GtpTerminal
+            BottomDeckTab::WinrateGraph
         }
     }
 
     pub fn switch_bottom_tab(&mut self, tab: BottomDeckTab, cx: &mut Context<Self>) {
         match tab {
+            BottomDeckTab::WinrateGraph => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("winrate-graph".to_owned());
+            }
+            BottomDeckTab::VariationTree => {
+                self.gtp_terminal_open = false;
+                self.active_plugin_popover = Some("variation-tree".to_owned());
+            }
             BottomDeckTab::GtpTerminal => {
                 self.gtp_terminal_open = true;
                 self.active_plugin_popover = None;
@@ -7810,9 +7990,8 @@ impl Render for ShellApp {
             .child(panels::render_titlebar(
                 show_left_sidebar,
                 show_right_sidebar,
-                &self.workspace_tabs.active_tab().title,
-                self.session_policy.mode,
-                palette,
+                &snapshot,
+                self,
                 cx,
             ))
             .child(panels::render_session_toolbar(self, cx))
@@ -7861,6 +8040,8 @@ impl Render for ShellApp {
                             .flex_col()
                             .items_center()
                             .justify_center()
+                            .gap_2()
+                            .child(panels::render_floating_markup_bar(self, cx))
                             .child(panels::render_goban_area(
                                 &snapshot,
                                 &self.theme,
@@ -7868,7 +8049,8 @@ impl Render for ShellApp {
                                 board_pixel_size,
                                 self,
                                 cx,
-                            )),
+                            ))
+                            .child(panels::render_floating_playback_bar(&snapshot, self, cx)),
                     )
                     .child(if show_right_sidebar {
                         panels::render_split_handle(SplitPane::Right, palette, cx)
@@ -7998,6 +8180,8 @@ impl Render for ShellApp {
                 Some(ActiveDrawer::Score) => panels::render_score_drawer(&snapshot, self, cx),
                 Some(ActiveDrawer::About) => panels::render_about_drawer(self, cx),
                 Some(ActiveDrawer::OgsAccount) => panels::render_ogs_account_drawer(self, cx),
+                Some(ActiveDrawer::Review) => panels::render_review_drawer(self, cx),
+                Some(ActiveDrawer::Export) => panels::render_export_drawer(&snapshot, self, cx),
                 None => div().id("drawer-hidden"),
             })
             .child(if self.split_drag.is_some() {

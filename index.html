@@ -1,0 +1,1423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ryusei (流星) · 现代化原生质感围棋工作台与 AI 研讨系统</title>
+  <style>
+    /* ─────────────────────────────────────────────────────────────────────────
+     * Apple Design System Tokens (:root binding)
+     * ─────────────────────────────────────────────────────────────────────── */
+    :root {
+      --bg: #ffffff;
+      --surface: #f5f5f7;
+      --surface-warm: #fbfbfd;
+      --fg: #1d1d1f;
+      --fg-2: #424245;
+      --muted: #6e6e73;
+      --meta: #86868b;
+      --border: #d2d2d7;
+      --border-soft: #e8e8ed;
+      --accent: #0071e3;
+      --accent-on: #ffffff;
+      --accent-hover: #0077ed;
+      --accent-active: #0066cc;
+      --success: #16a34a;
+      --warn: #eab308;
+      --danger: #dc2626;
+
+      --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-body: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+
+      --text-xs: 11px;
+      --text-sm: 13px;
+      --text-base: 14px;
+      --text-lg: 17px;
+      --text-xl: 21px;
+      --text-2xl: 28px;
+
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --radius-pill: 980px;
+
+      --elev-flat: none;
+      --elev-ring: 0 0 0 1px var(--border);
+      --elev-raised: 0 8px 24px rgba(0, 0, 0, 0.08);
+      --elev-hover: 0 12px 32px rgba(0, 0, 0, 0.12);
+      --focus-ring: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 65%);
+
+      --motion-fast: 140ms;
+      --motion-base: 220ms;
+      --ease-standard: cubic-bezier(0.28, 0, 0.22, 1);
+    }
+
+    [data-theme="dark"] {
+      --bg: #141416;
+      --surface: #1e1e22;
+      --surface-warm: #26262b;
+      --fg: #f5f5f7;
+      --fg-2: #d2d2d7;
+      --muted: #8e8e93;
+      --meta: #636366;
+      --border: #333338;
+      --border-soft: #2a2a2f;
+      --elev-raised: 0 8px 24px rgba(0, 0, 0, 0.35);
+      --elev-ring: 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    /* ─── Typography & CJK Rules ─────────────────────────────────────────── */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background-color: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+      font-size: var(--text-base);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1, h2, h3 {
+      font-family: var(--font-display);
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    :focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: var(--radius-pill);
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+
+    /* Layout Structure */
+    .app-root {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      background: var(--bg);
+      color: var(--fg);
+      overflow: hidden;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-family: var(--font-body);
+      font-size: var(--text-sm);
+      font-weight: 510;
+      letter-spacing: 0.02em;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--fg);
+      cursor: pointer;
+      transition: background var(--motion-fast) var(--ease-standard),
+                  border-color var(--motion-fast) var(--ease-standard),
+                  transform var(--motion-fast) var(--ease-standard);
+      outline: none;
+      white-space: nowrap;
+    }
+    .btn:hover {
+      background: var(--surface-warm);
+      border-color: var(--meta);
+    }
+    .btn:active {
+      transform: scale(0.97);
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: var(--accent-on);
+      border-color: transparent;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      border-color: transparent;
+    }
+    .btn-primary:active {
+      background: var(--accent-active);
+    }
+    .btn-pill {
+      border-radius: var(--radius-pill);
+      padding: 0 12px;
+    }
+    .btn-ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--fg-2);
+    }
+    .btn-ghost:hover {
+      background: var(--surface);
+      color: var(--fg);
+    }
+    .btn-ghost.active {
+      color: var(--accent);
+      background: var(--surface-warm);
+    }
+    .btn-icon {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border-radius: var(--radius-sm);
+    }
+    .btn-sm {
+      height: 22px;
+      font-size: var(--text-xs);
+      padding: 0 6px;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: var(--radius-pill);
+      font-size: var(--text-xs);
+      font-weight: 600;
+      font-family: var(--font-mono);
+      background: var(--surface);
+      color: var(--fg-2);
+      border: 1px solid var(--border);
+    }
+    .badge-blue {
+      background: color-mix(in oklab, var(--accent) 12%, transparent);
+      color: var(--accent);
+      border-color: color-mix(in oklab, var(--accent) 30%, transparent);
+    }
+    .badge-green {
+      background: color-mix(in oklab, var(--success) 12%, transparent);
+      color: var(--success);
+      border-color: color-mix(in oklab, var(--success) 30%, transparent);
+    }
+    .badge-orange {
+      background: color-mix(in oklab, var(--warn) 15%, transparent);
+      color: #d97706;
+      border-color: color-mix(in oklab, var(--warn) 35%, transparent);
+    }
+    .badge-red {
+      background: color-mix(in oklab, var(--danger) 12%, transparent);
+      color: var(--danger);
+      border-color: color-mix(in oklab, var(--danger) 30%, transparent);
+    }
+
+    /* Board Containers */
+    .board-container-kaya {
+      background: radial-gradient(circle at 35% 35%, #f1dcab 0%, #d8b46e 100%);
+      box-shadow: inset 0 0 40px rgba(160, 110, 40, 0.28), 0 16px 40px rgba(0, 0, 0, 0.16);
+      border: 1px solid #c9a45e;
+    }
+    .board-container-studio {
+      background: var(--surface-warm);
+      box-shadow: inset 0 0 0 1px var(--border), 0 12px 32px rgba(0,0,0,0.06);
+    }
+    .board-container-midnight {
+      background: #18191c;
+      box-shadow: inset 0 0 0 1px #2c2d33, 0 16px 40px rgba(0,0,0,0.45);
+    }
+
+    /* Toast Notification */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--fg);
+      color: var(--bg);
+      padding: 8px 16px;
+      border-radius: var(--radius-pill);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      box-shadow: var(--elev-raised);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 2000;
+      animation: toastSlideUp 0.22s var(--ease-standard);
+      pointer-events: none;
+    }
+    @keyframes toastSlideUp {
+      from { opacity: 0; transform: translate(-50%, 10px); }
+      to { opacity: 1; transform: translate(-50%, 0); }
+    }
+
+    /* Modal Overlay */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-dialog {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--elev-raised);
+      width: 90%;
+      max-width: 520px;
+      overflow: hidden;
+    }
+
+    .caps-label {
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: var(--text-xs);
+      font-weight: 700;
+      color: var(--fg-2);
+    }
+
+    /* Graph Floating Tooltip */
+    .graph-tooltip {
+      position: absolute;
+      background: var(--fg);
+      color: var(--bg);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      pointer-events: none;
+      z-index: 100;
+      white-space: nowrap;
+      transform: translate(-50%, -120%);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      aside[data-od-id="left-sidebar"] { width: 210px !important; }
+      aside[data-od-id="right-inspector"] { width: 260px !important; }
+    }
+    @media (max-width: 840px) {
+      .player-vs-pill span:nth-child(2), .player-vs-pill span:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="app" class="app-root"></div>
+<div id="toast-root"></div>
+<input type="file" id="sgfFileInput" accept=".sgf,.txt" style="display:none;" onchange="handleSgfFileSelect(event)">
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Monoline SVG Icons
+// ─────────────────────────────────────────────────────────────────────────────
+const Icons = {
+  panelLeft: (size=16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>`,
+  panelRight: (size=16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>`,
+  panelBottom: (size=16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/></svg>`,
+  sparkles: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>`,
+  share: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" x2="15.42" y1="13.51" y2="17.49"/><line x1="15.41" x2="8.59" y1="6.51" y2="10.49"/></svg>`,
+  bookOpen: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`,
+  swords: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/><line x1="13" x2="19" y1="19" y2="13"/><line x1="16" x2="20" y1="16" y2="20"/><line x1="19" x2="21" y1="21" y2="19"/></svg>`,
+  radio: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>`,
+  volume2: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`,
+  volumeX: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/></svg>`,
+  settings: (size=18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  chevronLeft: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
+  chevronRight: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
+  chevronsLeft: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>`,
+  chevronsRight: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></svg>`,
+  play: (size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>`,
+  pause: (size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></svg>`,
+  trendingUp: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>`,
+  gitBranch: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`,
+  terminal: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>`,
+  cpu: (size=15) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg>`,
+  refreshCw: (size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`,
+  upload: (size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>`,
+  info: (size=12) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+  check: (size=14) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sound FX (Web Audio API)
+// ─────────────────────────────────────────────────────────────────────────────
+class SoundFX {
+  constructor() {
+    this.ctx = null;
+    this.enabled = true;
+  }
+  init() {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    }
+  }
+  play() {
+    if (!this.enabled) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+      const now = this.ctx.currentTime;
+      
+      const osc1 = this.ctx.createOscillator();
+      const gain1 = this.ctx.createGain();
+      osc1.type = 'triangle';
+      osc1.frequency.setValueAtTime(740 + Math.random() * 80, now);
+      osc1.frequency.exponentialRampToValueAtTime(140, now + 0.04);
+      gain1.gain.setValueAtTime(0.35, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+      osc1.connect(gain1);
+      gain1.connect(this.ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.05);
+
+      const osc2 = this.ctx.createOscillator();
+      const gain2 = this.ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(210, now);
+      osc2.frequency.exponentialRampToValueAtTime(80, now + 0.08);
+      gain2.gain.setValueAtTime(0.28, now);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      osc2.connect(gain2);
+      gain2.connect(this.ctx.destination);
+      osc2.start(now);
+      osc2.stop(now + 0.1);
+    } catch (e) {}
+  }
+}
+const sfx = new SoundFX();
+
+function showToast(msg) {
+  const tr = document.getElementById('toast-root');
+  if (!tr) return;
+  tr.innerHTML = `<div class="toast-container">${Icons.check(15)} ${msg}</div>`;
+  setTimeout(() => { tr.innerHTML = ''; }, 2200);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Game Benchmark Data (柯洁 vs 申真谞 三星杯决赛第1局)
+// ─────────────────────────────────────────────────────────────────────────────
+const GAME_DATA = {
+  title: "第25届三星杯决赛三番棋 第1局",
+  date: "2020-11-02",
+  rules: "中国规则 (贴7.5目)",
+  blackPlayer: { name: "柯洁", rank: "九段", captures: 2, time: "18:42" },
+  whitePlayer: { name: "申真谞", rank: "九段", captures: 0, time: "09:15" },
+  moves: [
+    { num: 1, color: 'B', x: 3, y: 15, text: "D4", winrate: 51.2, lead: 0.2, eval: "Best", comment: "黑1占星位开局。经典对角星布局。" },
+    { num: 2, color: 'W', x: 15, y: 3, text: "Q16", winrate: 50.8, lead: 0.1, eval: "Best", comment: "白2占对角星位，互不相让。" },
+    { num: 3, color: 'B', x: 15, y: 15, text: "Q4", winrate: 51.5, lead: 0.3, eval: "Best", comment: "黑3占右下星位，形成二连星。" },
+    { num: 4, color: 'W', x: 3, y: 3, text: "D16", winrate: 50.9, lead: 0.1, eval: "Best", comment: "白4四角星位对称。" },
+    { num: 5, color: 'B', x: 14, y: 2, text: "P17", winrate: 51.8, lead: 0.4, eval: "Good", comment: "黑5小飞挂角。" },
+    { num: 6, color: 'W', x: 16, y: 4, text: "R15", winrate: 51.0, lead: 0.2, eval: "Best", comment: "白6一间低夹应对。" },
+    { num: 7, color: 'B', x: 16, y: 2, text: "R17", winrate: 52.3, lead: 0.5, eval: "Best", comment: "黑7点角，直接抢占实地。" },
+    { num: 8, color: 'W', x: 16, y: 1, text: "R18", winrate: 51.1, lead: 0.3, eval: "Best", comment: "白8挡，阻渡。" },
+    { num: 9, color: 'B', x: 15, y: 1, text: "Q18", winrate: 51.9, lead: 0.4, eval: "Best", comment: "黑9爬，定式进行。" },
+    { num: 10, color: 'W', x: 14, y: 1, text: "P18", winrate: 51.2, lead: 0.3, eval: "Good", comment: "白10扳头。" },
+    { num: 11, color: 'B', x: 15, y: 2, text: "Q17", winrate: 52.0, lead: 0.4, eval: "Best", comment: "黑11断，争夺外势与角地。" },
+    { num: 12, color: 'W', x: 13, y: 1, text: "O18", winrate: 51.4, lead: 0.3, eval: "Best", comment: "白12长，坚实应对。" },
+    { num: 13, color: 'B', x: 16, y: 3, text: "R16", winrate: 52.5, lead: 0.6, eval: "Best", comment: "黑13吃掉一子角部做活。" },
+    { num: 14, color: 'W', x: 13, y: 2, text: "O17", winrate: 51.8, lead: 0.4, eval: "Good", comment: "白14补断，封锁上方。" },
+    { num: 15, color: 'B', x: 2, y: 13, text: "C14", winrate: 53.0, lead: 0.7, eval: "Good", comment: "黑15转战左下挂角。" },
+    { num: 16, color: 'W', x: 2, y: 15, text: "C4", winrate: 52.2, lead: 0.5, eval: "Best", comment: "白16点三三！现代 AI 首选着法。" },
+    { num: 17, color: 'B', x: 3, y: 16, text: "D3", winrate: 52.6, lead: 0.6, eval: "Best", comment: "黑17挡在右侧，意图配合右下大模样。" },
+    { num: 18, color: 'W', x: 2, y: 16, text: "C3", winrate: 52.1, lead: 0.5, eval: "Best", comment: "白18长。" },
+    { num: 19, color: 'B', x: 3, y: 17, text: "D2", winrate: 52.8, lead: 0.7, eval: "Best", comment: "黑19爬。" },
+    { num: 20, color: 'W', x: 2, y: 17, text: "C2", winrate: 52.0, lead: 0.5, eval: "Good", comment: "白20继续长，双方精确执行三三定式。" },
+    { num: 21, color: 'B', x: 4, y: 17, text: "E2", winrate: 53.4, lead: 0.8, eval: "Best", comment: "黑21扳，抢占外围主动权。" },
+    { num: 22, color: 'W', x: 1, y: 18, text: "B1", winrate: 34.2, lead: -2.8, eval: "Blunder", comment: "⚠️【全场关键转折点：申真谞滑标手】白22误落在死线一路上！原本应在 C5 扳。白棋瞬间损失 3.5 目，胜率骤降 18%！" },
+    { num: 23, color: 'B', x: 3, y: 14, text: "D5", winrate: 76.5, lead: 3.8, eval: "Best", comment: "黑23果断长出，将白棋严密压制在角内！局面彻底掌握在黑方手中。" },
+    { num: 24, color: 'W', x: 2, y: 14, text: "C5", winrate: 75.8, lead: 3.6, eval: "Good", comment: "白24奋力顶出，试图寻找外围头绪。" },
+    { num: 25, color: 'B', x: 1, y: 14, text: "B5", winrate: 78.2, lead: 4.2, eval: "Best", comment: "黑25强硬阻拦，柯洁毫不退让。" },
+    { num: 26, color: 'W', x: 4, y: 16, text: "E3", winrate: 77.1, lead: 3.9, eval: "Good", comment: "白26回头扳出做活。" },
+    { num: 27, color: 'B', x: 5, y: 16, text: "F3", winrate: 79.0, lead: 4.5, eval: "Best", comment: "黑27再挡，黑外势如铜墙铁壁。" },
+    { num: 28, color: 'W', x: 4, y: 15, text: "E4", winrate: 78.4, lead: 4.2, eval: "Good", comment: "白28贴。" },
+    { num: 29, color: 'B', x: 5, y: 15, text: "F4", winrate: 80.1, lead: 4.8, eval: "Best", comment: "黑29顺势长，中腹潜力巨大。" },
+    { num: 30, color: 'W', x: 9, y: 15, text: "K4", winrate: 76.8, lead: 3.9, eval: "Inaccuracy", comment: "白30远拆，略显松散，AI 建议此时应在 R8 打入消减黑空。" },
+    { num: 31, color: 'B', x: 16, y: 8, text: "R9", winrate: 83.2, lead: 5.6, eval: "Best", comment: "黑31抢占右边大场五路拆，黑右方大模样浑然一体。" },
+    { num: 32, color: 'W', x: 10, y: 11, text: "L8", winrate: 81.5, lead: 5.1, eval: "Good", comment: "白32浅消中央，寻找战机。" },
+    { num: 33, color: 'B', x: 12, y: 12, text: "N7", winrate: 84.6, lead: 6.0, eval: "Best", comment: "黑33高位镇头反击，气势磅礴！" },
+    { num: 34, color: 'W', x: 9, y: 9, text: "K10", winrate: 82.3, lead: 5.3, eval: "Good", comment: "白34向中央跳出联络。" },
+    { num: 35, color: 'B', x: 7, y: 9, text: "H10", winrate: 86.1, lead: 6.8, eval: "Best", comment: "黑35飞封，严厉搜刮白棋薄弱环节。" },
+    { num: 36, color: 'W', x: 8, y: 7, text: "J12", winrate: 79.4, lead: 4.8, eval: "Mistake", comment: "白36走形偏重，给黑棋留下切断机会。" },
+    { num: 37, color: 'B', x: 9, y: 7, text: "K12", winrate: 88.5, lead: 7.6, eval: "Best", comment: "黑37敏锐靠断！柯洁展示深厚杀力。" },
+    { num: 38, color: 'W', x: 10, y: 7, text: "L12", winrate: 87.2, lead: 7.1, eval: "Good", comment: "白38反靠争夺腾挪空间。" },
+    { num: 39, color: 'B', x: 9, y: 6, text: "K13", winrate: 90.1, lead: 8.4, eval: "Best", comment: "黑39扳，彻底割裂白棋阵型。" },
+    { num: 40, color: 'W', x: 10, y: 6, text: "L13", winrate: 88.9, lead: 7.9, eval: "Good", comment: "白40强行连扳。" }
+  ]
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Application State Controller
+// ─────────────────────────────────────────────────────────────────────────────
+const state = {
+  currentMoveIdx: GAME_DATA.moves.length,
+  boardTheme: 'kaya',
+  sessionMode: 'record',
+  activeDeckTab: 'graph',
+  graphMode: 'winrate',
+  showLeftSidebar: true,
+  showRightInspector: true,
+  showBottomDeck: true,
+  activeTool: 'play', // 'play' | 'triangle' | 'square' | 'circle' | 'cross' | 'estimate'
+  markups: {},
+  hoveredBoardPos: null,
+  showNumbers: true,
+  showAiOverlay: true,
+  hoveredCandidate: null,
+  activeModal: null,
+  isPlayingAuto: false,
+  reviewProgress: 0,
+  graphTooltip: null, // {x, y, text}
+  gtpLogs: [
+    "[GTP] kata-analyze interval=20 ownership=true visits=2500",
+    "[GTP] info move K14 winrate 0.901 scoreLead 8.4 visits 2450 prior 0.426 pv K14 L14 J14 M14",
+    "[GTP] info move M11 winrate 0.881 scoreLead 7.1 visits 1820 prior 0.263 pv M11 N11 M10 L11",
+    "[Engine] GPU Memory 4.2GB / 16.0GB (Metal blade engine active)"
+  ]
+};
+
+function getAiCandidates(win, lead) {
+  return [
+    { rank: 1, coord: "K14", x: 9, y: 5, winrate: (win + 1.2).toFixed(1), lead: (lead + 0.6).toFixed(1), visits: 2450, prior: 42.6, eval: "Best", pv: [{x:9,y:5,color:'B'},{x:10,y:5,color:'W'},{x:8,y:5,color:'B'},{x:11,y:5,color:'W'},{x:9,y:4,color:'B'}] },
+    { rank: 2, coord: "M11", x: 11, y: 8, winrate: (win - 0.8).toFixed(1), lead: (lead - 0.3).toFixed(1), visits: 1820, prior: 26.3, eval: "Good", pv: [{x:11,y:8,color:'B'},{x:12,y:8,color:'W'},{x:11,y:9,color:'B'},{x:10,y:8,color:'W'}] },
+    { rank: 3, coord: "H8", x: 7, y: 11, winrate: (win - 2.4).toFixed(1), lead: (lead - 1.1).toFixed(1), visits: 980, prior: 14.8, eval: "Good", pv: [{x:7,y:11,color:'B'},{x:6,y:11,color:'W'},{x:7,y:12,color:'B'}] },
+    { rank: 4, coord: "D12", x: 3, y: 7, winrate: (win - 5.1).toFixed(1), lead: (lead - 2.2).toFixed(1), visits: 420, prior: 6.4, eval: "Inaccuracy", pv: [{x:3,y:7,color:'B'},{x:2,y:7,color:'W'}] },
+    { rank: 5, coord: "R12", x: 16, y: 7, winrate: (win - 8.6).toFixed(1), lead: (lead - 3.7).toFixed(1), visits: 190, prior: 2.1, eval: "Mistake", pv: [{x:16,y:7,color:'B'},{x:16,y:6,color:'W'}] }
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render View
+// ─────────────────────────────────────────────────────────────────────────────
+function render() {
+  const root = document.getElementById('app');
+  document.body.setAttribute('data-theme', state.boardTheme === 'midnight' ? 'dark' : 'light');
+
+  const movesSlice = GAME_DATA.moves.slice(0, state.currentMoveIdx);
+  const currentMove = state.currentMoveIdx > 0 ? GAME_DATA.moves[state.currentMoveIdx - 1] : null;
+  const nextColor = currentMove ? (currentMove.color === 'B' ? 'W' : 'B') : 'B';
+  const currentWinrate = currentMove ? currentMove.winrate : 50.0;
+  const currentLead = currentMove ? currentMove.lead : 0.0;
+  const candidates = getAiCandidates(currentWinrate, currentLead);
+
+  // 19x19 Grid Matrix
+  const grid = Array(19).fill(null).map(() => Array(19).fill(null));
+  movesSlice.forEach(m => { grid[m.y][m.x] = m; });
+
+  // Loss Statistics
+  let bBlunders = 0, bMistakes = 0, wBlunders = 0, wMistakes = 0;
+  GAME_DATA.moves.forEach(m => {
+    if (m.color === 'B') {
+      if (m.eval === 'Blunder') bBlunders++;
+      if (m.eval === 'Mistake') bMistakes++;
+    } else {
+      if (m.eval === 'Blunder') wBlunders++;
+      if (m.eval === 'Mistake') wMistakes++;
+    }
+  });
+
+  root.innerHTML = `
+    <!-- Header -->
+    <header data-od-id="global-header" style="height: 44px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 7px; margin-right: 6px;">
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f56; border: 1px solid rgba(0,0,0,0.1);"></div>
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: #ffbd2e; border: 1px solid rgba(0,0,0,0.1);"></div>
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: #27c93f; border: 1px solid rgba(0,0,0,0.1);"></div>
+        </div>
+        <button data-od-id="toggle-left-sidebar" aria-label="切换左侧栏" class="btn btn-ghost btn-icon ${state.showLeftSidebar ? 'active' : ''}" onclick="toggleLeftSidebar()" title="切换左侧栏 (Cmd+B)">
+          ${Icons.panelLeft(18)}
+        </button>
+        <button data-od-id="toggle-bottom-deck" aria-label="切换底部分析面板" class="btn btn-ghost btn-icon ${state.showBottomDeck ? 'active' : ''}" onclick="toggleBottomDeck()" title="切换底部分析面板 (Cmd+J)">
+          ${Icons.panelBottom(18)}
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px; flex: 1; justify-content: center;">
+        <span style="font-size: var(--text-sm); font-weight: 600; color: var(--fg); white-space: nowrap;">${GAME_DATA.title}</span>
+        
+        <div class="player-vs-pill" style="display: flex; align-items: center; gap: 8px; background: var(--surface-warm); padding: 2px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border);">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div style="width: 12px; height: 12px; border-radius: 50%; background: #1d1d1f; border: 1px solid rgba(255,255,255,0.2);"></div>
+            <span style="font-size: var(--text-xs); font-weight: 600;">${GAME_DATA.blackPlayer.name} ${GAME_DATA.blackPlayer.rank}</span>
+            <span style="font-size: var(--text-xs); color: var(--meta); font-family: var(--font-mono);">(${GAME_DATA.blackPlayer.captures}提)</span>
+            <span style="font-size: var(--text-xs); font-family: var(--font-mono); color: var(--muted); background: var(--surface); padding: 1px 5px; border-radius: 4px;">${GAME_DATA.blackPlayer.time}</span>
+          </div>
+          <span style="font-size: var(--text-xs); color: var(--meta); font-weight: 700; letter-spacing: 0.06em;">VS</span>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <div style="width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 1px solid #86868b;"></div>
+            <span style="font-size: var(--text-xs); font-weight: 600;">${GAME_DATA.whitePlayer.name} ${GAME_DATA.whitePlayer.rank}</span>
+            <span style="font-size: var(--text-xs); color: var(--meta); font-family: var(--font-mono);">(${GAME_DATA.whitePlayer.captures}提)</span>
+            <span style="font-size: var(--text-xs); font-family: var(--font-mono); color: var(--muted); background: var(--surface); padding: 1px 5px; border-radius: 4px;">${GAME_DATA.whitePlayer.time}</span>
+          </div>
+        </div>
+        <span class="badge" style="font-size: 10px;">${GAME_DATA.rules}</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button data-od-id="btn-batch-review" class="btn btn-pill" onclick="openModal('review')" style="background: var(--surface-warm); border-color: var(--accent); color: var(--accent); height: 26px; font-size: var(--text-xs);">
+          ${Icons.sparkles(13)}
+          全谱 AI 复盘
+        </button>
+
+        <div style="display: flex; background: var(--surface-warm); padding: 2px; border-radius: 6px; border: 1px solid var(--border);">
+          <button class="btn-ghost btn-sm ${state.boardTheme === 'kaya' ? 'active' : ''}" onclick="setTheme('kaya')">榧木</button>
+          <button class="btn-ghost btn-sm ${state.boardTheme === 'studio' ? 'active' : ''}" onclick="setTheme('studio')">白墨</button>
+          <button class="btn-ghost btn-sm ${state.boardTheme === 'midnight' ? 'active' : ''}" onclick="setTheme('midnight')">曜黑</button>
+        </div>
+
+        <button data-od-id="btn-export" aria-label="导出与分享" class="btn btn-ghost btn-icon" onclick="openModal('export')" title="导出棋谱与图片">
+          ${Icons.share(16)}
+        </button>
+        <button data-od-id="toggle-right-sidebar" aria-label="切换右侧检视器" class="btn btn-ghost btn-icon ${state.showRightInspector ? 'active' : ''}" onclick="toggleRightInspector()" title="切换右侧检视器 (Cmd+I)">
+          ${Icons.panelRight(18)}
+        </button>
+      </div>
+    </header>
+
+    ${state.reviewProgress > 0 ? `
+      <div style="height: 3px; background: var(--border-soft); width: 100%;">
+        <div style="height: 100%; width: ${state.reviewProgress}%; background: var(--accent); transition: width 0.25s ease;"></div>
+      </div>
+    ` : ''}
+
+    <!-- Main Workspace -->
+    <div style="display: flex; flex: 1; overflow: hidden; position: relative;">
+      
+      <!-- Nav Rail -->
+      <nav data-od-id="navigation-rail" style="width: 52px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 12px 0; flex-shrink: 0;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+          <div style="width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;">星</div>
+          <button aria-label="打谱模式" class="btn btn-ghost btn-icon ${state.sessionMode === 'record' ? 'active' : ''}" onclick="setSessionMode('record')" title="打谱与研讨">${Icons.bookOpen(18)}</button>
+          <button aria-label="对弈模式" class="btn btn-ghost btn-icon ${state.sessionMode === 'match' ? 'active' : ''}" onclick="setSessionMode('match')" title="AI 对弈">${Icons.swords(18)}</button>
+          <button aria-label="观战模式" class="btn btn-ghost btn-icon ${state.sessionMode === 'live' ? 'active' : ''}" onclick="setSessionMode('live')" title="实时观战">${Icons.radio(18)}</button>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+          <button aria-label="音效开关" class="btn btn-ghost btn-icon" onclick="toggleAudio()" title="${sfx.enabled ? '音效开启' : '音效静音'}" style="color: ${sfx.enabled ? 'var(--accent)' : 'var(--meta)'};">
+            ${sfx.enabled ? Icons.volume2(18) : Icons.volumeX(18)}
+          </button>
+          <button aria-label="系统偏好设置" class="btn btn-ghost btn-icon" onclick="openModal('settings')" title="设置">${Icons.settings(18)}</button>
+        </div>
+      </nav>
+
+      <!-- Left Sidebar -->
+      ${state.showLeftSidebar ? `
+        <aside data-od-id="left-sidebar" style="width: 250px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; flex-shrink: 0;">
+          <div style="padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--success);"></div>
+              <span style="font-size: var(--text-xs); font-weight: 600;">KataGo 引擎</span>
+            </div>
+            <span class="badge badge-blue">158 nps</span>
+          </div>
+
+          <div style="padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border-soft); font-size: var(--text-xs);">
+            <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);">网络模型:</span><span style="font-weight: 600; font-family: var(--font-mono);">kata1-b40c256</span></div>
+            <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);">算力深度:</span><span style="font-weight: 600; font-family: var(--font-mono);">2,450 visits</span></div>
+            <div style="display: flex; justify-content: space-between;"><span style="color: var(--muted);">拟人段位:</span><span class="badge badge-orange" style="font-size: 10px;">HumanSL 9D</span></div>
+          </div>
+
+          <div style="padding: 8px 14px; background: var(--surface-warm); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <span class="caps-label">棋谱库 (LIBRARY)</span>
+            <button aria-label="刷新棋谱库" class="btn btn-ghost btn-sm" style="padding: 0 4px; height: 20px;" onclick="showToast('棋谱库已刷新同步')">${Icons.refreshCw(12)}</button>
+          </div>
+
+          <div style="flex: 1; overflow-y: auto; padding: 6px;">
+            <div style="padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-warm); border: 1px solid var(--accent); margin-bottom: 6px; cursor: pointer;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <span style="font-size: var(--text-xs); font-weight: 600;">柯洁 vs 申真谞</span>
+                <span class="badge badge-green" style="font-size: 9px;">黑胜</span>
+              </div>
+              <div style="font-size: 11px; color: var(--muted);">三星杯决赛第1局 · 40手 (当前)</div>
+            </div>
+
+            <div style="padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; cursor: pointer;" onclick="loadGamePreset('shin_park')">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <span style="font-size: var(--text-xs); font-weight: 500;">申真谞 vs 朴廷桓</span>
+                <span class="badge" style="font-size: 9px;">白中盘胜</span>
+              </div>
+              <div style="font-size: 11px; color: var(--muted);">应氏杯半决赛决胜局 · 268手</div>
+            </div>
+
+            <div style="padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 4px; cursor: pointer;" onclick="showToast('已连接野狐围棋，输入玩家账号自动拉取')">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <span style="font-size: var(--text-xs); font-weight: 500;">野狐对局同步 (Fox Go)</span>
+                <span class="badge badge-blue" style="font-size: 9px;">云同步</span>
+              </div>
+              <div style="font-size: 11px; color: var(--muted);">输入野狐 ID 一键导入</div>
+            </div>
+          </div>
+
+          <div style="padding: 8px 10px; border-top: 1px solid var(--border); display: flex; gap: 6px;">
+            <button class="btn btn-sm" style="flex: 1;" onclick="triggerSgfImport()">${Icons.upload(12)} 导入 SGF</button>
+            <button class="btn btn-sm" style="flex: 1;" onclick="openModal('gameInfo')">${Icons.info(12)} 对局信息</button>
+          </div>
+        </aside>
+      ` : ''}
+
+      <!-- Center Canvas -->
+      <main data-od-id="center-canvas" style="flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; overflow: hidden;">
+        
+        <div style="flex: 1; display: flex; align-items: center; justify-content: center; position: relative; padding: 14px; min-height: 0;">
+          
+          <!-- Floating Markup Toolbar -->
+          <div data-od-id="floating-markup-bar" style="position: absolute; top: 10px; display: flex; align-items: center; gap: 4px; background: var(--surface); padding: 4px 8px; border-radius: var(--radius-pill); border: 1px solid var(--border); box-shadow: var(--elev-raised); z-index: 20;">
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'play' ? 'btn-primary' : ''}" onclick="setTool('play')" style="border-radius: var(--radius-pill);">落子</button>
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'triangle' ? 'btn-primary' : ''}" onclick="setTool('triangle')" style="border-radius: var(--radius-pill);" title="标注三角 ▲">▲</button>
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'square' ? 'btn-primary' : ''}" onclick="setTool('square')" style="border-radius: var(--radius-pill);" title="标注方块 ■">■</button>
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'circle' ? 'btn-primary' : ''}" onclick="setTool('circle')" style="border-radius: var(--radius-pill);" title="标注圆圈 ●">●</button>
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'cross' ? 'btn-primary' : ''}" onclick="setTool('cross')" style="border-radius: var(--radius-pill);" title="标注叉号 ✖">✖</button>
+            <button class="btn btn-ghost btn-sm ${state.activeTool === 'estimate' ? 'btn-primary' : ''}" onclick="setTool('estimate')" style="border-radius: var(--radius-pill);" title="形势判断 / 估目">估目</button>
+            ${Object.keys(state.markups).length > 0 ? `
+              <button class="btn btn-ghost btn-sm" onclick="clearMarkups()" style="color: var(--danger); font-size: 10px;">清空标记</button>
+            ` : ''}
+            <div style="width: 1px; height: 14px; background: var(--border); margin: 0 4px;"></div>
+            <button class="btn btn-ghost btn-sm" onclick="toggleNumbers()" style="color: ${state.showNumbers ? 'var(--accent)' : 'var(--muted)'};">手数</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleAiOverlay()" style="color: ${state.showAiOverlay ? 'var(--accent)' : 'var(--muted)'};">AI选点</button>
+          </div>
+
+          <!-- 19x19 Goban SVG -->
+          <div class="board-container-${state.boardTheme}" style="width: min(74vh, 560px); height: min(74vh, 560px); border-radius: 14px; padding: 26px; position: relative; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease;">
+            <svg viewBox="0 0 540 540" style="width: 100%; height: 100%; overflow: visible; cursor: crosshair;">
+              <defs>
+                <radialGradient id="blackStoneGrad" cx="32%" cy="28%" r="68%">
+                  <stop offset="0%" stop-color="#55555c" />
+                  <stop offset="45%" stop-color="#1d1d20" />
+                  <stop offset="100%" stop-color="#050507" />
+                </radialGradient>
+                <radialGradient id="whiteStoneGrad" cx="32%" cy="28%" r="68%">
+                  <stop offset="0%" stop-color="#ffffff" />
+                  <stop offset="70%" stop-color="#e8e8ed" />
+                  <stop offset="100%" stop-color="#c4c4c8" />
+                </radialGradient>
+                <filter id="stoneShadow" x="-20%" y="-20%" width="150%" height="150%">
+                  <feDropShadow dx="1.5" dy="3.5" stdDeviation="2.5" flood-color="rgba(0,0,0,0.32)" />
+                </filter>
+              </defs>
+
+              <!-- Coordinates A-T -->
+              ${"ABCDEFGHJKLMNOPQRST".split("").map((c, i) => `
+                <text x="${i * 30}" y="-14" text-anchor="middle" font-size="10" font-weight="600" fill="${state.boardTheme === 'midnight' ? '#86868b' : '#6e6e73'}" font-family="var(--font-mono)">${c}</text>
+                <text x="${i * 30}" y="554" text-anchor="middle" font-size="10" font-weight="600" fill="${state.boardTheme === 'midnight' ? '#86868b' : '#6e6e73'}" font-family="var(--font-mono)">${c}</text>
+              `).join("")}
+              ${Array.from({ length: 19 }, (_, i) => 19 - i).map((r, i) => `
+                <text x="-16" y="${i * 30 + 4}" text-anchor="middle" font-size="10" font-weight="600" fill="${state.boardTheme === 'midnight' ? '#86868b' : '#6e6e73'}" font-family="var(--font-mono)">${r}</text>
+                <text x="556" y="${i * 30 + 4}" text-anchor="middle" font-size="10" font-weight="600" fill="${state.boardTheme === 'midnight' ? '#86868b' : '#6e6e73'}" font-family="var(--font-mono)">${r}</text>
+              `).join("")}
+
+              <!-- Grid Lines -->
+              ${Array.from({ length: 19 }).map((_, i) => `
+                <line x1="0" y1="${i * 30}" x2="540" y2="${i * 30}" stroke="${state.boardTheme === 'midnight' ? '#383a42' : (state.boardTheme === 'studio' ? '#86868b' : '#735128')}" stroke-width="1.2" />
+                <line x1="${i * 30}" y1="0" x2="${i * 30}" y2="540" stroke="${state.boardTheme === 'midnight' ? '#383a42' : (state.boardTheme === 'studio' ? '#86868b' : '#735128')}" stroke-width="1.2" />
+              `).join("")}
+
+              <!-- Star Points -->
+              ${[3, 9, 15].flatMap(x => [3, 9, 15].map(y => `
+                <circle cx="${x * 30}" cy="${y * 30}" r="3.2" fill="${state.boardTheme === 'midnight' ? '#86868b' : (state.boardTheme === 'studio' ? '#424245' : '#5a3d1c')}" />
+              `)).join("")}
+
+              <!-- Territory Estimation Shading -->
+              ${state.activeTool === 'estimate' ? `
+                <!-- Black Territory Shading in Top/Right -->
+                <rect x="360" y="0" width="180" height="240" fill="rgba(0, 113, 227, 0.15)" stroke="#0071e3" stroke-width="1" stroke-dasharray="2 2" />
+                <text x="450" y="125" text-anchor="middle" fill="#0071e3" font-size="12" font-weight="bold">黑空 约 42目</text>
+                
+                <!-- White Territory Shading in Left -->
+                <rect x="0" y="0" width="120" height="210" fill="rgba(234, 179, 8, 0.15)" stroke="#eab308" stroke-width="1" stroke-dasharray="2 2" />
+                <text x="60" y="110" text-anchor="middle" fill="#d97706" font-size="12" font-weight="bold">白空 约 35目</text>
+              ` : ''}
+
+              <!-- Stones -->
+              ${grid.flatMap((row, y) => row.map((cell, x) => {
+                if (!cell) return '';
+                const isLast = currentMove && currentMove.x === x && currentMove.y === y;
+                return `
+                  <g>
+                    <circle cx="${x * 30}" cy="${y * 30}" r="13.8" fill="${cell.color === 'B' ? 'url(#blackStoneGrad)' : 'url(#whiteStoneGrad)'}" filter="url(#stoneShadow)" />
+                    ${isLast ? `<circle cx="${x * 30}" cy="${y * 30}" r="14.6" fill="none" stroke="${cell.color === 'B' ? '#2997ff' : '#0071e3'}" stroke-width="2.4" />` : ''}
+                    ${state.showNumbers ? `<text x="${x * 30}" y="${y * 30 + 4}" text-anchor="middle" font-size="11" font-weight="700" font-family="var(--font-mono)" fill="${cell.color === 'B' ? '#ffffff' : '#1d1d1f'}">${cell.num}</text>` : ''}
+                    ${cell.eval === 'Blunder' ? `
+                      <g transform="translate(${x * 30 + 7}, ${y * 30 - 7})">
+                        <circle r="6" fill="#dc2626" />
+                        <text y="3" text-anchor="middle" font-size="8" font-weight="bold" fill="#fff">!</text>
+                      </g>
+                    ` : ''}
+                  </g>
+                `;
+              })).join("")}
+
+              <!-- User Placed Markups (▲, ■, ●, ✖) -->
+              ${Object.entries(state.markups).map(([k, sym]) => {
+                const [mx, my] = k.split('_').map(Number);
+                return `
+                  <g transform="translate(${mx * 30}, ${my * 30})">
+                    <circle r="11" fill="rgba(0, 113, 227, 0.25)" />
+                    <text y="4" text-anchor="middle" font-size="12" font-weight="bold" fill="var(--accent)">${sym}</text>
+                  </g>
+                `;
+              }).join("")}
+
+              <!-- Hover Ghost Stone in Play Mode -->
+              ${state.hoveredBoardPos && state.activeTool === 'play' && !grid[state.hoveredBoardPos.y][state.hoveredBoardPos.x] ? `
+                <circle cx="${state.hoveredBoardPos.x * 30}" cy="${state.hoveredBoardPos.y * 30}" r="13.2" fill="${nextColor === 'B' ? '#1d1d1f' : '#ffffff'}" opacity="0.45" stroke="#0071e3" stroke-width="1.5" stroke-dasharray="3 3" />
+              ` : ''}
+
+              <!-- AI Candidates Dots -->
+              ${state.showAiOverlay ? candidates.map((cand, idx) => {
+                const isTop1 = idx === 0;
+                const color = isTop1 ? '#0071e3' : (cand.eval === 'Good' ? '#16a34a' : '#eab308');
+                return `
+                  <g style="cursor: pointer;" onmouseenter="hoverCandidate(${cand.rank})" onmouseleave="hoverCandidate(null)" onclick="playCandidate(${cand.x}, ${cand.y})">
+                    <circle cx="${cand.x * 30}" cy="${cand.y * 30}" r="13.2" fill="${color}" opacity="0.88" />
+                    <circle cx="${cand.x * 30}" cy="${cand.y * 30}" r="${isTop1 ? 14.5 : 13.2}" fill="none" stroke="#ffffff" stroke-width="${isTop1 ? 2 : 1}" />
+                    <text x="${cand.x * 30}" y="${cand.y * 30 - 1}" text-anchor="middle" font-size="9.5" font-weight="800" fill="#ffffff" font-family="var(--font-mono)">${cand.winrate}%</text>
+                    <text x="${cand.x * 30}" y="${cand.y * 30 + 8}" text-anchor="middle" font-size="7.5" font-weight="700" fill="rgba(255,255,255,0.9)" font-family="var(--font-mono)">${cand.lead > 0 ? `+${cand.lead}` : cand.lead}</text>
+                  </g>
+                `;
+              }).join("") : ''}
+
+              <!-- PV Ghost Stones Sequence -->
+              ${state.hoveredCandidate ? state.hoveredCandidate.pv.map((p, idx) => `
+                <g>
+                  <circle cx="${p.x * 30}" cy="${p.y * 30}" r="13.2" fill="${p.color === 'B' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.85)'}" stroke="#0071e3" stroke-width="1.5" stroke-dasharray="2 2" />
+                  <text x="${p.x * 30}" y="${p.y * 30 + 4}" text-anchor="middle" font-size="11" font-weight="bold" fill="${p.color === 'B' ? '#fff' : '#000'}" font-family="var(--font-mono)">${idx + 1}</text>
+                </g>
+              `).join("") : ''}
+
+              <!-- Click Interceptor -->
+              ${Array.from({ length: 19 }).flatMap((_, y) => Array.from({ length: 19 }).map((_, x) => `
+                <rect x="${x * 30 - 14}" y="${y * 30 - 14}" width="28" height="28" fill="transparent" onmouseenter="onHoverBoard(${x}, ${y})" onmouseleave="onLeaveBoard()" onclick="onBoardClick(${x}, ${y})" />
+              `)).join("")}
+            </svg>
+          </div>
+
+          <!-- Bottom Playback Bar -->
+          <div data-od-id="playback-bar" style="position: absolute; bottom: 10px; display: flex; align-items: center; gap: 8px; background: var(--surface); padding: 6px 14px; border-radius: var(--radius-pill); border: 1px solid var(--border); box-shadow: var(--elev-raised); z-index: 20;">
+            <button aria-label="第一手" class="btn btn-ghost btn-sm" onclick="jumpMove(0)" title="开局 (Home)">${Icons.chevronsLeft(14)}</button>
+            <button aria-label="上一手" class="btn btn-ghost btn-sm" onclick="prevMove()" title="上一手 (←)">${Icons.chevronLeft(14)}</button>
+            
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: var(--text-xs); font-weight: 700; font-family: var(--font-mono); min-width: 50px; text-align: center;">
+                ${state.currentMoveIdx} / ${GAME_DATA.moves.length}
+              </span>
+              <input type="range" min="0" max="${GAME_DATA.moves.length}" value="${state.currentMoveIdx}" oninput="jumpMove(parseInt(this.value))" style="width: 80px; accent-color: var(--accent);" />
+            </div>
+
+            <button aria-label="下一手" class="btn btn-ghost btn-sm" onclick="nextMove()" title="下一手 (→)">${Icons.chevronRight(14)}</button>
+            <button aria-label="最后一手" class="btn btn-ghost btn-sm" onclick="jumpMove(${GAME_DATA.moves.length})" title="终局 (End)">${Icons.chevronsRight(14)}</button>
+            <div style="width: 1px; height: 14px; background: var(--border); margin: 0 2px;"></div>
+            <button class="btn btn-sm ${state.isPlayingAuto ? 'btn-primary' : 'btn-ghost'}" onclick="toggleAutoplay()" style="border-radius: var(--radius-pill);">
+              ${state.isPlayingAuto ? Icons.pause(12) : Icons.play(12)}
+              ${state.isPlayingAuto ? '暂停' : '自动'}
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="passTurn()" style="font-size: 11px; padding: 0 6px;">停一手</button>
+          </div>
+        </div>
+
+        <!-- Bottom Analysis Deck -->
+        ${state.showBottomDeck ? `
+          <div data-od-id="bottom-analysis-deck" style="height: 180px; border-top: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; flex-shrink: 0; position: relative;">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--border); height: 32px;">
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <button class="btn-ghost btn-sm ${state.activeDeckTab === 'graph' ? 'active' : ''}" onclick="setDeckTab('graph')" style="border-bottom: ${state.activeDeckTab === 'graph' ? '2px solid var(--accent)' : 'none'}; border-radius: 0; height: 32px;">
+                  ${Icons.trendingUp(13)} 胜率与目数走势图
+                </button>
+                <button class="btn-ghost btn-sm ${state.activeDeckTab === 'tree' ? 'active' : ''}" onclick="setDeckTab('tree')" style="border-bottom: ${state.activeDeckTab === 'tree' ? '2px solid var(--accent)' : 'none'}; border-radius: 0; height: 32px;">
+                  ${Icons.gitBranch(13)} 横向变着树
+                </button>
+                <button class="btn-ghost btn-sm ${state.activeDeckTab === 'gtp' ? 'active' : ''}" onclick="setDeckTab('gtp')" style="border-bottom: ${state.activeDeckTab === 'gtp' ? '2px solid var(--accent)' : 'none'}; border-radius: 0; height: 32px;">
+                  ${Icons.terminal(13)} GTP 终端
+                </button>
+              </div>
+
+              ${state.activeDeckTab === 'graph' ? `
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 11px; color: var(--muted);">模式:</span>
+                  <div style="display: flex; background: var(--surface-warm); border-radius: 4px; padding: 1px; border: 1px solid var(--border);">
+                    <button class="btn-ghost btn-sm" onclick="setGraphMode('winrate')" style="padding: 1px 6px; font-size: 10px; ${state.graphMode === 'winrate' ? 'color: var(--accent); background: var(--surface);' : 'color: var(--muted);'}">胜率 %</button>
+                    <button class="btn-ghost btn-sm" onclick="setGraphMode('lead')" style="padding: 1px 6px; font-size: 10px; ${state.graphMode === 'lead' ? 'color: var(--accent); background: var(--surface);' : 'color: var(--muted);'}">目数差 ±</button>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+
+            <div style="flex: 1; position: relative; overflow: hidden; padding: 6px 14px;">
+              ${state.activeDeckTab === 'graph' ? `
+                <div style="position: relative; width: 100%; height: 100%;">
+                  <svg viewBox="0 0 800 120" preserveAspectRatio="none" style="width: 100%; height: 100%; cursor: crosshair;" onmousemove="handleGraphMouseMove(event)" onmouseleave="handleGraphMouseLeave()">
+                    <!-- 50% Baseline -->
+                    <line x1="0" y1="60" x2="800" y2="60" stroke="var(--border)" stroke-dasharray="3 3" stroke-width="1" />
+                    <text x="8" y="55" font-size="9" fill="var(--meta)" font-family="var(--font-mono)">50% 黑优势</text>
+                    <text x="8" y="70" font-size="9" fill="var(--meta)" font-family="var(--font-mono)">50% 白优势</text>
+
+                    <!-- Ticks (10, 20, 30, 40) -->
+                    ${[10, 20, 30, 40].map(step => {
+                      const tx = ((step - 1) / (GAME_DATA.moves.length - 1)) * 800;
+                      return `
+                        <line x1="${tx}" y1="0" x2="${tx}" y2="120" stroke="var(--border-soft)" stroke-width="1" />
+                        <text x="${tx}" y="115" text-anchor="middle" font-size="8" fill="var(--meta)" font-family="var(--font-mono)">${step}手</text>
+                      `;
+                    }).join("")}
+
+                    ${(() => {
+                      const total = GAME_DATA.moves.length;
+                      const pts = GAME_DATA.moves.map((m, idx) => {
+                        const x = (idx / (total - 1)) * 800;
+                        const val = state.graphMode === 'winrate' ? m.winrate : (50 + m.lead * 4);
+                        const y = 110 - (Math.max(5, Math.min(95, val)) / 100) * 100;
+                        return { x, y, move: m, idx };
+                      });
+                      const poly = `0,60 ` + pts.map(p => `${p.x},${p.y}`).join(" ") + ` 800,60`;
+                      return `
+                        <polygon points="${poly}" fill="color-mix(in oklab, var(--accent) 20%, transparent)" />
+                        <polyline points="${pts.map(p => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="var(--accent)" stroke-width="2" />
+                        
+                        <!-- Blunder Mark -->
+                        ${pts.filter(p => p.move.eval === 'Blunder').map(p => `
+                          <g style="cursor: pointer;" onclick="jumpMove(${p.idx + 1})">
+                            <line x1="${p.x}" y1="10" x2="${p.x}" y2="110" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="2 2" />
+                            <circle cx="${p.x}" cy="${p.y}" r="4.5" fill="#dc2626" stroke="#fff" stroke-width="1.5" />
+                            <text x="${p.x + 4}" y="${p.y - 6}" font-size="9" font-weight="bold" fill="#dc2626" font-family="var(--font-mono)">第22手 误算失误 (-18%)</text>
+                          </g>
+                        `).join("")}
+
+                        <!-- Scrubber -->
+                        ${state.currentMoveIdx > 0 ? `
+                          <g transform="translate(${((state.currentMoveIdx - 1) / (total - 1)) * 800}, 0)">
+                            <line x1="0" y1="0" x2="0" y2="120" stroke="var(--fg)" stroke-width="1.5" />
+                            <circle cx="0" cy="${pts[state.currentMoveIdx - 1].y}" r="4" fill="var(--fg)" stroke="#ffffff" stroke-width="1.5" />
+                          </g>
+                        ` : ''}
+
+                        <!-- Clicks -->
+                        ${GAME_DATA.moves.map((_, idx) => `
+                          <rect x="${(idx / (total - 1)) * 800 - 8}" y="0" width="16" height="120" fill="transparent" style="cursor: pointer;" onclick="jumpMove(${idx + 1})" />
+                        `).join("")}
+                      `;
+                    })()}
+                  </svg>
+
+                  <!-- Dynamic Graph Tooltip -->
+                  ${state.graphTooltip ? `
+                    <div class="graph-tooltip" style="left: ${state.graphTooltip.x}px; top: ${state.graphTooltip.y}px;">
+                      ${state.graphTooltip.html}
+                    </div>
+                  ` : ''}
+                </div>
+              ` : ''}
+
+              ${state.activeDeckTab === 'tree' ? `
+                <div style="width: 100%; height: 100%; overflow-x: auto; display: flex; align-items: center; gap: 8px; padding: 10px 0;">
+                  ${GAME_DATA.moves.map((m, idx) => {
+                    const isActive = state.currentMoveIdx === idx + 1;
+                    const isBlunder = m.eval === 'Blunder';
+                    return `
+                      <div onclick="jumpMove(${idx + 1})" style="width: 22px; height: 22px; border-radius: 50%; background: ${m.color === 'B' ? '#1d1d1f' : '#ffffff'}; border: ${isActive ? '2px solid var(--accent)' : (isBlunder ? '2px solid #dc2626' : '1px solid var(--border)')}; color: ${m.color === 'B' ? '#ffffff' : '#1d1d1f'}; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); cursor: pointer; flex-shrink: 0; ${isActive ? 'box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 30%, transparent);' : ''}">
+                        ${m.num}
+                      </div>
+                      ${idx < GAME_DATA.moves.length - 1 ? `<div style="width: 6px; height: 2px; background: var(--border); flex-shrink: 0;"></div>` : ''}
+                    `;
+                  }).join("")}
+                </div>
+              ` : ''}
+
+              ${state.activeDeckTab === 'gtp' ? `
+                <div style="width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); overflow: hidden;">
+                  <div style="flex: 1; padding: 6px 8px; overflow-y: auto; font-family: var(--font-mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 2px;">
+                    ${state.gtpLogs.map(l => `<div style="color: ${l.startsWith('>') ? 'var(--accent)' : 'var(--fg)'};">${l}</div>`).join("")}
+                  </div>
+                  <div style="display: flex; border-top: 1px solid var(--border); padding: 2px 6px;">
+                    <span style="font-family: var(--font-mono); font-size: 12px; padding: 2px 4px; color: var(--accent);">&gt;</span>
+                    <input id="gtpInput" type="text" placeholder="输入 GTP 指令 (例如: kata-analyze, showboard)..." style="flex: 1; border: none; background: transparent; outline: none; font-family: var(--font-mono); font-size: 11px; color: var(--fg);" onkeydown="if(event.key==='Enter') sendGtp()" />
+                    <button class="btn btn-ghost btn-sm" onclick="sendGtp()">发送</button>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        ` : ''}
+      </main>
+
+      <!-- Right Inspector -->
+      ${state.showRightInspector ? `
+        <aside data-od-id="right-inspector" style="width: 300px; border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; flex-shrink: 0;">
+          <div style="padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              ${Icons.cpu(15)}
+              <span style="font-size: var(--text-sm); font-weight: 600;">AI 推荐选点 (Top 5)</span>
+            </div>
+            <span class="badge badge-blue" style="font-size: 10px;">${candidates[0].visits} v</span>
+          </div>
+
+          <div style="padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border);">
+            ${candidates.map(cand => {
+              const isTop = cand.rank === 1;
+              return `
+                <div style="padding: 6px 10px; border-radius: var(--radius-sm); background: ${isTop ? 'color-mix(in oklab, var(--accent) 8%, var(--surface))' : 'var(--surface-warm)'}; border: ${isTop ? '1px solid color-mix(in oklab, var(--accent) 35%, transparent)' : '1px solid var(--border)'}; cursor: pointer;" onmouseenter="hoverCandidate(${cand.rank})" onmouseleave="hoverCandidate(null)">
+                  <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 6px;" onclick="playCandidate(${cand.x}, ${cand.y})">
+                      <span style="width: 16px; height: 16px; border-radius: 50%; background: ${isTop ? 'var(--accent)' : 'var(--border)'}; color: ${isTop ? '#fff' : 'var(--fg-2)'}; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;">${cand.rank}</span>
+                      <span style="font-weight: 700; font-family: var(--font-mono); font-size: 13px;">${cand.coord}</span>
+                      <span class="${isTop ? 'badge badge-blue' : 'badge'}" style="font-size: 9px;">${cand.eval}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                      <div style="text-align: right;" onclick="playCandidate(${cand.x}, ${cand.y})">
+                        <span style="font-size: 12px; font-weight: 700; font-family: var(--font-mono);">${cand.winrate}%</span>
+                        <span style="font-size: 10px; color: ${cand.lead >= 0 ? 'var(--success)' : 'var(--danger)'}; margin-left: 4px; font-family: var(--font-mono);">${cand.lead > 0 ? `+${cand.lead}` : cand.lead}目</span>
+                      </div>
+                      <button class="btn btn-ghost btn-sm" style="font-size: 10px; padding: 1px 5px; height: 20px; color: var(--accent);" onclick="playPvSequence(${cand.rank})">推演 PV</button>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+
+          <div style="flex: 1; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); overflow: hidden;">
+            <div style="padding: 8px 14px; background: var(--surface-warm); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+              <span class="caps-label">局面研讨与注释</span>
+              ${currentMove ? `<span class="${currentMove.eval === 'Blunder' ? 'badge badge-red' : 'badge'}">第 ${currentMove.num} 手</span>` : ''}
+            </div>
+            
+            <!-- Quick Tag Toolbar -->
+            <div style="display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); background: var(--surface);">
+              <button class="btn btn-ghost btn-sm" onclick="appendTag('#定式 ')" style="font-size: 10px; padding: 0 5px;">#定式</button>
+              <button class="btn btn-ghost btn-sm" onclick="appendTag('#死活 ')" style="font-size: 10px; padding: 0 5px;">#死活</button>
+              <button class="btn btn-ghost btn-sm" onclick="appendTag('⚠️ 恶手: ')" style="font-size: 10px; padding: 0 5px; color: var(--danger);">⚠️ 恶手</button>
+              <button class="btn btn-ghost btn-sm" onclick="appendTag('💡 妙手: ')" style="font-size: 10px; padding: 0 5px; color: var(--accent);">💡 妙手</button>
+            </div>
+
+            <div style="flex: 1; padding: 10px; overflow-y: auto;">
+              <textarea id="commentBox" style="width: 100%; height: 100%; border: none; background: transparent; outline: none; resize: none; font-family: var(--font-body); font-size: var(--text-sm); line-height: 1.6; color: var(--fg);">${currentMove ? currentMove.comment : '初始局面。双方各占星位布局。'}</textarea>
+            </div>
+          </div>
+
+          <div style="padding: 10px 14px; background: var(--surface-warm);">
+            <div style="font-size: var(--text-xs); font-weight: 600; margin-bottom: 6px;">整局失误与精度统计</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 10px;">
+              <div style="background: var(--surface); padding: 6px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="font-weight: 600;">黑棋 (柯洁)</div>
+                <div style="color: var(--meta); margin-top: 2px;">恶手: ${bBlunders} · 失误: ${bMistakes}</div>
+                <div style="color: var(--success); font-weight: 600; margin-top: 2px;">平均损失: 0.32目</div>
+              </div>
+              <div style="background: var(--surface); padding: 6px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="font-weight: 600;">白棋 (申真谞)</div>
+                <div style="color: var(--danger); margin-top: 2px;">恶手: ${wBlunders} (第22手)</div>
+                <div style="color: var(--danger); font-weight: 600; margin-top: 2px;">平均损失: 0.94目</div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      ` : ''}
+    </div>
+
+    <!-- Modals -->
+    ${state.activeModal === 'review' ? `
+      <div class="modal-overlay" onclick="closeModal()">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+          <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              ${Icons.sparkles(18)}
+              <span style="font-size: var(--text-lg); font-weight: 700;">KataGo 全谱批量复盘</span>
+            </div>
+            <button aria-label="关闭" class="btn btn-ghost btn-sm" onclick="closeModal()">✖</button>
+          </div>
+          <div style="padding: 18px; display: flex; flex-direction: column; gap: 12px;">
+            <p style="font-size: var(--text-sm); color: var(--muted); line-height: 1.5;">引擎将对全部 ${GAME_DATA.moves.length} 手棋进行逐手深度算力评估，自动生成双方胜率折线、目数差波动及恶手诊断报告。</p>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+              <div style="padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-warm); cursor: pointer;"><div style="font-weight:600;font-size:12px;">快速速查</div><div style="font-size:10px;color:var(--muted);">50v (~5s)</div></div>
+              <div style="padding: 8px; border: 1px solid var(--accent); border-radius: 8px; background: color-mix(in oklab, var(--accent) 8%, var(--surface)); cursor: pointer;"><div style="font-weight:600;font-size:12px;color:var(--accent);">标准推荐</div><div style="font-size:10px;color:var(--muted);">2,500v (~30s)</div></div>
+              <div style="padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-warm); cursor: pointer;"><div style="font-weight:600;font-size:12px;">大师精算</div><div style="font-size:10px;color:var(--muted);">10,000v (~2m)</div></div>
+            </div>
+          </div>
+          <div style="padding: 10px 18px; background: var(--surface-warm); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px;">
+            <button class="btn" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary btn-pill" onclick="startBatchReview()">开始全盘分析</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    ${state.activeModal === 'export' ? `
+      <div class="modal-overlay" onclick="closeModal()">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+          <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: var(--text-lg); font-weight: 700;">导出与分享棋谱</span>
+            <button aria-label="关闭" class="btn btn-ghost btn-sm" onclick="closeModal()">✖</button>
+          </div>
+          <div style="padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+            <button class="btn btn-primary" onclick="exportSgfText()">导出标准 SGF 文件 (.sgf)</button>
+            <button class="btn" onclick="showToast('已生成 1080P 超清盘面长图！'); closeModal();">导出当前局面高清图 (PNG / SVG)</button>
+            <button class="btn" onclick="showToast('已生成带 AI 胜率曲线的打印版 PDF 棋谱！'); closeModal();">导出打印版研讨棋谱 (PDF)</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    ${state.activeModal === 'gameInfo' ? `
+      <div class="modal-overlay" onclick="closeModal()">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+          <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: var(--text-lg); font-weight: 700;">对局信息 (Game Info)</span>
+            <button aria-label="关闭" class="btn btn-ghost btn-sm" onclick="closeModal()">✖</button>
+          </div>
+          <div style="padding: 16px; display: flex; flex-direction: column; gap: 8px; font-size: var(--text-sm);">
+            <div><strong>比赛名称:</strong> ${GAME_DATA.title}</div>
+            <div><strong>比赛日期:</strong> ${GAME_DATA.date}</div>
+            <div><strong>黑方棋手:</strong> ${GAME_DATA.blackPlayer.name} ${GAME_DATA.blackPlayer.rank}</div>
+            <div><strong>白方棋手:</strong> ${GAME_DATA.whitePlayer.name} ${GAME_DATA.whitePlayer.rank}</div>
+            <div><strong>规则贴目:</strong> ${GAME_DATA.rules}</div>
+          </div>
+          <div style="padding: 10px 18px; background: var(--surface-warm); border-top: 1px solid var(--border); text-align: right;">
+            <button class="btn btn-primary" onclick="closeModal()">确定</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    ${state.activeModal === 'settings' ? `
+      <div class="modal-overlay" onclick="closeModal()">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+          <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: var(--text-lg); font-weight: 700;">系统偏好设置</span>
+            <button aria-label="关闭" class="btn btn-ghost btn-sm" onclick="closeModal()">✖</button>
+          </div>
+          <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; font-size: var(--text-sm);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span>落子音效反馈</span>
+              <button class="btn btn-sm ${sfx.enabled ? 'btn-primary' : ''}" onclick="toggleAudio()">${sfx.enabled ? '已开启' : '已静音'}</button>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span>AI 候选点数显示</span>
+              <span class="badge badge-blue">Top 5</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span>坐标标尺</span>
+              <span class="badge">A-T / 1-19</span>
+            </div>
+          </div>
+          <div style="padding: 10px 18px; background: var(--surface-warm); border-top: 1px solid var(--border); text-align: right;">
+            <button class="btn btn-primary" onclick="closeModal()">完成</button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Interactive Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+window.toggleLeftSidebar = () => { state.showLeftSidebar = !state.showLeftSidebar; render(); };
+window.toggleBottomDeck = () => { state.showBottomDeck = !state.showBottomDeck; render(); };
+window.toggleRightInspector = () => { state.showRightInspector = !state.showRightInspector; render(); };
+window.setTheme = (t) => { state.boardTheme = t; render(); };
+window.setSessionMode = (m) => { state.sessionMode = m; showToast(`已切换至：${m === 'record' ? '打谱模式' : (m === 'match' ? 'AI对弈模式' : '观战模式')}`); render(); };
+window.setTool = (t) => { state.activeTool = t; render(); };
+window.clearMarkups = () => { state.markups = {}; showToast('已清空盘面标记'); render(); };
+window.setDeckTab = (tab) => { state.activeDeckTab = tab; render(); };
+window.setGraphMode = (mode) => { state.graphMode = mode; render(); };
+window.toggleNumbers = () => { state.showNumbers = !state.showNumbers; render(); };
+window.toggleAiOverlay = () => { state.showAiOverlay = !state.showAiOverlay; render(); };
+window.toggleAudio = () => { sfx.enabled = !sfx.enabled; showToast(sfx.enabled ? '音效已开启' : '音效已静音'); render(); };
+window.openModal = (m) => { state.activeModal = m; render(); };
+window.closeModal = () => { state.activeModal = null; render(); };
+
+window.prevMove = () => {
+  if (state.currentMoveIdx > 0) {
+    state.currentMoveIdx--;
+    sfx.play();
+    render();
+  }
+};
+
+window.nextMove = () => {
+  if (state.currentMoveIdx < GAME_DATA.moves.length) {
+    state.currentMoveIdx++;
+    sfx.play();
+    render();
+  }
+};
+
+window.jumpMove = (idx) => {
+  state.currentMoveIdx = idx;
+  sfx.play();
+  render();
+};
+
+window.passTurn = () => {
+  sfx.play();
+  showToast('停一手 (PASS)');
+  const newNum = state.currentMoveIdx + 1;
+  const currentMove = state.currentMoveIdx > 0 ? GAME_DATA.moves[state.currentMoveIdx - 1] : null;
+  const nextColor = currentMove ? (currentMove.color === 'B' ? 'W' : 'B') : 'B';
+  const newMove = {
+    num: newNum,
+    color: nextColor,
+    x: -1, y: -1,
+    text: "PASS",
+    winrate: currentMove ? currentMove.winrate : 50.0,
+    lead: currentMove ? currentMove.lead : 0.0,
+    eval: "Good",
+    comment: `第 ${newNum} 手 ${nextColor === 'B' ? '黑棋' : '白棋'} 停一手。`
+  };
+  GAME_DATA.moves = [...GAME_DATA.moves.slice(0, state.currentMoveIdx), newMove];
+  state.currentMoveIdx = GAME_DATA.moves.length;
+  render();
+};
+
+window.onHoverBoard = (x, y) => {
+  state.hoveredBoardPos = { x, y };
+  render();
+};
+
+window.onLeaveBoard = () => {
+  state.hoveredBoardPos = null;
+  render();
+};
+
+window.hoverCandidate = (rank) => {
+  if (!rank) {
+    state.hoveredCandidate = null;
+  } else {
+    const cand = getAiCandidates(GAME_DATA.moves[state.currentMoveIdx - 1]?.winrate || 50, 0)[rank - 1];
+    state.hoveredCandidate = cand || null;
+  }
+  render();
+};
+
+window.playCandidate = (x, y) => {
+  window.onBoardClick(x, y);
+};
+
+window.playPvSequence = (rank) => {
+  const cand = getAiCandidates(GAME_DATA.moves[state.currentMoveIdx - 1]?.winrate || 50, 0)[rank - 1];
+  if (!cand) return;
+  showToast(`正在推演推荐变着: ${cand.coord} (${cand.eval})`);
+  let step = 0;
+  const timer = setInterval(() => {
+    if (step < cand.pv.length) {
+      const pvNode = cand.pv[step];
+      window.onBoardClick(pvNode.x, pvNode.y);
+      step++;
+    } else {
+      clearInterval(timer);
+    }
+  }, 400);
+};
+
+window.appendTag = (tag) => {
+  const cb = document.getElementById('commentBox');
+  if (cb) {
+    cb.value = (cb.value ? cb.value + "\n" : "") + tag;
+    if (state.currentMoveIdx > 0) {
+      GAME_DATA.moves[state.currentMoveIdx - 1].comment = cb.value;
+    }
+  }
+};
+
+window.triggerSgfImport = () => {
+  const fileInput = document.getElementById('sgfFileInput');
+  if (fileInput) fileInput.click();
+};
+
+window.handleSgfFileSelect = (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target.result;
+    showToast(`已成功载入棋谱: ${file.name}`);
+    GAME_DATA.title = file.name.replace(/\.sgf$/i, '');
+    render();
+  };
+  reader.readAsText(file);
+};
+
+window.exportSgfText = () => {
+  let sgf = `(;GM[1]FF[4]CA[UTF-8]AP[Ryusei:1.0]SZ[19]KM[7.5]RU[Chinese]PW[${GAME_DATA.whitePlayer.name}]PB[${GAME_DATA.blackPlayer.name}]EV[${GAME_DATA.title}]DT[${GAME_DATA.date}]\n`;
+  GAME_DATA.moves.forEach(m => {
+    if (m.x >= 0 && m.y >= 0) {
+      const c1 = String.fromCharCode(97 + m.x);
+      const c2 = String.fromCharCode(97 + m.y);
+      sgf += `;${m.color}[${c1}${c2}]`;
+    } else {
+      sgf += `;${m.color}[]`;
+    }
+  });
+  sgf += `)`;
+
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(sgf);
+  }
+  showToast('已生成并复制标准 UTF-8 SGF 内容至剪贴板！');
+  closeModal();
+};
+
+window.loadGamePreset = (type) => {
+  if (type === 'shin_park') {
+    showToast('已载入：第9届应氏杯半决赛决胜局 申真谞 vs 朴廷桓');
+    GAME_DATA.title = '第9届应氏杯半决赛决胜局';
+    GAME_DATA.blackPlayer = { name: '申真谞', rank: '九段', captures: 1, time: '22:10' };
+    GAME_DATA.whitePlayer = { name: '朴廷桓', rank: '九段', captures: 3, time: '14:05' };
+    render();
+  }
+};
+
+window.handleGraphMouseMove = (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const relX = e.clientX - rect.left;
+  const total = GAME_DATA.moves.length;
+  if (total <= 1) return;
+  const idx = Math.round((relX / rect.width) * (total - 1));
+  const clampedIdx = Math.max(0, Math.min(total - 1, idx));
+  const m = GAME_DATA.moves[clampedIdx];
+  if (m) {
+    state.graphTooltip = {
+      x: relX,
+      y: 40,
+      html: `第${m.num}手 · ${m.color==='B'?'黑':'白'}(${m.text})<br>胜率: ${m.winrate}% | 目数: ${m.lead>0?'+'+m.lead:m.lead}目<br>评级: ${m.eval}`
+    };
+    render();
+  }
+};
+
+window.handleGraphMouseLeave = () => {
+  state.graphTooltip = null;
+  render();
+};
+
+window.onBoardClick = (x, y) => {
+  sfx.play();
+  
+  if (state.activeTool !== 'play' && state.activeTool !== 'estimate') {
+    const symMap = { triangle: '▲', square: '■', circle: '●', cross: '✖' };
+    const key = `${x}_${y}`;
+    if (state.markups[key] === symMap[state.activeTool]) {
+      delete state.markups[key];
+    } else {
+      state.markups[key] = symMap[state.activeTool];
+    }
+    render();
+    return;
+  }
+
+  const currentMove = state.currentMoveIdx > 0 ? GAME_DATA.moves[state.currentMoveIdx - 1] : null;
+  const nextColor = currentMove ? (currentMove.color === 'B' ? 'W' : 'B') : 'B';
+  const cols = "ABCDEFGHJKLMNOPQRST";
+  const coordText = `${cols[x]}${19 - y}`;
+  const newNum = state.currentMoveIdx + 1;
+  const newMove = {
+    num: newNum,
+    color: nextColor,
+    x, y,
+    text: coordText,
+    winrate: parseFloat((50 + Math.random() * 4 - 2).toFixed(1)),
+    lead: parseFloat((Math.random() * 2 - 1).toFixed(1)),
+    eval: "Good",
+    comment: `第 ${newNum} 手试下在 ${coordText}。`
+  };
+  GAME_DATA.moves = [...GAME_DATA.moves.slice(0, state.currentMoveIdx), newMove];
+  state.currentMoveIdx = GAME_DATA.moves.length;
+  render();
+};
+
+let autoTimer = null;
+window.toggleAutoplay = () => {
+  state.isPlayingAuto = !state.isPlayingAuto;
+  if (state.isPlayingAuto) {
+    autoTimer = setInterval(() => {
+      if (state.currentMoveIdx < GAME_DATA.moves.length) {
+        state.currentMoveIdx++;
+        sfx.play();
+        render();
+      } else {
+        clearInterval(autoTimer);
+        state.isPlayingAuto = false;
+        render();
+      }
+    }, 850);
+  } else {
+    clearInterval(autoTimer);
+  }
+  render();
+};
+
+window.startBatchReview = () => {
+  state.activeModal = null;
+  state.reviewProgress = 15;
+  render();
+  let p = 15;
+  const iv = setInterval(() => {
+    p += 25;
+    if (p >= 100) {
+      clearInterval(iv);
+      state.reviewProgress = 100;
+      render();
+      showToast('KataGo 全盘复盘已完成！已标注 1 处大恶手');
+      setTimeout(() => {
+        state.reviewProgress = 0;
+        render();
+      }, 1000);
+    } else {
+      state.reviewProgress = p;
+      render();
+    }
+  }, 250);
+};
+
+window.sendGtp = () => {
+  const input = document.getElementById('gtpInput');
+  if (!input || !input.value.trim()) return;
+  const cmd = input.value.trim();
+  state.gtpLogs.push(`> ${cmd}`);
+  if (cmd === 'version') state.gtpLogs.push(`= KataGo 1.15.3 (Metal GPU)`);
+  else if (cmd === 'showboard') state.gtpLogs.push(`= 19x19 board synchronized`);
+  else state.gtpLogs.push(`= ok`);
+  input.value = '';
+  render();
+};
+
+// Keyboard listener
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowLeft') prevMove();
+  else if (e.key === 'ArrowRight') nextMove();
+  else if (e.key === 'Home') jumpMove(0);
+  else if (e.key === 'End') jumpMove(GAME_DATA.moves.length);
+  else if (e.key === ' ') { e.preventDefault(); toggleAutoplay(); }
+});
+
+// Initial Render
+render();
+</script>
+</body>
+</html>

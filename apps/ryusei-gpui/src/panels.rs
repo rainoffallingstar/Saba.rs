@@ -30,6 +30,7 @@ use crate::layout::SplitPane;
 use crate::native_text_input::NativeInputBinding;
 use crate::node_inspector::NodeInspectorMetadata;
 use crate::plugin_panel::PluginPanelEntry;
+use crate::settings::ThemeChoice;
 use crate::settings_form::{SettingRow, editable_setting_value, panel_setting_rows};
 use crate::theme::UiPalette;
 use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
@@ -77,14 +78,65 @@ fn mac_info_icon(color: u32) -> Div {
 pub fn render_titlebar(
     show_left_sidebar: bool,
     show_right_sidebar: bool,
-    title: &str,
-    session_mode: SessionMode,
-    palette: UiPalette,
+    snapshot: &GameSnapshot,
+    shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
+    let palette = shell.palette;
+    let title = shell.workspace_tabs.active_tab().title.clone();
+    let session_mode = shell.session_policy.mode;
     let icon_color = palette.muted;
     let active_color = palette.accent;
     let fill_color = palette.accent;
+
+    // Player metadata from SGF root properties.
+    let property = |key: &str| {
+        snapshot
+            .root_properties
+            .get(key)
+            .and_then(|values| values.first())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let black_name = if property("PB").is_empty() {
+        "Black".to_owned()
+    } else {
+        property("PB")
+    };
+    let black_rank = property("BR");
+    let white_name = if property("PW").is_empty() {
+        "White".to_owned()
+    } else {
+        property("PW")
+    };
+    let white_rank = property("WR");
+    let rules = property("RU");
+    let komi = property("KM");
+    let rules_label = if !rules.is_empty() {
+        rules
+    } else if !komi.is_empty() {
+        format!("贴{komi}目")
+    } else {
+        "中国规则".to_owned()
+    };
+
+    // Header clocks (server/local prediction via the shared clock controller).
+    let clock_state = shell.clock.state();
+    let format_clock = |clock: ryusei_domain_core::PlayerClock| {
+        let seconds = clock.display_remaining().as_secs();
+        let time = format!("{:02}:{:02}", seconds / 60, seconds % 60);
+        match clock.phase {
+            ryusei_domain_core::ClockPhase::ByoYomi => {
+                format!("{time} ({})", clock.periods_remaining)
+            }
+            ryusei_domain_core::ClockPhase::Expired => "TIME".to_owned(),
+            ryusei_domain_core::ClockPhase::MainTime => time,
+        }
+    };
+    let clocks_visible = !matches!(clock_state.control, ryusei_domain_core::TimeControl::None);
+    let black_clock = format_clock(clock_state.black);
+    let white_clock = format_clock(clock_state.white);
+    let is_black_turn = snapshot.board.next_player == ryusei_domain_core::Color::Black;
 
     div()
         .id("titlebar")
@@ -98,7 +150,7 @@ pub fn render_titlebar(
         .border_b_1()
         .border_color(rgb(palette.border))
         .bg(rgb(palette.panel))
-        // Left: traffic lights spacer + Left sidebar toggle icon + history arrows
+        // Left: traffic lights spacer + sidebar toggles + history arrows
         .child(
             div()
                 .flex()
@@ -125,6 +177,21 @@ pub fn render_titlebar(
                         })),
                 )
                 .child(
+                    Button::new("titlebar-bottom-deck-toggle")
+                        .small()
+                        .ghost()
+                        .selected(shell.is_bottom_deck_open())
+                        .label("▤")
+                        .tooltip("切换底部分析面板 (Cmd+J)")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            if shell.is_bottom_deck_open() {
+                                shell.close_bottom_deck(cx);
+                            } else {
+                                shell.switch_bottom_tab(crate::BottomDeckTab::WinrateGraph, cx);
+                            }
+                        })),
+                )
+                .child(
                     Button::new("titlebar-navigate-prev")
                         .small()
                         .ghost()
@@ -145,28 +212,194 @@ pub fn render_titlebar(
                         })),
                 ),
         )
-        // Center: clean native title
+        // Center: game title + player VS pill + rules badge
         .child(
             div()
-                .font_weight(FontWeight::MEDIUM)
-                .text_sm()
-                .text_color(rgb(palette.text))
-                .child(format!(
-                    "Ryusei · {} · {}",
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_sm()
+                        .text_color(rgb(palette.text))
+                        .child(title.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2p5()
+                        .py_0p5()
+                        .rounded(px(980.0))
+                        .bg(rgb(palette.input))
+                        .border_1()
+                        .border_color(rgb(palette.border))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if is_black_turn {
+                                            rgb(palette.accent)
+                                        } else {
+                                            rgb(palette.text)
+                                        })
+                                        .child("●"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(black_name),
+                                )
+                                .children((!black_rank.is_empty()).then(|| {
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(palette.muted))
+                                        .child(format!("({black_rank})"))
+                                }))
+                                .children(clocks_visible.then(|| {
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(if is_black_turn {
+                                            palette.accent
+                                        } else {
+                                            palette.muted
+                                        }))
+                                        .child(black_clock)
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(palette.subtle))
+                                .font_weight(FontWeight::BOLD)
+                                .child("VS"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(if !is_black_turn {
+                                            rgb(palette.accent)
+                                        } else {
+                                            rgb(palette.text)
+                                        })
+                                        .child("○"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(white_name),
+                                )
+                                .children((!white_rank.is_empty()).then(|| {
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(palette.muted))
+                                        .child(format!("({white_rank})"))
+                                }))
+                                .children(clocks_visible.then(|| {
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(if !is_black_turn {
+                                            palette.accent
+                                        } else {
+                                            palette.muted
+                                        }))
+                                        .child(white_clock)
+                                })),
+                        ),
+                )
+                .child(Badge::new().small().child(format!(
+                    "{} · {}",
                     match session_mode {
                         SessionMode::Match => "对弈",
                         SessionMode::Record => "打谱",
                         SessionMode::Live => "实时",
                     },
-                    title
-                )),
+                    rules_label
+                ))),
         )
-        // Right: Info icon + Right sidebar toggle icon
+        // Right: Batch review + Theme selector + Export GIF + Info icon + Right sidebar toggle icon
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap_1p5()
+                .child(
+                    Button::new("titlebar-batch-review")
+                        .small()
+                        .ghost()
+                        .label("✨ 全谱复盘")
+                        .tooltip("全谱 AI 深度复盘：选择档位并逐手推演")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.open_review(cx);
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .p_0p5()
+                        .rounded_md()
+                        .bg(rgb(palette.input))
+                        .border_1()
+                        .border_color(rgb(palette.border))
+                        .child(
+                            Button::new("theme-btn-classic")
+                                .small()
+                                .ghost()
+                                .label("榧木")
+                                .tooltip("新榧木纹材质")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.on_theme_selected(ThemeChoice::Classic, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("theme-btn-mist")
+                                .small()
+                                .ghost()
+                                .label("白墨")
+                                .tooltip("极简白墨材质")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.on_theme_selected(ThemeChoice::Mist, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("theme-btn-dark")
+                                .small()
+                                .ghost()
+                                .label("曜黑")
+                                .tooltip("深空曜黑材质")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.on_theme_selected(ThemeChoice::Dark, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    Button::new("titlebar-export-gif")
+                        .small()
+                        .ghost()
+                        .label("🎬 导出")
+                        .tooltip("导出 SGF / 局面 PNG / 动画 GIF")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.open_export(cx);
+                        })),
+                )
                 .child(
                     Button::new("titlebar-game-info")
                         .small()
@@ -3488,6 +3721,222 @@ pub fn render_about_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful
     )
 }
 
+/// Drawer for whole-game AI review: pick a budget profile and watch progress.
+pub fn render_review_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let running = shell
+        .batch_review_progress
+        .as_ref()
+        .is_some_and(|progress| progress.is_running);
+    let progress = shell.batch_review_progress.as_ref();
+    let active_profile = shell.batch_review_profile;
+
+    let mut profiles = div().flex().flex_col().gap_2();
+    for profile in ryusei_domain_core::ReviewProfile::ALL {
+        let selected = active_profile == Some(profile);
+        let running_this = running && selected;
+        profiles = profiles.child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(if selected {
+                    shell.palette.accent
+                } else {
+                    shell.palette.border
+                }))
+                .bg(rgb(if selected {
+                    shell.palette.button_active
+                } else {
+                    shell.palette.input
+                }))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(if selected {
+                                    shell.palette.accent
+                                } else {
+                                    shell.palette.text
+                                }))
+                                .child(format!("{} {}", profile.english_label(), profile.label())),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!("{} visits / move", profile.visits())),
+                        ),
+                )
+                .child(if running_this {
+                    Badge::new().small().child("分析中")
+                } else {
+                    Badge::new().small().child("选择")
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |shell, _, _, cx| {
+                        shell.start_review_profile_action(profile, cx);
+                    }),
+                ),
+        );
+    }
+
+    render_readonly_drawer(
+        "review",
+        9,
+        "KataGo 全谱批量复盘",
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.muted))
+                    .child("选择复盘算力档位后，引擎将沿当前主谱逐手推演，自动生成双方胜率曲线、目数差与恶手诊断报告。"),
+            )
+            .child(profiles)
+            .children(progress.map(|progress| {
+                let percent = if progress.total_moves == 0 {
+                    0.0
+                } else {
+                    (progress.current_move as f32 / progress.total_moves as f32 * 100.0).clamp(0.0, 100.0)
+                };
+                div()
+                    .p_3()
+                    .rounded_md()
+                    .bg(rgb(shell.palette.input))
+                    .border_1()
+                    .border_color(rgb(shell.palette.border))
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(shell.palette.text))
+                                    .child(if progress.is_running { "KataGo 推演计算中…" } else { "复盘进度" }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(shell.palette.accent))
+                                    .child(format!("{}/{} 手 · {:.0}%", progress.current_move, progress.total_moves, percent)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(8.0))
+                            .rounded(px(4.0))
+                            .bg(rgb(shell.palette.track))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded(px(4.0))
+                                    .bg(rgb(shell.palette.accent))
+                                    .w_full()
+                                    .max_w(px(percent / 100.0 * 300.0)),
+                            ),
+                    )
+            }))
+            .child(
+                Button::new("review-stop-btn")
+                    .small()
+                    .warning()
+                    .label("停止复盘")
+                    .disabled(!running)
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.stop_whole_game_review(cx);
+                    })),
+            ),
+        shell,
+        cx,
+    )
+}
+
+/// Drawer for unified export: SGF file/clipboard, position PNG and animated GIF.
+pub fn render_export_drawer(
+    _snapshot: &GameSnapshot,
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Stateful<Div> {
+    render_readonly_drawer(
+        "export",
+        10,
+        "导出与分享棋谱",
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                Button::new("export-save-sgf-file")
+                    .small()
+                    .primary()
+                    .label("💾 导出标准 SGF 文件 (.sgf)")
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.save_game_as();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("export-clipboard-sgf")
+                    .small()
+                    .outline()
+                    .label("📋 复制完整对局 SGF 到剪贴板")
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.on_plugin_command(
+                            "org.ryusei.position-to-sgf",
+                            "export.clipboard_sgf",
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new("export-position-png")
+                    .small()
+                    .outline()
+                    .label("🖼️ 导出当前局面高清图 (PNG)")
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.export_current_position_png(cx);
+                    })),
+            )
+            .child(
+                Button::new("export-animated-gif")
+                    .small()
+                    .outline()
+                    .label("🎬 导出动画 GIF 棋谱")
+                    .on_click(cx.listener(|shell, _, window, cx| {
+                        shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(shell.palette.subtle))
+                    .child("SGF 保留完整分支树与注释；PNG/GIF 导出到本地文件。"),
+            ),
+        shell,
+        cx,
+    )
+}
+
 pub fn render_right_sidebar_split_handle(
     pane: SplitPane,
     palette: UiPalette,
@@ -3515,7 +3964,7 @@ pub fn render_right_sidebar_split_handle(
 
 /// The integrated bottom deck panel (second screen) revealed by clicking toolbar buttons.
 pub fn render_bottom_deck_panel(
-    _snapshot: &GameSnapshot,
+    snapshot: &GameSnapshot,
     shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
@@ -3529,8 +3978,8 @@ pub fn render_bottom_deck_panel(
         .flex()
         .flex_col()
         .border_t_1()
-        .border_color(rgb(shell.palette.accent))
-        .bg(rgb(0x18181c))
+        .border_color(rgb(shell.palette.border))
+        .bg(rgb(shell.palette.panel))
         .shadow_lg()
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
@@ -3544,12 +3993,33 @@ pub fn render_bottom_deck_panel(
                 .px_3()
                 .py_1p5()
                 .border_b_1()
-                .border_color(rgb(0x2a2a30))
+                .border_color(rgb(shell.palette.border))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_1()
+                        .child(
+                            Button::new("deck-tab-winrate")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::WinrateGraph)
+                                .label("📈 胜率走势")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.switch_bottom_tab(crate::BottomDeckTab::WinrateGraph, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("deck-tab-tree")
+                                .small()
+                                .ghost()
+                                .selected(active_tab == crate::BottomDeckTab::VariationTree)
+                                .label("🌿 变着树")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell
+                                        .switch_bottom_tab(crate::BottomDeckTab::VariationTree, cx);
+                                })),
+                        )
                         .child(
                             Button::new("deck-tab-gtp")
                                 .small()
@@ -3565,7 +4035,7 @@ pub fn render_bottom_deck_panel(
                                 .small()
                                 .ghost()
                                 .selected(active_tab == crate::BottomDeckTab::KataGo)
-                                .label("⚡ KataGo 配置")
+                                .label("⚡ KataGo")
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.switch_bottom_tab(crate::BottomDeckTab::KataGo, cx);
                                 })),
@@ -3620,7 +4090,7 @@ pub fn render_bottom_deck_panel(
                             Button::new("plugin-menu-close-btn")
                                 .small()
                                 .ghost()
-                                .label("✕ 收起第二屏")
+                                .label("✕ 收起")
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.close_bottom_deck(cx);
                                 })),
@@ -3632,9 +4102,105 @@ pub fn render_bottom_deck_panel(
                 .id("bottom-deck-body")
                 .flex_1()
                 .min_h_0()
-                .p_3()
+                .p_2()
                 .overflow_y_scroll()
                 .child(match active_tab {
+                    crate::BottomDeckTab::WinrateGraph => {
+                        let live_player_winrate = if shell.analysis.is_empty() {
+                            None
+                        } else {
+                            Some(best_analysis_winrate(
+                                &shell.analysis,
+                                snapshot.board.next_player,
+                            ))
+                        };
+                        let live_score_lead =
+                            crate::engine_console::best_analysis_entry(&shell.analysis)
+                                .and_then(|entry| entry.score_lead)
+                                .filter(|lead| lead.is_finite());
+                        let winrate_points = crate::winrate_graph::winrate_history(
+                            snapshot,
+                            live_player_winrate,
+                            live_score_lead,
+                            snapshot.board.next_player,
+                        );
+                        let winrate_metric = crate::winrate_graph::WinrateGraphMetric::from_setting(
+                            shell.settings.get_str("board.analysis_type"),
+                        );
+                        let points = crate::winrate_graph::graph_plot_points(
+                            &winrate_points,
+                            winrate_metric,
+                            shell
+                                .settings
+                                .get_bool("view.winrategraph_invert")
+                                .unwrap_or(false),
+                            shell
+                                .settings
+                                .get("view.winrategraph_blunderthreshold")
+                                .and_then(serde_json::Value::as_f64)
+                                .unwrap_or(5.0),
+                            shell
+                                .settings
+                                .get("view.winrategraph_blunderthreshold_scorelead")
+                                .and_then(serde_json::Value::as_f64)
+                                .unwrap_or(2.0),
+                        );
+                        let weak_shell = cx.entity().downgrade();
+                        let on_node_clicked =
+                            move |node_id: &ryusei_domain_core::NodeId,
+                                  _window: &mut Window,
+                                  cx: &mut App| {
+                                weak_shell
+                                    .update(cx, |shell, cx| {
+                                        shell.navigate_to_node(node_id.clone(), cx);
+                                    })
+                                    .ok();
+                            };
+                        div().child(render_winrate_graph_panel(
+                            &points,
+                            winrate_metric,
+                            230.0,
+                            shell.palette,
+                            on_node_clicked,
+                            cx,
+                        ))
+                    }
+                    crate::BottomDeckTab::VariationTree => {
+                        let variation_layout =
+                            crate::variation_tree::build_variation_tree_layout(snapshot);
+                        let weak_shell = cx.entity().downgrade();
+                        let on_node_clicked =
+                            move |node_id: &ryusei_domain_core::NodeId,
+                                  _window: &mut Window,
+                                  cx: &mut App| {
+                                weak_shell
+                                    .update(cx, |shell, cx| {
+                                        shell.navigate_to_node(node_id.clone(), cx);
+                                    })
+                                    .ok();
+                            };
+                        let weak_shell_for_context = cx.entity().downgrade();
+                        let on_node_context_requested =
+                            move |node_id: &ryusei_domain_core::NodeId,
+                                  _window: &mut Window,
+                                  cx: &mut App| {
+                                weak_shell_for_context
+                                    .update(cx, |shell, cx| {
+                                        shell.open_game_graph_context_menu(node_id.clone(), cx);
+                                    })
+                                    .ok();
+                            };
+                        div().child(render_variation_tree_panel(
+                            &variation_layout,
+                            26.0,
+                            4.0,
+                            shell.palette,
+                            shell,
+                            cx,
+                            on_node_clicked,
+                            on_node_context_requested,
+                        ))
+                    }
                     crate::BottomDeckTab::GtpTerminal => render_gtp_terminal_body(shell, cx),
                     crate::BottomDeckTab::KataGo => render_katago_dialog(shell, cx),
                     crate::BottomDeckTab::FoxSync => render_fox_sync_dialog(shell, cx),
@@ -4722,6 +5288,9 @@ pub fn render_node_inspector_panel(
     shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
+    let evaluations = ryusei_host::compute_game_move_evaluations(&shell.host.snapshot());
+    let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+
     div()
         .id("node-inspector-panel")
         .debug_selector(|| "node-inspector-panel".to_owned())
@@ -4738,7 +5307,7 @@ pub fn render_node_inspector_panel(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap_1p5()
                     .child(
                         div()
                             .flex()
@@ -4747,17 +5316,60 @@ pub fn render_node_inspector_panel(
                             .child(
                                 div()
                                     .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(shell.palette.subtle))
-                                    .child("💬 局面解说 / 评论 (Markdown)"),
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(shell.palette.text))
+                                    .child("💬 局面研讨与注释 (Markdown)"),
                             )
                             .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
                                 if metadata.comment.is_empty() {
-                                    "可直接输入 Markdown"
+                                    "可直接输入"
                                 } else {
-                                    "已渲染解说"
+                                    "已保存"
                                 },
                             )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Button::new("tag-joseki")
+                                    .small()
+                                    .ghost()
+                                    .label("#定式")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.append_comment_tag("#定式", cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("tag-life-death")
+                                    .small()
+                                    .ghost()
+                                    .label("#死活")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.append_comment_tag("#死活", cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("tag-mistake")
+                                    .small()
+                                    .ghost()
+                                    .danger()
+                                    .label("⚠️ 恶手")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.append_comment_tag("⚠️ 恶手", cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("tag-tesuji")
+                                    .small()
+                                    .ghost()
+                                    .label("💡 妙手")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.append_comment_tag("💡 妙手", cx);
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -4767,12 +5379,12 @@ pub fn render_node_inspector_panel(
                             .key_context("CommentInput")
                             .px_3()
                             .py_2()
-                            .min_h(px(90.0))
+                            .min_h(px(80.0))
                             .border_1()
                             .border_color(rgb(
                                 if shell.active_text_input == Some(crate::ActiveTextInput::Comment)
                                 {
-                                    0x38bdf8
+                                    shell.palette.accent
                                 } else {
                                     shell.palette.border
                                 },
@@ -4813,6 +5425,91 @@ pub fn render_node_inspector_panel(
                     .child("comments hidden — enable view.show_comments to edit")
             },
         )
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.input))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child("📊 整局失误与精度统计"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .p_2()
+                                .rounded(px(4.0))
+                                .bg(rgb(shell.palette.panel))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("● 黑棋 (Black)"),
+                                )
+                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                    format!(
+                                        "恶手: {} · 失误: {}",
+                                        summary.black_blunder_count, summary.black_mistake_count
+                                    ),
+                                ))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(shell.palette.success))
+                                        .child(format!("均损: {:.2}目", summary.black_avg_loss)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .p_2()
+                                .rounded(px(4.0))
+                                .bg(rgb(shell.palette.panel))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("○ 白棋 (White)"),
+                                )
+                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                    format!(
+                                        "恶手: {} · 失误: {}",
+                                        summary.white_blunder_count, summary.white_mistake_count
+                                    ),
+                                ))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(shell.palette.danger_text))
+                                        .child(format!("均损: {:.2}目", summary.white_avg_loss)),
+                                ),
+                        ),
+                ),
+        )
 }
 
 /// Compact right-sidebar board for the currently hovered engine candidate.
@@ -4823,8 +5520,10 @@ pub fn render_analysis_preview_panel(
     snapshot: &GameSnapshot,
     theme: &crate::theme::ThemeTokens,
     shell: &ShellApp,
-    _cx: &Context<ShellApp>,
+    cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
+    let candidates = &shell.analysis;
+    let total_visits = candidates.first().map(|c| c.visits).unwrap_or(0);
     let selected = shell
         .hovered_candidate_vertex
         .as_deref()
@@ -4865,8 +5564,7 @@ pub fn render_analysis_preview_panel(
             pv_preview,
         )
     });
-    let preview_board_size = (shell.right_sidebar_width - 24.0).clamp(180.0, 360.0);
-    let preview_panel_height = preview_board_size + 42.0;
+    let preview_board_size = (shell.right_sidebar_width - 24.0).clamp(160.0, 320.0);
     let preview_stones = preview
         .as_ref()
         .map(|(_, pv_preview)| pv_preview.clone())
@@ -4898,13 +5596,12 @@ pub fn render_analysis_preview_panel(
         .id("analysis-preview-panel")
         .debug_selector(|| "analysis-preview-panel".to_owned())
         .flex_none()
-        .h(px(preview_panel_height))
         .p_2p5()
         .border_b_1()
         .border_color(rgb(shell.palette.border))
         .flex()
         .flex_col()
-        .gap_1p5()
+        .gap_2()
         .child(
             div()
                 .flex()
@@ -4912,23 +5609,169 @@ pub fn render_analysis_preview_panel(
                 .justify_between()
                 .child(
                     div()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("AI 变化预览"),
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(div().text_sm().child("⚡"))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .text_xs()
+                                .text_color(rgb(shell.palette.text))
+                                .child("AI 推荐选点 (Top 5)"),
+                        ),
                 )
-                .child(if let Some((vertex, _)) = preview.as_ref() {
-                    div().child(Badge::new().small().child(format!("选点 {vertex}")))
+                .child(Badge::new().small().child(if total_visits > 0 {
+                    format!("{} visits", total_visits)
                 } else {
-                    div().child(Badge::new().small().child("待机"))
-                }),
+                    "推演中".to_owned()
+                })),
         )
+        .child(div().flex().flex_col().gap_1p5().children(
+            candidates.iter().take(5).enumerate().map(|(idx, entry)| {
+                let rank = idx + 1;
+                let vertex_str = entry.vertex.clone().unwrap_or_else(|| "pass".to_owned());
+                let winrate_str = format!("{:.1}%", entry.winrate * 100.0);
+                let lead_str = entry
+                    .score_lead
+                    .map(|l| format!("{:+.1}目", l))
+                    .unwrap_or_default();
+                let is_hovered = shell.hovered_candidate_vertex.as_deref() == Some(&vertex_str);
+                let is_top = rank == 1;
+
+                let v_str_for_hover = vertex_str.clone();
+                let v_str_for_click = vertex_str.clone();
+
+                div()
+                    .id(gpui::SharedString::from(format!("candidate-card-{rank}")))
+                    .p_1p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(if is_hovered || is_top {
+                        shell.palette.accent
+                    } else {
+                        shell.palette.border
+                    }))
+                    .bg(rgb(if is_hovered {
+                        shell.palette.button_active
+                    } else {
+                        shell.palette.input
+                    }))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |shell, _, _, cx| {
+                            shell.set_hovered_candidate(Some(v_str_for_hover.clone()), cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .w(px(18.0))
+                                            .h(px(18.0))
+                                            .rounded_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_xs()
+                                            .font_weight(FontWeight::BOLD)
+                                            .bg(rgb(if is_top {
+                                                shell.palette.accent
+                                            } else {
+                                                shell.palette.button
+                                            }))
+                                            .text_color(rgb(if is_top {
+                                                0xffffff
+                                            } else {
+                                                shell.palette.text
+                                            }))
+                                            .child(rank.to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_xs()
+                                            .text_color(rgb(shell.palette.text))
+                                            .child(vertex_str.clone()),
+                                    )
+                                    .child(if is_top {
+                                        Badge::new().small().child("Best")
+                                    } else if entry.winrate >= 0.50 {
+                                        Badge::new().small().child("Good")
+                                    } else if entry.winrate >= 0.40 {
+                                        Badge::new().small().child("Inacc")
+                                    } else {
+                                        Badge::new().small().child("Mistake")
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(shell.palette.text))
+                                            .child(winrate_str),
+                                    )
+                                    .children((!lead_str.is_empty()).then(|| {
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(
+                                                if entry.score_lead.unwrap_or(0.0) >= 0.0 {
+                                                    shell.palette.success
+                                                } else {
+                                                    shell.palette.danger_text
+                                                },
+                                            ))
+                                            .child(lead_str)
+                                    }))
+                                    .child(
+                                        Button::new(gpui::SharedString::from(format!(
+                                            "btn-pv-{rank}"
+                                        )))
+                                        .small()
+                                        .ghost()
+                                        .label(
+                                            if shell.pv_animation.as_ref().is_some_and(
+                                                |(vertex, _)| vertex == &v_str_for_click,
+                                            ) {
+                                                "⏹ 停止"
+                                            } else {
+                                                "▶ 推演 PV"
+                                            },
+                                        )
+                                        .tooltip("400ms 逐手推演主变序列")
+                                        .on_click(
+                                            cx.listener(move |shell, _, _, cx| {
+                                                shell.toggle_pv_animation(
+                                                    v_str_for_click.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    ),
+                            ),
+                    )
+            }),
+        ))
         .child(
             div()
-                .flex_1()
-                .min_h_0()
                 .flex()
                 .items_center()
                 .justify_center()
+                .p_1()
                 .child(board),
         )
 }
@@ -5011,16 +5854,36 @@ pub fn render_goban_area(
     }
 
     let mut pv_preview = shell
-        .hovered_candidate_vertex
-        .as_deref()
-        .and_then(|vertex| {
-            shell
-                .analysis
-                .iter()
-                .find(|entry| entry.vertex.as_deref() == Some(vertex))
-                .map(|entry| pv_preview_points(board.width, board.next_player, &entry.pv, 6))
+        .pv_animation
+        .as_ref()
+        .and_then(|(vertex, step)| {
+            if *step == 0 {
+                Some(Vec::new())
+            } else {
+                shell
+                    .analysis
+                    .iter()
+                    .find(|entry| entry.vertex.as_deref() == Some(vertex.as_str()))
+                    .map(|entry| {
+                        pv_preview_points(board.width, board.next_player, &entry.pv, *step)
+                    })
+            }
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            shell
+                .hovered_candidate_vertex
+                .as_deref()
+                .and_then(|vertex| {
+                    shell
+                        .analysis
+                        .iter()
+                        .find(|entry| entry.vertex.as_deref() == Some(vertex))
+                        .map(|entry| {
+                            pv_preview_points(board.width, board.next_player, &entry.pv, 6)
+                        })
+                })
+                .unwrap_or_default()
+        });
     if let Some(trial_move) = shell.trial_move.as_ref() {
         let mut trial_preview = trial_move
             .vertex
@@ -5069,7 +5932,12 @@ pub fn render_goban_area(
         ownership: shell
             .analysis
             .first()
-            .and_then(|entry| entry.ownership.clone()),
+            .and_then(|entry| entry.ownership.clone())
+            .or_else(|| {
+                (shell.mode == GameMode::Estimator)
+                    .then(|| crate::goban_view::estimate_ownership_from_board(board))
+                    .flatten()
+            }),
         score_overrides: snapshot.score_overrides.clone(),
         show_next_moves: shell
             .settings
@@ -5157,4 +6025,285 @@ pub fn render_goban_area(
         } else {
             div()
         })
+}
+
+/// Floating markup toolbar on top of the goban.
+pub fn render_floating_markup_bar(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
+    let active_tool = shell.active_tool;
+    let mode = shell.mode;
+    let show_numbers = shell
+        .settings
+        .get_bool("view.show_move_numbers")
+        .unwrap_or(false);
+    let show_analysis = shell
+        .settings
+        .get_bool("board.show_analysis")
+        .unwrap_or(true);
+    let snapshot = shell.host.snapshot();
+    let has_markups = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.id == snapshot.current_node_id)
+        .map(|node| {
+            ["CR", "SQ", "TR", "MA", "LB", "LN", "AR"]
+                .iter()
+                .any(|property| node.properties.contains_key(*property))
+        })
+        .unwrap_or(false);
+
+    div()
+        .id("floating-markup-bar")
+        .debug_selector(|| "floating-markup-bar".to_owned())
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_3()
+        .py_1()
+        .rounded(px(980.0))
+        .bg(rgb(shell.palette.panel))
+        .border_1()
+        .border_color(rgb(shell.palette.border))
+        .shadow_md()
+        .child(
+            Button::new("tool-play")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Play && active_tool == crate::markup::MarkupTool::Play)
+                .label("落子")
+                .tooltip("落子对弈 (Play)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Play;
+                    shell.set_mode(GameMode::Play, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-triangle")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Triangle,
+                )
+                .label("▲")
+                .tooltip("标注三角 (▲)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Triangle;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-square")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Square,
+                )
+                .label("■")
+                .tooltip("标注方块 (■)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Square;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-circle")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Circle,
+                )
+                .label("●")
+                .tooltip("标注圆圈 (●)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Circle;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-cross")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Cross)
+                .label("✖")
+                .tooltip("标注叉号 (✖)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Cross;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-estimate")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Estimator)
+                .label("估目")
+                .tooltip("形势判断与估目 (Territory)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.set_mode(GameMode::Estimator, cx);
+                })),
+        )
+        .children(has_markups.then(|| {
+            Button::new("tool-clear-markups")
+                .small()
+                .ghost()
+                .danger()
+                .label("清空标记")
+                .tooltip("清空当前节点全部标记与线条")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.clear_current_node_markups(cx);
+                }))
+        }))
+        .child(div().w(px(1.0)).h(px(16.0)).bg(rgb(shell.palette.border)))
+        .child(
+            Button::new("tool-toggle-numbers")
+                .small()
+                .ghost()
+                .selected(show_numbers)
+                .label("手数")
+                .tooltip("显示/隐藏手数序号 (Cmd+Shift+M)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx);
+                })),
+        )
+        .child(
+            Button::new("tool-toggle-ai")
+                .small()
+                .ghost()
+                .selected(show_analysis)
+                .label("AI选点")
+                .tooltip("显示/隐藏 KataGo 候选着法圆点")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.toggle_view_setting("board.show_analysis", "analysis overlay", cx);
+                })),
+        )
+}
+
+/// Floating playback bar at the bottom of the goban.
+pub fn render_floating_playback_bar(
+    snapshot: &GameSnapshot,
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Stateful<Div> {
+    let total_moves = snapshot.moves.len();
+    let current_step = snapshot
+        .moves
+        .iter()
+        .position(|m| m.vertex == snapshot.board.current_vertex)
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+
+    div()
+        .id("floating-playback-bar")
+        .debug_selector(|| "floating-playback-bar".to_owned())
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_3()
+        .py_1()
+        .rounded(px(980.0))
+        .bg(rgb(shell.palette.panel))
+        .border_1()
+        .border_color(rgb(shell.palette.border))
+        .shadow_md()
+        .child(
+            Button::new("playback-first")
+                .small()
+                .ghost()
+                .label("⏮")
+                .tooltip("开局 (Home)")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.on_navigate_first(&MouseDownEvent::default(), window, cx);
+                })),
+        )
+        .child(
+            Button::new("playback-prev")
+                .small()
+                .ghost()
+                .label("◀")
+                .tooltip("上一手 (Left)")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.on_navigate_previous(&MouseDownEvent::default(), window, cx);
+                })),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_0p5()
+                .child(
+                    div()
+                        .px_2()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child(format!("{current_step} / {total_moves}")),
+                )
+                .child(
+                    div()
+                        .w(px(96.0))
+                        .h(px(4.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(shell.palette.track))
+                        .child(
+                            div()
+                                .h_full()
+                                .rounded(px(2.0))
+                                .bg(rgb(shell.palette.accent))
+                                .w(px({
+                                    let progress = if total_moves == 0 {
+                                        0.0
+                                    } else {
+                                        (current_step as f32 / total_moves as f32).clamp(0.0, 1.0)
+                                    };
+                                    progress * 96.0
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            Button::new("playback-next")
+                .small()
+                .ghost()
+                .label("▶")
+                .tooltip("下一手 (Right)")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.on_navigate_next(&MouseDownEvent::default(), window, cx);
+                })),
+        )
+        .child(
+            Button::new("playback-last")
+                .small()
+                .ghost()
+                .label("⏭")
+                .tooltip("末手 (End)")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.on_navigate_last(&MouseDownEvent::default(), window, cx);
+                })),
+        )
+        .child(div().w(px(1.0)).h(px(16.0)).bg(rgb(shell.palette.border)))
+        .child(
+            Button::new("playback-autoplay")
+                .small()
+                .ghost()
+                .selected(shell.autoplay_task.is_some())
+                .label(if shell.autoplay_task.is_some() {
+                    "⏸ 暂停"
+                } else {
+                    "▶ 自动"
+                })
+                .tooltip("自动播放 / 暂停 (Space)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.toggle_autoplay(cx);
+                })),
+        )
+        .child(
+            Button::new("playback-pass")
+                .small()
+                .ghost()
+                .label("Pass")
+                .tooltip("停一手 (Pass)")
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.on_pass(&MouseDownEvent::default(), window, cx);
+                })),
+        )
 }

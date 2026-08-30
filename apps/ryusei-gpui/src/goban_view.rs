@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::{collections::BTreeMap, rc::Rc};
 
 use gpui::{
@@ -178,6 +179,87 @@ pub fn board_spacing(board: &BoardSnapshot, board_pixel_size: f32) -> f32 {
     (board_pixel_size - 2.0 * BOARD_MARGIN_PX) / (board.width.max(2) - 1) as f32
 }
 
+/// Computes a lightweight territory-ownership map from board geometry alone.
+///
+/// This is the estimator-mode fallback used when KataGo has not produced an
+/// ownership tensor. Each empty intersection is weighted by the ratio of BFS
+/// distances to the nearest black and white stones: `+` means black influence,
+/// `-` means white influence. Occupied intersections carry their stone sign.
+pub fn estimate_ownership_from_board(board: &BoardSnapshot) -> Option<Vec<f64>> {
+    let width = board.width;
+    let height = board.height;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let black_dist = ownership_distance_field(board, 1);
+    let white_dist = ownership_distance_field(board, -1);
+
+    let mut ownership = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for column in 0..width {
+            let idx = row * width + column;
+            let stone = board.sign_map[row][column];
+            if stone == 1 {
+                ownership.push(1.0);
+                continue;
+            }
+            if stone == -1 {
+                ownership.push(-1.0);
+                continue;
+            }
+            let black = black_dist[idx];
+            let white = white_dist[idx];
+            if black == usize::MAX && white == usize::MAX {
+                ownership.push(0.0);
+                continue;
+            }
+            let black = black as f64;
+            let white = white as f64;
+            let value = (white - black) / (black + white).max(1.0);
+            ownership.push(value.clamp(-1.0, 1.0));
+        }
+    }
+    Some(ownership)
+}
+
+/// Multi-source BFS distance field from every stone of `target_sign`
+/// (`1` = black, `-1` = white) to every empty intersection.
+fn ownership_distance_field(board: &BoardSnapshot, target_sign: i8) -> Vec<usize> {
+    let width = board.width;
+    let height = board.height;
+    let mut distances = vec![usize::MAX; width * height];
+    let mut queue = VecDeque::new();
+    for row in 0..height {
+        for column in 0..width {
+            if board.sign_map[row][column] == target_sign {
+                let idx = row * width + column;
+                distances[idx] = 0;
+                queue.push_back((column, row));
+            }
+        }
+    }
+    while let Some((column, row)) = queue.pop_front() {
+        let current = distances[row * width + column];
+        let neighbors = [
+            (column.wrapping_sub(1), row),
+            (column + 1, row),
+            (column, row.wrapping_sub(1)),
+            (column, row + 1),
+        ];
+        for (next_column, next_row) in neighbors {
+            if next_column < width && next_row < height {
+                let idx = next_row * width + next_column;
+                if distances[idx] == usize::MAX {
+                    distances[idx] = current + 1;
+                    queue.push_back((next_column, next_row));
+                }
+            }
+        }
+    }
+    distances
+}
+
 /// Converts a point relative to the goban element into a board vertex, or
 /// `None` when the point falls outside the board.
 #[cfg(test)]
@@ -325,11 +407,11 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
     };
     let border_color = match color {
         Color::Black => rgb(0x111114),
-        Color::White => rgb(0xb0b0bc),
+        Color::White => rgb(0xd0d0d8),
     };
     let highlight_color = match color {
-        Color::Black => hsla(0.0, 0.0, 1.0, 0.14),
-        Color::White => hsla(0.0, 0.0, 1.0, 0.55),
+        Color::Black => hsla(0.0, 0.0, 1.0, 0.22),
+        Color::White => hsla(0.0, 0.0, 1.0, 0.85),
     };
     div()
         .absolute()
@@ -340,15 +422,30 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
         .border_1()
         .border_color(border_color)
         .bg(stone_color)
-        .shadow_sm()
+        .shadow_md()
+        // Primary specular highlight in top-left
         .child(
             div()
                 .absolute()
-                .top(px(size * 0.12))
-                .left(px(size * 0.16))
+                .top(px(size * 0.10))
+                .left(px(size * 0.14))
                 .size(px(size * 0.36))
                 .rounded_full()
                 .bg(highlight_color),
+        )
+        // Secondary soft rim reflection in bottom-right
+        .child(
+            div()
+                .absolute()
+                .bottom(px(size * 0.10))
+                .right(px(size * 0.12))
+                .size(px(size * 0.25))
+                .rounded_full()
+                .bg(if color == Color::Black {
+                    hsla(0.0, 0.0, 1.0, 0.07)
+                } else {
+                    hsla(220.0, 0.15, 0.6, 0.16)
+                }),
         )
 }
 
@@ -727,13 +824,13 @@ pub fn render_goban_with_id(
             );
             let size = stone_size;
             let bg_color = if candidate.is_best {
-                0x10b981 // KaTrain best: emerald green
+                0x0071e3 // Apple Blue: best candidate move
             } else if candidate.winrate_percent >= 50.0 {
-                0x0ea5e9 // KaTrain good: sky blue
+                0x16a34a // Apple Green: good move
             } else if candidate.winrate_percent >= 40.0 {
-                0x6366f1 // KaTrain moderate: indigo
+                0xeab308 // Apple Amber: inaccuracy
             } else {
-                0x8b5cf6 // KaTrain low: purple
+                0xdc2626 // Apple Red: mistake / blunder
             };
 
             let winrate_str = format!("{:.0}%", candidate.winrate_percent);
@@ -1015,8 +1112,9 @@ pub fn render_goban_with_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        GobanRenderOptions, arrowhead_vertices, board_spacing, column_letter, format_sgf_vertex,
-        move_numbers_from_moves, parse_sgf_vertex, render_goban, vertex_at,
+        GobanRenderOptions, arrowhead_vertices, board_spacing, column_letter,
+        estimate_ownership_from_board, format_sgf_vertex, move_numbers_from_moves,
+        parse_sgf_vertex, render_goban, vertex_at,
     };
     use gpui::px;
     use ryusei_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
@@ -1181,5 +1279,28 @@ mod tests {
         assert_eq!(parse_sgf_vertex("DD"), None);
         assert_eq!(parse_sgf_vertex("d"), None);
         assert_eq!(parse_sgf_vertex("ddd"), None);
+    }
+
+    #[test]
+    fn estimate_ownership_marks_black_and_white_influence() {
+        let mut board = test_board(19, 19);
+        // A single black stone influences nearby empty points positively.
+        board.sign_map[9][9] = 1;
+        let ownership = estimate_ownership_from_board(&board).expect("non-empty board");
+        assert_eq!(ownership.len(), 19 * 19);
+        let idx = |column: usize, row: usize| row * 19 + column;
+        assert_eq!(ownership[idx(9, 9)], 1.0);
+        assert!(ownership[idx(9, 8)] > 0.0, "adjacent point leans black");
+
+        // A single white stone flips the same empty point negative.
+        board.sign_map[9][9] = -1;
+        let ownership = estimate_ownership_from_board(&board).expect("non-empty board");
+        assert_eq!(ownership[idx(9, 9)], -1.0);
+        assert!(ownership[idx(9, 8)] < 0.0, "adjacent point leans white");
+
+        // An empty board produces a neutral (all zero) ownership map.
+        let empty = test_board(19, 19);
+        let ownership = estimate_ownership_from_board(&empty).expect("non-empty board");
+        assert!(ownership.iter().all(|value| *value == 0.0));
     }
 }

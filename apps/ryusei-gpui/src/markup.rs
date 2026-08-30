@@ -198,6 +198,17 @@ pub fn create_setup_transactions(
     }
 }
 
+/// Builds transactions that clear every markup/label/line property from the
+/// current node. Each property is reset to an empty value list, which the
+/// domain-core document normalizer removes entirely. Pure and additive so the
+/// board-markup toolbar keeps one-click clearing independent of tool state.
+pub fn create_clear_markup_transactions(node_id: &NodeId) -> Vec<GameTransaction> {
+    ["CR", "SQ", "TR", "MA", "LB", "LN", "AR"]
+        .into_iter()
+        .map(|property| set_property_transaction(node_id, property, Vec::new()))
+        .collect()
+}
+
 /// Cycles the scoring override for a vertex: none → alive black (1) →
 /// alive white (-1) → clear (0). Pure so the cycling is unit-testable.
 pub fn next_scoring_override(current: Option<i8>) -> i8 {
