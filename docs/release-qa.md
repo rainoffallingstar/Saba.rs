@@ -79,6 +79,30 @@ Run a release bundle on a machine with normal system audio. Confirm:
    abort, which covers the GPUI keyboard-layout notification reentrancy patch.
    This passed its initial manual release-binary retest; retain it for every
    macOS release candidate.
+10. **Audio cues**: In a game with Japanese byo-yomi time control, let the clock
+    enter byo-yomi and run down to <= 10s. Confirm a per-second countdown tick
+    sounds (`Morse.aiff`), and a distinct timeout chime sounds (`Sosumi.aiff`)
+    when the final period expires.
+11. **Fischer time control**: Open **对局设置** from the match capsule, choose
+    **10m + 10s 加秒**, make several moves, and verify that the active clock
+    receives a +10s increment after each committed move. Save the SGF and
+    verify `TM` and `OT[fischer +10s]` round-trip.
+12. **Markdown commentary preview**: In the comment inspector, type markdown
+    content (`# Title`, `**bold**`, `` `code` ``, fenced code blocks, `- lists`).
+    Click the **预览 / 编辑** toggle (Eye icon) and verify the rendered view
+    matches the formatting.
+13. **Variation tree structure actions**: Right-click a branch node in the
+    horizontal variation tree. Click **设为主干 (promote)** to promote it to
+    the primary line, and click **删除分支 (delete)** to prune a branch.
+14. **Keyboard Tab navigation**: Press `Tab` and `Shift-Tab` to cycle focus
+    through registered inputs (comment box, GTP input, search fields). Confirm
+    focused inputs show the 3px accent focus ring.
+15. **Responsive breakpoints**: Resize the window below 1024px width; verify
+    the sidebars automatically cap to 210px (left) and 260px (right). Resize
+    below 840px width and verify the VS-pill clock chips hide gracefully.
+16. **Monte-Carlo scoring**: Enter Scoring mode with `score.estimator_iterations`
+    configured; confirm dead stones are marked according to playout survival
+    rates and manual overrides remain authoritative.
 
 ## Electron reference comparison
 

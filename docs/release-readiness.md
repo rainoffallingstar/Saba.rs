@@ -31,6 +31,27 @@ tests, and the KataGo model resource seam. The workspace volume ran out of
 space during an initial link (`errno=28`); the same serialized gate passed
 using the isolated, regenerable `CARGO_TARGET_DIR=/tmp/ryusei-cargo-target`.
 
+### 2026-08-31 worktree gate (after UI-alignment + ShellApp refactor)
+
+After the Apple-design UI alignment series (theme tokens, goban skins, icons,
+animations, top-bar merge, bottom-deck slimming, focus navigation, responsive
+breakpoints), the panels split (`panels/{mod,drawers,engine_panels,plugin_dialogs}.rs`),
+the `ui_format`/`markdown`/`text_inputs` extraction, and the backend rule work
+(positional superko + Monte-Carlo scoring), the four gates were re-run on the
+current worktree:
+
+- `cargo fmt --all -- --check` — clean (reformatted icons/goban after edits);
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean (fixed 7
+  warnings: 2 redundant `usize` casts, 1 `while let`→`for`, 3 identical `if`
+  branches, 1 unneeded `mut`, 1 `clone`-to-slice in the superko test);
+- `cargo test --workspace` — green: domain-core 77 unit + 8 diff + 5 legacy +
+  5 proptest, `ryusei-gpui` 173 (up from 141), `ryusei-host` 236 (up from 125),
+  plugin-runtime 27, plus integration/real-subprocess smoke;
+- `cargo build --release --locked -p ryusei-gpui --bin ryusei` — clean.
+
+The only remaining warnings are the two **transitive** future-incompatible
+packages (`block 0.1.6`, `proc-macro-error2 2.0.1`), not project source.
+
 The final candidate commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed the
 three-platform CI matrix in run
 [`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577).

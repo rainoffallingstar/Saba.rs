@@ -146,6 +146,30 @@ apps/ryusei-gpui        GPUI 主客户端（唯一持续开发目标）
 
 文件布局与冻结的 Tauri 参考实现一致，同一配置目录可在两端互换。
 
+### 3.2.1 UI 对齐系列改造（2026-08 下旬，`prd.md` Apple 新设计落地）
+
+自 2026-08-16 本文版本后，前端按 `prd.md` 的 Apple 设计系统完成了系统性的
+UI 对齐（详见 `architecture-review-2026-08-31.md`）：
+
+- **主题地基**：`UiPalette` 扩展到 21 语义色 + `type_scale`/`radius`/`motion`
+  冻结设计 token；全仓硬编码颜色收编走 palette（浅主题不再割裂）。
+- **质感**：棋盘容器圆角 + 三皮肤（kaya 渐变+内发光+描边+阴影 / studio / midnight）、
+  棋子三层渐变质感、VS 胶囊时钟片。
+- **图标**：`icons.rs` 内嵌 Lucide monoline SVG + `AssetSource`，替换全部汉字/emoji。
+- **交互反馈**：hover 补齐、toast 滑入 + AI 候选呼吸脉冲动画、focus-ring 焦点环、
+  文本截断。
+- **布局**：顶栏合并为单层 44px（原 40+42 双层）+ 浮动对局胶囊条（参与方/分析/
+  对局设置入口）；新增对局设置抽屉（时钟/参与方/OGS/复盘/直播），对战胶囊点开，
+  含「(N提)」捕获数。
+- **甲板精简**：底部甲板 8 tab → 3 核心（胜率/变着树/GTP）+ 插件追加；KataGo 配置/
+  引擎管理/野狐/转SGF 迁左侧引擎侧栏「引擎与工具」区，消除甲板/侧栏双路径渲染；
+  胜率图只在甲板（删左侧栏重复卡片）。
+- **UI 目标统一**：`ui-parity-plan.md`（对齐原版 Sabaki）已被 `prd.md`（Apple 新
+  设计）取代，后续 UI 工作以 PRD 为唯一基准。
+
+**已知剩余技术债**（详见审查报告 §4）：ShellApp 上帝对象（~130 字段/~190 方法，
+`main.rs` 内 `#[expect]` 自认待 P2 拆 controller）、panels.rs 视图层 0 测试。
+
 ### 3.3 `refer-repo/`（冻结、主线忽略）
 
 旧 Electron/Tauri Sabaki 的源码、测试及独立 Git 历史保存在 `refer-repo/`，用于多编码
