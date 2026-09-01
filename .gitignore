@@ -23,3 +23,5 @@ katago_logs/
 
 # DeepSeek Harness visual inspection artifacts
 .dsh-vision-router/
+.app.webp
+.design.png

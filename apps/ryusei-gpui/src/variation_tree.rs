@@ -435,14 +435,14 @@ where
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(|style| style.rounded_full().bg(rgb(0x27272a)))
+                .hover(|style| style.rounded_full().bg(rgb(palette.button_active)))
                 .child(
                     div()
                         .size(px(visual_node_size))
                         .rounded_full()
                         .border_2()
                         .border_color(rgb(if node.is_current {
-                            0x38bdf8 // Active glowing cyan ring
+                            palette.accent // Active ring follows theme accent
                         } else {
                             ai_quality_color // KaTrain move quality border
                         }))

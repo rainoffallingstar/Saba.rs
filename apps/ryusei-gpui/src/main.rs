@@ -5,7 +5,9 @@ mod engine_console;
 mod external_file;
 mod file_workflow;
 mod goban_view;
+mod icons;
 mod layout;
+mod markdown;
 mod markup;
 mod native_text_input;
 mod navigation;
@@ -17,7 +19,9 @@ mod plugin_panel;
 mod settings;
 mod settings_form;
 mod sound_feedback;
+mod text_inputs;
 mod theme;
+mod ui_format;
 mod variation_tree;
 mod winrate_graph;
 
@@ -31,10 +35,10 @@ use std::{
 };
 
 use gpui::{
-    App, Application, Bounds, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement,
-    KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    SharedString, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, div, point,
-    prelude::*, px, rgb, size,
+    Animation, AnimationExt as _, App, Application, Bounds, Context, Div, Entity, FontWeight,
+    InteractiveElement, KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, SharedString, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, ease_out_quint, point, prelude::*, px, rgb, size,
 };
 use ryusei_domain_core::gtp::AnalysisStream;
 use ryusei_domain_core::legacy::handicap_placement;
@@ -81,6 +85,7 @@ use crate::settings_form::{
     string_array_edit, toggle_boolean_edit,
 };
 use crate::sound_feedback::{SoundCue, SoundSink, platform_sound_sink, play_if_enabled};
+use crate::text_inputs::TextInputs;
 use crate::theme::{ThemeTokens, UiPalette, ui_palette};
 use crate::variation_tree::build_variation_tree_layout;
 use crate::winrate_graph::{
@@ -156,6 +161,8 @@ actions!(
         PluginPositionToSgf,
         PluginInstallZip,
         TogglePluginMenu,
+        FocusNext,
+        FocusPrev,
         Quit,
     ]
 );
@@ -173,6 +180,16 @@ pub enum BottomDeckTab {
     Generic(String),
 }
 
+/// Engine-configuration surfaces hosted in the left engine sidebar after the
+/// bottom deck was slimmed down to the three analysis tabs (design §4.2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EngineConfigPanel {
+    KataGo,
+    Engines,
+    FoxSync,
+    PositionSgf,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 enum ActiveDrawer {
@@ -187,6 +204,7 @@ enum ActiveDrawer {
     OgsAccount,
     Review,
     Export,
+    MatchSetup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -262,6 +280,9 @@ struct ShellApp {
     /// list. The vertex is stored instead of a copied PV so live engine updates
     /// immediately refresh the preview line.
     hovered_candidate_vertex: Option<String>,
+    /// Index into the winrate graph points currently under the pointer, used to
+    /// render the floating readout tooltip (move/winrate/quality).
+    winrate_hover_index: Option<usize>,
     /// Ephemeral move used for response analysis. It is replayed into the
     /// engine only and never appended to the SGF tree.
     trial_move: Option<MoveDto>,
@@ -280,23 +301,22 @@ struct ShellApp {
     /// their server-authoritative state through the same controller.
     clock: ClockController,
     clock_last_updated: Instant,
+    /// Last byo-yomi whole-second the countdown cue fired for, so the tick
+    /// sounds at most once per second while the period runs low.
+    last_byoyomi_tick_secs: Option<u64>,
     restart_analysis_after_position_change: bool,
     /// Node the attached engine was last replayed to. When a new analysis run
     /// targets the same node, the engine position (and thus KataGo's search
     /// tree) is reused so a deeper `maxVisits` pass builds on the shallow one.
     last_analysis_node: Option<ryusei_domain_core::NodeId>,
     engine_log: Vec<EngineLogEntry>,
-    engine_input_focus_handle: FocusHandle,
-    engine_draft: SharedString,
-    engine_spec_input: NativeTextInput,
-    engine_spec_focus_handle: FocusHandle,
+    /// Aggregated editable text buffers and their focus handles.
+    text_inputs: TextInputs,
     engine_spec_editing_name: Option<String>,
+    /// Which engine-configuration panel is expanded in the left engine sidebar
+    /// (KataGo setup / engine manager). `None` collapses the section.
+    engine_config_panel: Option<EngineConfigPanel>,
     gtp_terminal_open: bool,
-    gtp_input: NativeTextInput,
-    fox_query_input: NativeTextInput,
-    fox_query_focus_handle: FocusHandle,
-    live_url_input: NativeTextInput,
-    live_url_focus_handle: FocusHandle,
     live_source_url: Option<String>,
     live_ogs_state: Option<ryusei_host::OgsPublicGameState>,
     /// Polls public OGS broadcasts while this document remains the active live source.
@@ -306,31 +326,11 @@ struct ShellApp {
     ogs_client: Arc<ryusei_host::LiveOgsClient>,
     #[allow(dead_code)]
     ogs_state_task: Option<Task<()>>,
-    ogs_username_input: NativeTextInput,
-    ogs_password_input: NativeTextInput,
-    ogs_username_focus_handle: FocusHandle,
-    ogs_password_focus_handle: FocusHandle,
-    ogs_game_id_input: NativeTextInput,
-    ogs_game_id_focus_handle: FocusHandle,
-    ogs_chat_input: NativeTextInput,
-    ogs_chat_focus_handle: FocusHandle,
     ogs_login_in_progress: bool,
     ogs_projected_moves: u32,
     ogs_marking_dead: bool,
     ogs_removed_stones: BTreeSet<String>,
     ogs_last_pass_notified_move: u32,
-    library_id_input: NativeTextInput,
-    library_id_focus_handle: FocusHandle,
-    library_name_input: NativeTextInput,
-    library_name_focus_handle: FocusHandle,
-    library_github_url_input: NativeTextInput,
-    library_github_url_focus_handle: FocusHandle,
-    library_reference_input: NativeTextInput,
-    library_reference_focus_handle: FocusHandle,
-    library_license_name_input: NativeTextInput,
-    library_license_name_focus_handle: FocusHandle,
-    library_license_url_input: NativeTextInput,
-    library_license_url_focus_handle: FocusHandle,
     library_rights_confirmed: bool,
     library_sources: Vec<ryusei_host::SgfLibrarySource>,
     library_selected_source: Option<String>,
@@ -358,10 +358,6 @@ struct ShellApp {
     board_size: usize,
     #[allow(dead_code)]
     settings_editing_key: Option<String>,
-    #[allow(dead_code)]
-    settings_draft: SharedString,
-    #[allow(dead_code)]
-    settings_input_focus_handle: FocusHandle,
     plugin_controller: ryusei_host::PluginController<NativePluginPersistence>,
     installed_plugins: Vec<PluginPanelEntry>,
     last_vertex: Option<Vertex>,
@@ -369,11 +365,9 @@ struct ShellApp {
     mode: GameMode,
     line_start: Option<Vertex>,
     hovered_vertex: Option<Vertex>,
-    comment_focus_handle: FocusHandle,
-    comment_input: NativeTextInput,
-    #[allow(dead_code)]
-    node_title_focus_handle: FocusHandle,
-    node_title_input: NativeTextInput,
+    /// Whether the node-comment box shows a rendered Markdown preview instead
+    /// of the editable plain-text source (PRD §4.3 live preview).
+    comment_preview: bool,
     active_text_input: Option<ActiveTextInput>,
     status: SharedString,
     /// Prominent transient notification shown as a centered toast overlay.
@@ -827,6 +821,7 @@ impl ShellApp {
             batch_review_state: None,
             batch_review_profile: None,
             hovered_candidate_vertex: None,
+            winrate_hover_index: None,
             trial_move: None,
             last_analysis_trial_move: None,
             active_analysis_trial_move: None,
@@ -837,20 +832,14 @@ impl ShellApp {
             session_policy,
             clock,
             clock_last_updated: Instant::now(),
+            last_byoyomi_tick_secs: None,
             restart_analysis_after_position_change: false,
             last_analysis_node: None,
             engine_log: Vec::new(),
-            engine_input_focus_handle: cx.focus_handle(),
-            engine_draft: "".into(),
-            engine_spec_input: NativeTextInput::new(""),
-            engine_spec_focus_handle: cx.focus_handle(),
+            text_inputs: TextInputs::new(cx),
             engine_spec_editing_name: None,
+            engine_config_panel: None,
             gtp_terminal_open: false,
-            gtp_input: NativeTextInput::new(""),
-            fox_query_input: NativeTextInput::new(""),
-            fox_query_focus_handle: cx.focus_handle(),
-            live_url_input: NativeTextInput::new(""),
-            live_url_focus_handle: cx.focus_handle(),
             live_source_url: None,
             live_ogs_state: None,
             live_ogs_poll_task: None,
@@ -858,31 +847,11 @@ impl ShellApp {
             ogs_auth_state: ryusei_host::OgsAuthState::SignedOut,
             ogs_client,
             ogs_state_task,
-            ogs_username_input: NativeTextInput::new(""),
-            ogs_password_input: NativeTextInput::new(""),
-            ogs_username_focus_handle: cx.focus_handle(),
-            ogs_password_focus_handle: cx.focus_handle(),
-            ogs_game_id_input: NativeTextInput::new(""),
-            ogs_game_id_focus_handle: cx.focus_handle(),
-            ogs_chat_input: NativeTextInput::new(""),
-            ogs_chat_focus_handle: cx.focus_handle(),
             ogs_login_in_progress: false,
             ogs_projected_moves: 0,
             ogs_marking_dead: false,
             ogs_removed_stones: BTreeSet::new(),
             ogs_last_pass_notified_move: 0,
-            library_id_input: NativeTextInput::new(""),
-            library_id_focus_handle: cx.focus_handle(),
-            library_name_input: NativeTextInput::new(""),
-            library_name_focus_handle: cx.focus_handle(),
-            library_github_url_input: NativeTextInput::new(""),
-            library_github_url_focus_handle: cx.focus_handle(),
-            library_reference_input: NativeTextInput::new("main"),
-            library_reference_focus_handle: cx.focus_handle(),
-            library_license_name_input: NativeTextInput::new(""),
-            library_license_name_focus_handle: cx.focus_handle(),
-            library_license_url_input: NativeTextInput::new(""),
-            library_license_url_focus_handle: cx.focus_handle(),
             library_rights_confirmed: false,
             library_selected_source: library_sources.first().map(|source| source.id.clone()),
             library_sources,
@@ -906,8 +875,6 @@ impl ShellApp {
             legacy_asar_themes,
             board_size,
             settings_editing_key: None,
-            settings_draft: "".into(),
-            settings_input_focus_handle: cx.focus_handle(),
             plugin_controller,
             installed_plugins,
             last_vertex: active_tab_last_vertex,
@@ -915,10 +882,7 @@ impl ShellApp {
             mode: active_tab_mode,
             line_start: None,
             hovered_vertex: None,
-            comment_focus_handle: cx.focus_handle(),
-            comment_input: NativeTextInput::new(""),
-            node_title_focus_handle: cx.focus_handle(),
-            node_title_input: NativeTextInput::new(""),
+            comment_preview: false,
             active_text_input: None,
             status: status.into(),
             toast: None,
@@ -960,7 +924,7 @@ impl ShellApp {
         self.active_console_role = EngineRole::ALL
             .into_iter()
             .find(|role| self.engine_roles.get(*role) == Some(name));
-        window.focus(&self.engine_input_focus_handle);
+        window.focus(&self.text_inputs.engine_input_focus_handle);
         cx.notify();
     }
 
@@ -1025,7 +989,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::FoxQuery);
-        window.focus(&self.fox_query_focus_handle);
+        window.focus(&self.text_inputs.fox_query_focus_handle);
         cx.notify();
     }
 
@@ -1035,12 +999,12 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.fox_query_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.fox_query_input, event) {
             InputKeyResult::Submit => {
                 self.fetch_fox_query(cx);
             }
             InputKeyResult::Cancel => {
-                self.fox_query_input.set_text("");
+                self.text_inputs.fox_query_input.set_text("");
                 cx.notify();
             }
             InputKeyResult::Changed | InputKeyResult::Ignored => {
@@ -1056,7 +1020,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::LiveUrl);
-        window.focus(&self.live_url_focus_handle);
+        window.focus(&self.text_inputs.live_url_focus_handle);
         cx.notify();
     }
 
@@ -1066,10 +1030,10 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.live_url_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.live_url_input, event) {
             InputKeyResult::Submit => self.capture_public_live_game(cx),
             InputKeyResult::Cancel => {
-                self.live_url_input.set_text("");
+                self.text_inputs.live_url_input.set_text("");
                 cx.notify();
             }
             InputKeyResult::Changed | InputKeyResult::Ignored => cx.notify(),
@@ -1083,7 +1047,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::OgsUsername);
-        window.focus(&self.ogs_username_focus_handle);
+        window.focus(&self.text_inputs.ogs_username_focus_handle);
         cx.notify();
     }
 
@@ -1094,9 +1058,9 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         if let InputKeyResult::Submit =
-            Self::handle_text_input_key(&mut self.ogs_username_input, event)
+            Self::handle_text_input_key(&mut self.text_inputs.ogs_username_input, event)
         {
-            _window.focus(&self.ogs_password_focus_handle);
+            _window.focus(&self.text_inputs.ogs_password_focus_handle);
         }
         cx.notify();
     }
@@ -1108,7 +1072,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::OgsPassword);
-        window.focus(&self.ogs_password_focus_handle);
+        window.focus(&self.text_inputs.ogs_password_focus_handle);
         cx.notify();
     }
 
@@ -1119,7 +1083,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         if let InputKeyResult::Submit =
-            Self::handle_text_input_key(&mut self.ogs_password_input, event)
+            Self::handle_text_input_key(&mut self.text_inputs.ogs_password_input, event)
         {
             self.ogs_login(cx);
         }
@@ -1133,7 +1097,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::OgsGameId);
-        window.focus(&self.ogs_game_id_focus_handle);
+        window.focus(&self.text_inputs.ogs_game_id_focus_handle);
         cx.notify();
     }
 
@@ -1144,7 +1108,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         if let InputKeyResult::Submit =
-            Self::handle_text_input_key(&mut self.ogs_game_id_input, event)
+            Self::handle_text_input_key(&mut self.text_inputs.ogs_game_id_input, event)
         {
             self.connect_ogs_game(cx);
         }
@@ -1158,7 +1122,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::OgsChat);
-        window.focus(&self.ogs_chat_focus_handle);
+        window.focus(&self.text_inputs.ogs_chat_focus_handle);
         cx.notify();
     }
 
@@ -1168,7 +1132,8 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let InputKeyResult::Submit = Self::handle_text_input_key(&mut self.ogs_chat_input, event)
+        if let InputKeyResult::Submit =
+            Self::handle_text_input_key(&mut self.text_inputs.ogs_chat_input, event)
         {
             self.ogs_send_chat(cx);
         }
@@ -1176,7 +1141,7 @@ impl ShellApp {
     }
 
     fn capture_public_live_game(&mut self, cx: &mut Context<Self>) {
-        let url = self.live_url_input.text().trim().to_owned();
+        let url = self.text_inputs.live_url_input.text().trim().to_owned();
         if let Err(error) = ryusei_host::validate_public_https_url(&url) {
             self.show_toast(format!("公共直播地址无效: {error}"), cx);
             return;
@@ -1390,12 +1355,16 @@ impl ShellApp {
     ) {
         self.active_text_input = Some(field);
         let focus = match field {
-            ActiveTextInput::LibraryId => &self.library_id_focus_handle,
-            ActiveTextInput::LibraryName => &self.library_name_focus_handle,
-            ActiveTextInput::LibraryGithubUrl => &self.library_github_url_focus_handle,
-            ActiveTextInput::LibraryReference => &self.library_reference_focus_handle,
-            ActiveTextInput::LibraryLicenseName => &self.library_license_name_focus_handle,
-            ActiveTextInput::LibraryLicenseUrl => &self.library_license_url_focus_handle,
+            ActiveTextInput::LibraryId => &self.text_inputs.library_id_focus_handle,
+            ActiveTextInput::LibraryName => &self.text_inputs.library_name_focus_handle,
+            ActiveTextInput::LibraryGithubUrl => &self.text_inputs.library_github_url_focus_handle,
+            ActiveTextInput::LibraryReference => &self.text_inputs.library_reference_focus_handle,
+            ActiveTextInput::LibraryLicenseName => {
+                &self.text_inputs.library_license_name_focus_handle
+            }
+            ActiveTextInput::LibraryLicenseUrl => {
+                &self.text_inputs.library_license_url_focus_handle
+            }
             _ => return,
         };
         window.focus(focus);
@@ -1410,22 +1379,22 @@ impl ShellApp {
     ) {
         let result = match self.active_text_input {
             Some(ActiveTextInput::LibraryId) => {
-                Self::handle_text_input_key(&mut self.library_id_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_id_input, event)
             }
             Some(ActiveTextInput::LibraryName) => {
-                Self::handle_text_input_key(&mut self.library_name_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_name_input, event)
             }
             Some(ActiveTextInput::LibraryGithubUrl) => {
-                Self::handle_text_input_key(&mut self.library_github_url_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_github_url_input, event)
             }
             Some(ActiveTextInput::LibraryReference) => {
-                Self::handle_text_input_key(&mut self.library_reference_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_reference_input, event)
             }
             Some(ActiveTextInput::LibraryLicenseName) => {
-                Self::handle_text_input_key(&mut self.library_license_name_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_license_name_input, event)
             }
             Some(ActiveTextInput::LibraryLicenseUrl) => {
-                Self::handle_text_input_key(&mut self.library_license_url_input, event)
+                Self::handle_text_input_key(&mut self.text_inputs.library_license_url_input, event)
             }
             _ => InputKeyResult::Ignored,
         };
@@ -1437,7 +1406,7 @@ impl ShellApp {
     }
 
     fn fetch_fox_query(&mut self, cx: &mut Context<Self>) {
-        let query = self.fox_query_input.text().trim().to_owned();
+        let query = self.text_inputs.fox_query_input.text().trim().to_owned();
         if query.is_empty() {
             self.status = "输入野狐用户名或 ID 后按 Enter 查询".into();
             self.show_toast("请输入野狐用户名或 ID 后按 Enter 查询".to_owned(), cx);
@@ -1508,7 +1477,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::GtpInput);
-        window.focus(&self.engine_input_focus_handle);
+        window.focus(&self.text_inputs.engine_input_focus_handle);
         cx.notify();
     }
 
@@ -1518,15 +1487,15 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.gtp_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.gtp_input, event) {
             InputKeyResult::Submit => {
-                let draft = self.gtp_input.text().trim().to_owned();
+                let draft = self.text_inputs.gtp_input.text().trim().to_owned();
                 self.send_engine_command(&draft, cx);
-                self.gtp_input.set_text("");
+                self.text_inputs.gtp_input.set_text("");
                 cx.notify();
             }
             InputKeyResult::Cancel => {
-                self.gtp_input.set_text("");
+                self.text_inputs.gtp_input.set_text("");
                 cx.notify();
             }
             InputKeyResult::Changed | InputKeyResult::Ignored => {
@@ -1542,7 +1511,7 @@ impl ShellApp {
         cx: &mut Context<Self>,
     ) {
         self.active_text_input = Some(ActiveTextInput::EngineSpec);
-        window.focus(&self.engine_spec_focus_handle);
+        window.focus(&self.text_inputs.engine_spec_focus_handle);
         cx.notify();
     }
 
@@ -1552,10 +1521,10 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.engine_spec_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.engine_spec_input, event) {
             InputKeyResult::Submit => self.save_engine_spec(cx),
             InputKeyResult::Cancel => {
-                self.engine_spec_input.set_text("");
+                self.text_inputs.engine_spec_input.set_text("");
                 self.engine_spec_editing_name = None;
                 cx.notify();
             }
@@ -1579,7 +1548,7 @@ impl ShellApp {
     }
 
     pub fn save_engine_spec(&mut self, cx: &mut Context<Self>) {
-        let spec = self.engine_spec_input.text().trim().to_owned();
+        let spec = self.text_inputs.engine_spec_input.text().trim().to_owned();
         let record = match crate::engine_console::parse_engine_spec(&spec) {
             Ok(record) => record,
             Err(error) => {
@@ -1628,7 +1597,7 @@ impl ShellApp {
             self.show_toast(format!("保存引擎失败: {error}"), cx);
             return;
         }
-        self.engine_spec_input.set_text("");
+        self.text_inputs.engine_spec_input.set_text("");
         self.status = format!("已保存 GTP 引擎: {}", record.name).into();
         self.show_toast(self.status.clone(), cx);
         cx.notify();
@@ -1642,7 +1611,7 @@ impl ShellApp {
             return;
         };
         let path = path.display().to_string();
-        let current = self.engine_spec_input.text().trim();
+        let current = self.text_inputs.engine_spec_input.text().trim();
         let next = if current.split('|').count() >= 2 {
             let mut fields = current.splitn(4, '|').map(str::trim);
             let name = fields.next().unwrap_or_default();
@@ -1657,7 +1626,7 @@ impl ShellApp {
                 .unwrap_or("GTP Engine");
             format!("{name} | {path} |  | ")
         };
-        self.engine_spec_input.set_text(&next);
+        self.text_inputs.engine_spec_input.set_text(&next);
         self.status = "已选择 GTP 引擎可执行文件；请确认规格后保存".into();
         cx.notify();
     }
@@ -1678,7 +1647,7 @@ impl ShellApp {
             record.args,
             record.commands.as_deref().unwrap_or_default()
         );
-        self.engine_spec_input.set_text(&spec);
+        self.text_inputs.engine_spec_input.set_text(&spec);
         self.engine_spec_editing_name = Some(name.to_owned());
         self.status = format!("正在编辑引擎: {name}").into();
         cx.notify();
@@ -1703,7 +1672,7 @@ impl ShellApp {
             return;
         }
         if self.engine_spec_editing_name.as_deref() == Some(name) {
-            self.engine_spec_input.set_text("");
+            self.text_inputs.engine_spec_input.set_text("");
             self.engine_spec_editing_name = None;
         }
         self.status = format!("已删除 GTP 引擎: {name}").into();
@@ -1884,8 +1853,8 @@ impl ShellApp {
             }
         };
         self.status = format!("{} engine: running {formatted}…", role.label()).into();
-        self.gtp_input.set_text("");
-        self.engine_draft = "".into();
+        self.text_inputs.gtp_input.set_text("");
+        self.text_inputs.engine_draft = "".into();
         let command_generation = self
             .engine_generations
             .get(&role)
@@ -3726,22 +3695,40 @@ impl ShellApp {
     }
 
     pub(crate) fn append_comment_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
-        let current = self.comment_input.text().to_owned();
+        let current = self.text_inputs.comment_input.text().to_owned();
         let updated = if current.is_empty() {
             tag.to_owned()
         } else {
             format!("{current} {tag}")
         };
-        self.comment_input.set_text(&updated);
+        self.text_inputs.comment_input.set_text(&updated);
         self.save_comment(&updated, cx);
+    }
+
+    fn toggle_comment_preview(&mut self, cx: &mut Context<Self>) {
+        self.comment_preview = !self.comment_preview;
+        cx.notify();
     }
 
     /// Selects a theme, swaps the active tokens and persists the choice under
     /// the `theme.current` setting key through the host settings workflow.
+    /// Aligns the gpui-component theme (Button/Badge/Checkbox colors) with the
+    /// active shell palette's luminance, so component controls stay legible on
+    /// both light and dark board themes instead of being forced dark.
+    fn sync_component_theme(&self, cx: &mut Context<Self>) {
+        let mode = if self.palette.is_dark() {
+            gpui_component::ThemeMode::Dark
+        } else {
+            gpui_component::ThemeMode::Light
+        };
+        gpui_component::Theme::change(mode, None, cx);
+    }
+
     pub(crate) fn on_theme_selected(&mut self, choice: ThemeChoice, cx: &mut Context<Self>) {
         self.theme_choice = choice;
         self.theme = choice.tokens();
         self.palette = ui_palette(&self.theme);
+        self.sync_component_theme(cx);
         match self
             .settings
             .set("theme.current", serde_json::json!(choice.setting_value()))
@@ -4752,13 +4739,13 @@ impl ShellApp {
             return;
         }
         self.settings_editing_key = Some(row.key.clone());
-        self.settings_draft = row
+        self.text_inputs.settings_draft = row
             .value
             .as_ref()
             .map(|value| editable_setting_value(Some(value)))
             .unwrap_or_default()
             .into();
-        window.focus(&self.settings_input_focus_handle);
+        window.focus(&self.text_inputs.settings_input_focus_handle);
         cx.notify();
     }
 
@@ -4769,7 +4756,7 @@ impl ShellApp {
         window: &mut Window,
         _: &mut Context<Self>,
     ) {
-        window.focus(&self.settings_input_focus_handle);
+        window.focus(&self.text_inputs.settings_input_focus_handle);
     }
 
     #[allow(dead_code)]
@@ -4788,7 +4775,7 @@ impl ShellApp {
         else {
             return;
         };
-        let mut draft = self.settings_draft.to_string();
+        let mut draft = self.text_inputs.settings_draft.to_string();
         match event.keystroke.key.as_str() {
             "backspace" => {
                 draft.pop();
@@ -4799,7 +4786,7 @@ impl ShellApp {
             }
             "escape" => {
                 self.settings_editing_key = None;
-                self.settings_draft = "".into();
+                self.text_inputs.settings_draft = "".into();
                 cx.notify();
                 return;
             }
@@ -4809,7 +4796,7 @@ impl ShellApp {
                 }
             }
         }
-        self.settings_draft = draft.into();
+        self.text_inputs.settings_draft = draft.into();
         cx.notify();
     }
 
@@ -4842,7 +4829,7 @@ impl ShellApp {
             Err(error) => self.status = format!("setting {} rejected: {error}", row.key).into(),
         }
         self.settings_editing_key = None;
-        self.settings_draft = "".into();
+        self.text_inputs.settings_draft = "".into();
         cx.notify();
     }
 
@@ -6072,6 +6059,15 @@ impl ShellApp {
                 period_time_secs
             )
             .into(),
+            TimeControl::Fischer {
+                main_time_secs,
+                increment_secs,
+            } => format!(
+                "time control: {} minutes + {}s increment (Fischer)",
+                main_time_secs / 60,
+                increment_secs
+            )
+            .into(),
         };
         self.synchronize_recovery();
         cx.notify();
@@ -6081,6 +6077,11 @@ impl ShellApp {
         let elapsed = now.saturating_duration_since(self.clock_last_updated);
         self.clock_last_updated = now;
         if let Some(ClockEvent::Expired(loser)) = self.clock.tick(elapsed) {
+            crate::sound_feedback::play_if_enabled(
+                &self.settings,
+                &mut *self.sound_sink,
+                crate::sound_feedback::SoundCue::TimeExpired,
+            );
             let winner = match loser {
                 Color::Black => "W",
                 Color::White => "B",
@@ -6099,6 +6100,42 @@ impl ShellApp {
             self.synchronize_recovery();
             cx.notify();
         }
+        self.play_byoyomi_countdown_cue();
+    }
+
+    /// Emits the byo-yomi countdown cue as the active player's period runs low
+    /// (last 10 seconds), at most once per whole second (PRD §2 读秒语音反馈).
+    fn play_byoyomi_countdown_cue(&mut self) {
+        let state = self.clock.state();
+        if !state.running || state.paused {
+            self.last_byoyomi_tick_secs = None;
+            return;
+        }
+        let Some(active) = state.active_color else {
+            return;
+        };
+        let player = match active {
+            Color::Black => state.black,
+            Color::White => state.white,
+        };
+        if !matches!(player.phase, ryusei_domain_core::ClockPhase::ByoYomi) {
+            self.last_byoyomi_tick_secs = None;
+            return;
+        }
+        let secs = player.display_remaining().as_secs();
+        if secs == 0 || secs > 10 {
+            self.last_byoyomi_tick_secs = None;
+            return;
+        }
+        if self.last_byoyomi_tick_secs == Some(secs) {
+            return;
+        }
+        self.last_byoyomi_tick_secs = Some(secs);
+        crate::sound_feedback::play_if_enabled(
+            &self.settings,
+            &mut *self.sound_sink,
+            crate::sound_feedback::SoundCue::ByoYomiTick,
+        );
     }
 
     fn commit_clock_move(&mut self, color: Color) -> bool {
@@ -6230,10 +6267,10 @@ impl ShellApp {
     }
 
     fn on_comment_focus(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
-        window.focus(&self.comment_focus_handle);
+        window.focus(&self.text_inputs.comment_focus_handle);
         self.active_text_input = Some(ActiveTextInput::Comment);
         let metadata = current_node_metadata(&self.host.snapshot());
-        self.comment_input.set_text(metadata.comment);
+        self.text_inputs.comment_input.set_text(metadata.comment);
     }
 
     #[allow(dead_code)]
@@ -6243,9 +6280,9 @@ impl ShellApp {
         window: &mut Window,
         _: &mut Context<Self>,
     ) {
-        window.focus(&self.node_title_focus_handle);
+        window.focus(&self.text_inputs.node_title_focus_handle);
         self.active_text_input = Some(ActiveTextInput::NodeTitle);
-        self.node_title_input.set_text(
+        self.text_inputs.node_title_input.set_text(
             self.host
                 .snapshot()
                 .nodes
@@ -6302,10 +6339,10 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.node_title_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.node_title_input, event) {
             InputKeyResult::Submit => {
                 let metadata = current_node_metadata(&self.host.snapshot());
-                let title = self.node_title_input.text().trim().to_owned();
+                let title = self.text_inputs.node_title_input.text().trim().to_owned();
                 let mut events = RecordingSink;
                 match self.host.apply_transaction(
                     crate::node_inspector::create_property_transaction(
@@ -6320,14 +6357,14 @@ impl ShellApp {
                     &mut events,
                 ) {
                     Ok(_) => {
-                        self.node_title_input.set_text("");
+                        self.text_inputs.node_title_input.set_text("");
                         self.status = "node title saved".into();
                         self.synchronize_recovery();
                     }
                     Err(error) => self.status = format!("node title failed: {error}").into(),
                 }
             }
-            InputKeyResult::Cancel => self.node_title_input.set_text(
+            InputKeyResult::Cancel => self.text_inputs.node_title_input.set_text(
                 self.host
                     .snapshot()
                     .nodes
@@ -6349,14 +6386,15 @@ impl ShellApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match Self::handle_text_input_key(&mut self.comment_input, event) {
+        match Self::handle_text_input_key(&mut self.text_inputs.comment_input, event) {
             InputKeyResult::Submit => {
-                let comment = self.comment_input.text().to_owned();
+                let comment = self.text_inputs.comment_input.text().to_owned();
                 self.save_comment(&comment, cx);
                 return;
             }
             InputKeyResult::Cancel => {
-                self.comment_input
+                self.text_inputs
+                    .comment_input
                     .set_text(current_node_metadata(&self.host.snapshot()).comment);
             }
             InputKeyResult::Changed | InputKeyResult::Ignored => {}
@@ -6371,7 +6409,7 @@ impl ShellApp {
         match self.host.apply_transaction(transaction, &mut events) {
             Ok(_) => {
                 self.status = "comment saved".into();
-                self.comment_input.set_text("");
+                self.text_inputs.comment_input.set_text("");
                 self.synchronize_recovery();
             }
             Err(error) => self.status = format!("comment failed: {error}").into(),
@@ -6517,6 +6555,13 @@ impl ShellApp {
     fn set_hovered_candidate(&mut self, vertex: Option<String>, cx: &mut Context<Self>) {
         if self.hovered_candidate_vertex != vertex {
             self.hovered_candidate_vertex = vertex;
+            cx.notify();
+        }
+    }
+
+    fn set_winrate_hover(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        if self.winrate_hover_index != index {
+            self.winrate_hover_index = index;
             cx.notify();
         }
     }
@@ -6788,32 +6833,32 @@ impl ShellApp {
                     .find(|source| source.id == selected)
             })
             .or_else(|| self.library_sources.first());
-        self.library_id_input.set_text(
+        self.text_inputs.library_id_input.set_text(
             source
                 .map(|source| source.id.as_str())
                 .unwrap_or("local-sgf"),
         );
-        self.library_name_input.set_text(
+        self.text_inputs.library_name_input.set_text(
             source
                 .map(|source| source.name.as_str())
                 .unwrap_or("授权 SGF 棋谱库"),
         );
-        self.library_github_url_input.set_text(
+        self.text_inputs.library_github_url_input.set_text(
             source
                 .map(|source| source.github_url.as_str())
                 .unwrap_or(""),
         );
-        self.library_reference_input.set_text(
+        self.text_inputs.library_reference_input.set_text(
             source
                 .map(|source| source.reference.as_str())
                 .unwrap_or("main"),
         );
-        self.library_license_name_input.set_text(
+        self.text_inputs.library_license_name_input.set_text(
             source
                 .and_then(|source| source.license_name.as_deref())
                 .unwrap_or(""),
         );
-        self.library_license_url_input.set_text(
+        self.text_inputs.library_license_url_input.set_text(
             source
                 .and_then(|source| source.license_url.as_deref())
                 .unwrap_or(""),
@@ -6842,12 +6887,12 @@ impl ShellApp {
 
     fn new_library_source(&mut self, cx: &mut Context<Self>) {
         self.library_selected_source = None;
-        self.library_id_input.set_text("");
-        self.library_name_input.set_text("");
-        self.library_github_url_input.set_text("");
-        self.library_reference_input.set_text("main");
-        self.library_license_name_input.set_text("");
-        self.library_license_url_input.set_text("");
+        self.text_inputs.library_id_input.set_text("");
+        self.text_inputs.library_name_input.set_text("");
+        self.text_inputs.library_github_url_input.set_text("");
+        self.text_inputs.library_reference_input.set_text("main");
+        self.text_inputs.library_license_name_input.set_text("");
+        self.text_inputs.library_license_url_input.set_text("");
         self.library_rights_confirmed = false;
         self.library_status = "填写新来源并确认再分发权".into();
         cx.notify();
@@ -6879,17 +6924,39 @@ impl ShellApp {
 
     fn library_source_from_form(&self) -> Result<ryusei_host::SgfLibrarySource, String> {
         let source = ryusei_host::SgfLibrarySource {
-            id: self.library_id_input.text().trim().to_owned(),
-            name: self.library_name_input.text().trim().to_owned(),
-            github_url: self.library_github_url_input.text().trim().to_owned(),
-            reference: self.library_reference_input.text().trim().to_owned(),
+            id: self.text_inputs.library_id_input.text().trim().to_owned(),
+            name: self.text_inputs.library_name_input.text().trim().to_owned(),
+            github_url: self
+                .text_inputs
+                .library_github_url_input
+                .text()
+                .trim()
+                .to_owned(),
+            reference: self
+                .text_inputs
+                .library_reference_input
+                .text()
+                .trim()
+                .to_owned(),
             rights: if self.library_rights_confirmed {
                 ryusei_host::RedistributionRights::Permitted
             } else {
                 ryusei_host::RedistributionRights::Unknown
             },
-            license_name: Some(self.library_license_name_input.text().trim().to_owned()),
-            license_url: Some(self.library_license_url_input.text().trim().to_owned()),
+            license_name: Some(
+                self.text_inputs
+                    .library_license_name_input
+                    .text()
+                    .trim()
+                    .to_owned(),
+            ),
+            license_url: Some(
+                self.text_inputs
+                    .library_license_url_input
+                    .text()
+                    .trim()
+                    .to_owned(),
+            ),
         };
         source
             .validate_for_sync()
@@ -7250,7 +7317,7 @@ impl ShellApp {
     }
 
     fn ogs_send_chat(&mut self, cx: &mut Context<Self>) {
-        let body = self.ogs_chat_input.text().trim().to_owned();
+        let body = self.text_inputs.ogs_chat_input.text().trim().to_owned();
         if body.is_empty() {
             return;
         }
@@ -7261,7 +7328,7 @@ impl ShellApp {
         let client = Arc::clone(&self.ogs_client);
         let game_id = game.game_id;
         let move_number = game.move_number;
-        self.ogs_chat_input.set_text("");
+        self.text_inputs.ogs_chat_input.set_text("");
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                 let cx = cx.clone();
@@ -7442,8 +7509,8 @@ impl ShellApp {
         if self.ogs_login_in_progress {
             return;
         }
-        let username = self.ogs_username_input.text().trim().to_owned();
-        let password = self.ogs_password_input.text().to_owned();
+        let username = self.text_inputs.ogs_username_input.text().trim().to_owned();
+        let password = self.text_inputs.ogs_password_input.text().to_owned();
         if username.is_empty() || password.is_empty() {
             self.show_toast("请输入 OGS 用户名和密码".to_owned(), cx);
             return;
@@ -7462,7 +7529,7 @@ impl ShellApp {
                         .await;
                     weak.update(&mut cx, |shell, cx| {
                         shell.ogs_login_in_progress = false;
-                        shell.ogs_password_input.set_text("");
+                        shell.text_inputs.ogs_password_input.set_text("");
                         match result {
                             Ok(user) => {
                                 shell.ogs_auth_state = ryusei_host::OgsAuthState::Authenticated;
@@ -7522,7 +7589,7 @@ impl ShellApp {
     /// Connects to an OGS game and switches the board into fair-play-locked
     /// remote competition mode.
     fn connect_ogs_game(&mut self, cx: &mut Context<Self>) {
-        let text = self.ogs_game_id_input.text().trim().to_owned();
+        let text = self.text_inputs.ogs_game_id_input.text().trim().to_owned();
         let Ok(game_id) = text.parse::<u64>() else {
             self.show_toast("请输入有效的 OGS 对局 ID".to_owned(), cx);
             return;
@@ -7635,16 +7702,22 @@ impl ShellApp {
             match target {
                 "winrate-graph" => BottomDeckTab::WinrateGraph,
                 "variation-tree" => BottomDeckTab::VariationTree,
-                "org.ryusei.katago-setup-hub" => BottomDeckTab::KataGo,
-                "org.ryusei.fox-kifu-sync" => BottomDeckTab::FoxSync,
-                "org.ryusei.position-to-sgf" => BottomDeckTab::PositionSgf,
                 "all" => BottomDeckTab::PluginManager,
-                "engines" => BottomDeckTab::Engines,
+                // Built-in engine/tool panels moved to the left engine sidebar;
+                // they no longer resolve to a deck tab, so stale popover ids
+                // fall through to the winrate graph instead of double-rendering.
+                other if Self::is_engine_sidebar_popover(other) => BottomDeckTab::WinrateGraph,
                 other => BottomDeckTab::Generic(other.to_owned()),
             }
         } else {
             BottomDeckTab::WinrateGraph
         }
+    }
+
+    /// Ids that used to open a deck tab but now live in the left engine
+    /// sidebar's "引擎与工具" section.
+    fn is_engine_sidebar_popover(id: &str) -> bool {
+        Self::engine_sidebar_panel_for(id).is_some()
     }
 
     pub fn switch_bottom_tab(&mut self, tab: BottomDeckTab, cx: &mut Context<Self>) {
@@ -7662,30 +7735,23 @@ impl ShellApp {
                 self.active_plugin_popover = None;
                 self.active_text_input = Some(ActiveTextInput::GtpInput);
             }
+            // Built-in engine/tool panels live only in the left engine sidebar;
+            // switching to them reroutes there instead of opening a deck tab.
             BottomDeckTab::KataGo => {
-                self.gtp_terminal_open = false;
-                self.active_plugin_popover = Some("org.ryusei.katago-setup-hub".to_owned());
-                if self.katago_release.is_none() {
-                    self.refresh_katago_panel(cx);
-                }
+                self.open_engine_config_panel(EngineConfigPanel::KataGo, cx);
             }
             BottomDeckTab::FoxSync => {
-                self.gtp_terminal_open = false;
-                self.active_plugin_popover = Some("org.ryusei.fox-kifu-sync".to_owned());
-                self.active_text_input = Some(ActiveTextInput::FoxQuery);
+                self.open_engine_config_panel(EngineConfigPanel::FoxSync, cx);
             }
             BottomDeckTab::PositionSgf => {
-                self.gtp_terminal_open = false;
-                self.active_plugin_popover = Some("org.ryusei.position-to-sgf".to_owned());
+                self.open_engine_config_panel(EngineConfigPanel::PositionSgf, cx);
             }
             BottomDeckTab::PluginManager => {
                 self.gtp_terminal_open = false;
                 self.active_plugin_popover = Some("all".to_owned());
             }
             BottomDeckTab::Engines => {
-                self.gtp_terminal_open = false;
-                self.active_plugin_popover = Some("engines".to_owned());
-                self.active_text_input = Some(ActiveTextInput::EngineSpec);
+                self.open_engine_config_panel(EngineConfigPanel::Engines, cx);
             }
             BottomDeckTab::Generic(id) => {
                 self.gtp_terminal_open = false;
@@ -7710,7 +7776,54 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// Expands an engine-configuration panel in the left engine sidebar,
+    /// opening the sidebar first if it is hidden. Used by the deck-slimming
+    /// migration: KataGo setup and the engine manager now live there.
+    fn open_engine_config_panel(&mut self, panel: EngineConfigPanel, cx: &mut Context<Self>) {
+        if !self
+            .settings
+            .get_bool("view.show_leftsidebar")
+            .unwrap_or(false)
+        {
+            self.settings
+                .set("view.show_leftsidebar", serde_json::Value::Bool(true))
+                .ok();
+        }
+        self.engine_config_panel = Some(panel);
+        match panel {
+            EngineConfigPanel::KataGo => {
+                if self.katago_release.is_none() {
+                    self.refresh_katago_panel(cx);
+                }
+            }
+            EngineConfigPanel::Engines => {
+                self.active_text_input = Some(ActiveTextInput::EngineSpec);
+            }
+            EngineConfigPanel::FoxSync => {
+                self.active_text_input = Some(ActiveTextInput::FoxQuery);
+            }
+            EngineConfigPanel::PositionSgf => {}
+        }
+        cx.notify();
+    }
+
+    fn toggle_engine_config_panel(&mut self, panel: EngineConfigPanel, cx: &mut Context<Self>) {
+        if self.engine_config_panel == Some(panel) {
+            self.engine_config_panel = None;
+        } else {
+            self.open_engine_config_panel(panel, cx);
+        }
+        cx.notify();
+    }
+
     fn toggle_plugin_popover(&mut self, id: &str, cx: &mut Context<Self>) {
+        // Engine/tool panels moved to the left engine sidebar: reroute those
+        // ids there so the panel has a single render path (no deck/sidebar
+        // double render with divergent form state).
+        if let Some(panel) = Self::engine_sidebar_panel_for(id) {
+            self.toggle_engine_config_panel(panel, cx);
+            return;
+        }
         if self.active_plugin_popover.as_deref() == Some(id) {
             self.active_plugin_popover = None;
         } else {
@@ -7718,6 +7831,17 @@ impl ShellApp {
             self.gtp_terminal_open = false;
         }
         cx.notify();
+    }
+
+    /// Maps a legacy engine/tool popover id to its left-sidebar panel.
+    fn engine_sidebar_panel_for(id: &str) -> Option<EngineConfigPanel> {
+        Some(match id {
+            "org.ryusei.katago-setup-hub" => EngineConfigPanel::KataGo,
+            "org.ryusei.fox-kifu-sync" => EngineConfigPanel::FoxSync,
+            "org.ryusei.position-to-sgf" => EngineConfigPanel::PositionSgf,
+            "engines" => EngineConfigPanel::Engines,
+            _ => return None,
+        })
     }
 
     fn close_plugin_popover(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -7767,6 +7891,10 @@ impl ShellApp {
 
     fn open_about(&mut self, cx: &mut Context<Self>) {
         self.open_drawer(ActiveDrawer::About, "about opened", cx);
+    }
+
+    fn open_match_setup(&mut self, cx: &mut Context<Self>) {
+        self.open_drawer(ActiveDrawer::MatchSetup, "match setup opened", cx);
     }
 
     fn close_drawer(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -7839,6 +7967,70 @@ impl ShellApp {
         }
         self.game_graph_context_node = None;
         cx.notify();
+    }
+
+    /// Applies a variation-structure transaction (promote to main line / delete
+    /// branch) from the game-graph context menu, then closes the menu.
+    fn apply_game_graph_structure_transaction(
+        &mut self,
+        transaction_type: ryusei_domain_core::GameTransactionType,
+        status_ok: &'static str,
+        status_err: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node_id) = self.game_graph_context_node.clone() else {
+            return;
+        };
+        let transaction = ryusei_domain_core::GameTransaction {
+            schema_version: ryusei_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
+            transaction_type,
+            color: None,
+            vertex: None,
+            node_id: Some(node_id),
+            property: None,
+            values: Vec::new(),
+            marker: None,
+            nodes: Vec::new(),
+            score_override: None,
+        };
+        let mut events = RecordingSink;
+        match self.host.apply_transaction(transaction, &mut events) {
+            Ok(_) => {
+                self.status = status_ok.into();
+                self.synchronize_recovery();
+            }
+            Err(error) => self.status = format!("{status_err}: {error}").into(),
+        }
+        self.game_graph_context_node = None;
+        cx.notify();
+    }
+
+    fn promote_game_graph_context_variation(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_game_graph_structure_transaction(
+            ryusei_domain_core::GameTransactionType::PromoteVariation,
+            "variation promoted to main line",
+            "promote variation failed",
+            cx,
+        );
+    }
+
+    fn delete_game_graph_context_variation(
+        &mut self,
+        _: &MouseDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_game_graph_structure_transaction(
+            ryusei_domain_core::GameTransactionType::RemoveVariation,
+            "variation branch deleted",
+            "delete variation failed",
+            cx,
+        );
     }
 
     #[allow(dead_code)]
@@ -7959,25 +8151,34 @@ impl Render for ShellApp {
         let window_bounds = window.bounds();
         let window_width = f32::from(window_bounds.size.width);
         let window_height = f32::from(window_bounds.size.height);
+        // Responsive breakpoint (design: ≤1024px narrows the sidebars to
+        // 210/260). The cap never overrides a narrower user-dragged width.
+        let (left_cap, right_cap) = if window_width <= 1024.0 {
+            (210.0, 260.0)
+        } else {
+            (f32::MAX, f32::MAX)
+        };
+        let effective_left = self.left_sidebar_width.min(left_cap);
+        let effective_right = self.right_sidebar_width.min(right_cap);
         let side_panels = NAVIGATION_RAIL_WIDTH
             + if show_left_sidebar {
-                self.left_sidebar_width
+                effective_left
             } else {
                 0.0
             }
             + if show_right_sidebar {
-                self.right_sidebar_width
+                effective_right
             } else {
                 0.0
             };
         let bottom_panel_height = if self.is_bottom_deck_open() {
-            280.0
+            180.0
         } else {
             0.0
         };
         let available_width = (window_width - side_panels - 16.0).max(240.0);
         let available_height =
-            (window_height - 40.0 - 42.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
+            (window_height - 44.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
         let board_pixel_size = available_width.min(available_height).max(BOARD_PIXEL_SIZE);
 
         div()
@@ -7987,14 +8188,19 @@ impl Render for ShellApp {
             .flex_col()
             .bg(rgb(theme_color))
             .text_color(rgb(palette.text))
+            // Keyboard focus navigation: the shell is one tab group, so Tab /
+            // Shift-Tab cycle the text inputs marked with `tab_index` inside it.
+            .tab_group()
+            .on_action(|_: &FocusNext, window, _cx| window.focus_next())
+            .on_action(|_: &FocusPrev, window, _cx| window.focus_prev())
             .child(panels::render_titlebar(
                 show_left_sidebar,
                 show_right_sidebar,
                 &snapshot,
+                window_width,
                 self,
                 cx,
             ))
-            .child(panels::render_session_toolbar(self, cx))
             .child(
                 div()
                     .id("workspace")
@@ -8009,7 +8215,7 @@ impl Render for ShellApp {
                             .id("left-sidebar")
                             .debug_selector(|| "left-sidebar".to_owned())
                             .flex_none()
-                            .w(px(self.left_sidebar_width))
+                            .w(px(effective_left))
                             .h_full()
                             .min_h_0()
                             .flex()
@@ -8041,6 +8247,7 @@ impl Render for ShellApp {
                             .items_center()
                             .justify_center()
                             .gap_2()
+                            .child(panels::render_session_toolbar(self, cx))
                             .child(panels::render_floating_markup_bar(self, cx))
                             .child(panels::render_goban_area(
                                 &snapshot,
@@ -8062,7 +8269,7 @@ impl Render for ShellApp {
                             .id("right-sidebar")
                             .debug_selector(|| "right-sidebar".to_owned())
                             .flex_none()
-                            .w(px(self.right_sidebar_width))
+                            .w(px(effective_right))
                             .h_full()
                             .min_h_0()
                             .flex()
@@ -8182,6 +8389,7 @@ impl Render for ShellApp {
                 Some(ActiveDrawer::OgsAccount) => panels::render_ogs_account_drawer(self, cx),
                 Some(ActiveDrawer::Review) => panels::render_review_drawer(self, cx),
                 Some(ActiveDrawer::Export) => panels::render_export_drawer(&snapshot, self, cx),
+                Some(ActiveDrawer::MatchSetup) => panels::render_match_setup_drawer(self, cx),
                 None => div().id("drawer-hidden"),
             })
             .child(if self.split_drag.is_some() {
@@ -8229,14 +8437,24 @@ impl Render for ShellApp {
                         div()
                             .px_4()
                             .py_2p5()
-                            .rounded_lg()
-                            .bg(rgb(0x1c1c1e))
-                            .border_1()
-                            .border_color(rgb(0x3a3a3c))
+                            .rounded_full()
+                            .bg(rgb(palette.text))
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0xf5f5f7))
-                            .child(message.clone()),
+                            .text_color(rgb(palette.panel))
+                            .child(message.clone())
+                            // Design toastSlideUp: fade in while rising 10px over
+                            // the base motion duration with an ease-out curve.
+                            .with_animation(
+                                "toast-slide-up",
+                                Animation::new(Duration::from_millis(
+                                    crate::theme::motion::BASE_MS,
+                                ))
+                                .with_easing(ease_out_quint()),
+                                move |element, delta| {
+                                    element.opacity(delta).mt(px((1.0 - delta) * 10.0))
+                                },
+                            ),
                     )
             }))
     }
@@ -8244,25 +8462,7 @@ impl Render for ShellApp {
 
 impl ShellApp {
     fn active_text_input_mut(&mut self) -> Option<&mut NativeTextInput> {
-        match self.active_text_input {
-            Some(ActiveTextInput::Comment) => Some(&mut self.comment_input),
-            Some(ActiveTextInput::NodeTitle) => Some(&mut self.node_title_input),
-            Some(ActiveTextInput::FoxQuery) => Some(&mut self.fox_query_input),
-            Some(ActiveTextInput::LiveUrl) => Some(&mut self.live_url_input),
-            Some(ActiveTextInput::LibraryId) => Some(&mut self.library_id_input),
-            Some(ActiveTextInput::LibraryName) => Some(&mut self.library_name_input),
-            Some(ActiveTextInput::LibraryGithubUrl) => Some(&mut self.library_github_url_input),
-            Some(ActiveTextInput::LibraryReference) => Some(&mut self.library_reference_input),
-            Some(ActiveTextInput::LibraryLicenseName) => Some(&mut self.library_license_name_input),
-            Some(ActiveTextInput::LibraryLicenseUrl) => Some(&mut self.library_license_url_input),
-            Some(ActiveTextInput::GtpInput) => Some(&mut self.gtp_input),
-            Some(ActiveTextInput::EngineSpec) => Some(&mut self.engine_spec_input),
-            Some(ActiveTextInput::OgsUsername) => Some(&mut self.ogs_username_input),
-            Some(ActiveTextInput::OgsPassword) => Some(&mut self.ogs_password_input),
-            Some(ActiveTextInput::OgsGameId) => Some(&mut self.ogs_game_id_input),
-            Some(ActiveTextInput::OgsChat) => Some(&mut self.ogs_chat_input),
-            None => None,
-        }
+        self.text_inputs.active_mut(self.active_text_input)
     }
 }
 
@@ -8569,11 +8769,11 @@ fn shell_menus() -> Vec<Menu> {
         Menu {
             name: "Plugins".into(),
             items: vec![
-                MenuItem::action("⚡ KataGo 一键配置与环境诊断", PluginKataGoSetup),
-                MenuItem::action("🦊 野狐对局与棋谱同步", PluginFoxSync),
-                MenuItem::action("📋 局面转 SGF 剪贴板导出", PluginPositionToSgf),
+                MenuItem::action("KataGo 一键配置与环境诊断", PluginKataGoSetup),
+                MenuItem::action("野狐对局与棋谱同步", PluginFoxSync),
+                MenuItem::action("局面转 SGF 剪贴板导出", PluginPositionToSgf),
                 MenuItem::separator(),
-                MenuItem::action("📌 插件管理器 (固定到栏)", TogglePluginMenu),
+                MenuItem::action("插件管理器 (固定到栏)", TogglePluginMenu),
                 MenuItem::action("+ 从 ZIP 安装插件…", PluginInstallZip),
             ],
         },
@@ -8646,11 +8846,14 @@ fn schedule_external_check<V: gpui::Render + 'static>(
 
 fn main() {
     let startup_file = std::env::args().nth(1).map(PathBuf::from);
-    Application::new().run(move |cx: &mut App| {
+    Application::new()
+        .with_assets(icons::EmbeddedIcons)
+        .run(move |cx: &mut App| {
         gpui_component::init(cx);
-        // Force dark mode for gpui-component so Button/Badge text is always light
-        // on our dark toolbar, bottom deck, and sidebar backgrounds.
-        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        // The gpui-component theme is synced to the shell palette's luminance
+        // once the shell exists (see `ShellApp::sync_component_theme`), so
+        // component controls match the active light/dark board theme instead of
+        // being forced dark.
 
         let settings_persistence = match NativeSettingsPersistence::for_current_user() {
             Ok(persistence) => persistence,
@@ -8747,6 +8950,7 @@ fn main() {
             .unwrap();
         let shell: Entity<ShellApp> = shell_slot.unwrap();
         shell.update(cx, |shell, cx| {
+            shell.sync_component_theme(cx);
             if shell.analysis_enabled {
                 shell.start_analysis(cx);
             }
@@ -9061,19 +9265,19 @@ fn main() {
         let shell_p_katago = shell.clone();
         cx.on_action(move |_: &PluginKataGoSetup, cx| {
             shell_p_katago.update(cx, |shell, cx| {
-                shell.toggle_plugin_popover("org.ryusei.katago-setup-hub", cx);
+                shell.open_engine_config_panel(EngineConfigPanel::KataGo, cx);
             });
         });
         let shell_p_fox = shell.clone();
         cx.on_action(move |_: &PluginFoxSync, cx| {
             shell_p_fox.update(cx, |shell, cx| {
-                shell.toggle_plugin_popover("org.ryusei.fox-kifu-sync", cx);
+                shell.open_engine_config_panel(EngineConfigPanel::FoxSync, cx);
             });
         });
         let shell_p_pos = shell.clone();
         cx.on_action(move |_: &PluginPositionToSgf, cx| {
             shell_p_pos.update(cx, |shell, cx| {
-                shell.toggle_plugin_popover("org.ryusei.position-to-sgf", cx);
+                shell.open_engine_config_panel(EngineConfigPanel::PositionSgf, cx);
             });
         });
         let shell_p_zip = shell.clone();
@@ -9164,6 +9368,9 @@ fn main() {
             KeyBinding::new("left", GoToPreviousNode, None),
             KeyBinding::new("right", GoToNextNode, None),
             KeyBinding::new("cmd-right", GoToLastNode, None),
+            // Keyboard focus navigation (Tab / Shift-Tab cycles tab stops).
+            KeyBinding::new("tab", FocusNext, None),
+            KeyBinding::new("shift-tab", FocusPrev, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         if shell
@@ -9574,10 +9781,16 @@ mod headless_smoke {
     #[test]
     fn engine_manager_saves_records_and_assigns_roles() {
         with_headless_shell_cx("engine-manager", |shell, cx| {
+            // The engine manager moved to the left engine sidebar; switching to
+            // its deck tab reroutes there instead of opening a deck panel.
             shell.switch_bottom_tab(super::BottomDeckTab::Engines, cx);
-            assert_eq!(shell.active_bottom_tab(), super::BottomDeckTab::Engines);
+            assert_eq!(
+                shell.engine_config_panel,
+                Some(super::EngineConfigPanel::Engines)
+            );
 
             shell
+                .text_inputs
                 .engine_spec_input
                 .set_text("GNU Go | /usr/local/bin/gnugo | --mode gtp | level 10");
             shell.save_engine_spec(cx);
@@ -9713,7 +9926,7 @@ mod headless_smoke {
             assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);
 
             // Invalid game id must not enter remote mode.
-            shell.ogs_game_id_input.set_text("not-a-number");
+            shell.text_inputs.ogs_game_id_input.set_text("not-a-number");
             shell.connect_ogs_game(cx);
             assert_ne!(
                 shell.session_policy.source,
@@ -9951,6 +10164,7 @@ mod frontend_smoke {
                 pv: vec!["D4".to_owned()],
                 is_during_search: false,
                 ownership: None,
+                prior: None,
             }];
             shell.analysis_best_move = Some(Vertex { column: 3, row: 3 });
             shell.create_workspace_session(cx);
@@ -10038,10 +10252,16 @@ mod frontend_smoke {
         });
         vcx.run_until_parked();
 
+        // The match controls now live in a floating capsule above the goban
+        // (single 44px titlebar replaces the old 40px + 42px chrome stack).
         let session_toolbar = vcx
             .debug_bounds("session-toolbar")
-            .expect("the session context toolbar must remain visible");
-        assert_eq!(session_toolbar.size.height, px(42.0));
+            .expect("the floating match-control capsule must remain visible");
+        assert!(
+            f32::from(session_toolbar.size.height) <= 44.0,
+            "floating match capsule must be compact, got {:?}",
+            session_toolbar.size.height
+        );
         let goban_bounds = vcx
             .debug_bounds("goban")
             .expect("the rendered goban must have a debug selector");
@@ -10340,6 +10560,68 @@ mod frontend_smoke {
         assert!(
             persisted_width.is_some_and(|width| (width - 310.0).abs() < 0.75),
             "finishing the drag must persist the pane width, got {persisted_width:?}"
+        );
+        let _ = std::fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn tab_key_cycles_focus_through_registered_text_inputs() {
+        let config = temp_config("tab-focus");
+        let dispatcher = TestDispatcher::new(rand::rngs::StdRng::seed_from_u64(13));
+        let mut cx = TestAppContext::build(dispatcher, None);
+        let mut settings = SettingsStore::default();
+        settings
+            .set("view.show_comments", serde_json::json!(true))
+            .unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+        });
+        let mut shell_slot: Option<Entity<ShellApp>> = None;
+        let shell_ptr = &mut shell_slot as *mut Option<Entity<ShellApp>>;
+        let window_handle = cx.add_window(|window, cx| {
+            let app = cx.new(|cx| {
+                ShellApp::new(
+                    settings.clone(),
+                    NativeSettingsPersistence::new(config.clone()),
+                    NativeHostPersistence::new(config.clone()),
+                    NativePluginPersistence::new(config.clone()),
+                    "tab focus smoke".to_owned(),
+                    None,
+                    Box::new(MockDialogService::default()),
+                    cx,
+                )
+            });
+            unsafe {
+                *shell_ptr = Some(app.clone());
+            }
+            gpui_component::Root::new(app, window, cx)
+        });
+        let shell = shell_slot.unwrap();
+        let vcx = VisualTestContext::from_window(*window_handle.deref(), &cx).into_mut();
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+
+        // Focus the comment box directly, then Tab forward: focus must leave
+        // the comment box and move to another registered tab stop (proves the
+        // tab-stop ring is wired, without depending on the first-stop order).
+        let comment_handle = shell.read_with(&vcx.cx, |shell, _| {
+            shell.text_inputs.comment_focus_handle.clone()
+        });
+        vcx.update(|window, _cx| window.focus(&comment_handle));
+        vcx.update(|window, _cx| {
+            assert!(
+                comment_handle.is_focused(window),
+                "precondition: the comment box accepts direct focus"
+            );
+        });
+        vcx.update(|window, _cx| window.focus_next());
+        let moved_off_comment = vcx.update(|window, _cx| !comment_handle.is_focused(window));
+        assert!(
+            moved_off_comment,
+            "Tab must move focus from the comment box to the next registered tab stop"
         );
         let _ = std::fs::remove_dir_all(&config);
     }

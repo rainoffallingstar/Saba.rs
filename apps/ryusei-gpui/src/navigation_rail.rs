@@ -4,6 +4,7 @@ use gpui::{Context, Stateful, div, prelude::*, px, rgb};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Selectable, Sizable};
 
+use crate::icons::{self, ShellIcon};
 use crate::{NAVIGATION_RAIL_WIDTH, ShellApp};
 
 pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<gpui::Div> {
@@ -61,7 +62,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         .small()
                         .ghost()
                         .selected(current_session_mode == ryusei_domain_core::SessionMode::Record)
-                        .label("研")
+                        .child(icons::icon(ShellIcon::BookOpen, 16.0, shell.palette.muted))
                         .tooltip("打谱与研讨 (Record Mode)")
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.set_session_mode(ryusei_domain_core::SessionMode::Record, cx);
@@ -72,7 +73,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         .small()
                         .ghost()
                         .selected(current_session_mode == ryusei_domain_core::SessionMode::Match)
-                        .label("弈")
+                        .child(icons::icon(ShellIcon::Swords, 16.0, shell.palette.muted))
                         .tooltip("AI / 人机对弈 (Match Mode)")
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.set_session_mode(ryusei_domain_core::SessionMode::Match, cx);
@@ -83,7 +84,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         .small()
                         .ghost()
                         .selected(current_session_mode == ryusei_domain_core::SessionMode::Live)
-                        .label("播")
+                        .child(icons::icon(ShellIcon::Radio, 16.0, shell.palette.muted))
                         .tooltip("实时观战 (Live Broadcast)")
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.set_session_mode(ryusei_domain_core::SessionMode::Live, cx);
@@ -93,7 +94,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                     Button::new("nav-library")
                         .small()
                         .ghost()
-                        .label("谱")
+                        .child(icons::icon(ShellIcon::Library, 16.0, shell.palette.muted))
                         .tooltip("棋谱库与云同步 (Library)")
                         .on_click(cx.listener(|shell, _, _, cx| shell.open_library(cx))),
                 )
@@ -158,11 +159,15 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                     Button::new("nav-sound-toggle")
                         .small()
                         .ghost()
-                        .label(if shell.settings.get_bool("sound.enable").unwrap_or(true) {
-                            "音"
-                        } else {
-                            "静"
-                        })
+                        .child(icons::icon(
+                            if shell.settings.get_bool("sound.enable").unwrap_or(true) {
+                                ShellIcon::Volume2
+                            } else {
+                                ShellIcon::VolumeX
+                            },
+                            16.0,
+                            shell.palette.muted,
+                        ))
                         .tooltip("落子音效开关")
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.toggle_view_setting("sound.enable", "sound effects", cx);
@@ -188,7 +193,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                     Button::new("nav-settings")
                         .small()
                         .ghost()
-                        .label("SET")
+                        .child(icons::icon(ShellIcon::Settings, 16.0, shell.palette.muted))
                         .tooltip("偏好设置 (Cmd+,)")
                         .on_click(cx.listener(|shell, _, _, cx| shell.open_preferences(cx))),
                 ),

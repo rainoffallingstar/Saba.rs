@@ -254,8 +254,13 @@ pub fn markup_symbol(marker_type: &str, label: Option<&str>) -> String {
 
 /// Computes the scoring summary line for the status area: territory,
 /// stones, captures, komi and margin. Pure function so the panel logic is
-/// unit-testable without a view.
-pub fn scoring_summary(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
+/// unit-testable without a view. `estimator_iterations` is the
+/// `score.estimator_iterations` setting: `0` keeps the deterministic
+/// zero-liberty heuristic, `>0` uses Monte-Carlo playout for life-and-death.
+pub fn scoring_summary(
+    snapshot: &ryusei_domain_core::GameSnapshot,
+    estimator_iterations: usize,
+) -> String {
     let komi = snapshot
         .root_properties
         .get("KM")
@@ -269,11 +274,12 @@ pub fn scoring_summary(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
             .and_then(|values| values.first())
             .map(String::as_str),
     );
-    let result = ryusei_domain_core::score_board_with_rule(
+    let result = ryusei_domain_core::score_board_with_estimation(
         &snapshot.board,
         komi,
         &snapshot.score_overrides,
         rule,
+        estimator_iterations,
     );
     let winner = match result.winner {
         Some(ryusei_domain_core::Color::Black) => "Black",
@@ -331,7 +337,7 @@ mod tests {
         snapshot
             .root_properties
             .insert("KM".to_owned(), vec!["0".to_owned()]);
-        let summary = super::scoring_summary(&snapshot);
+        let summary = super::scoring_summary(&snapshot, 0);
         assert!(
             summary.contains("B 9.0"),
             "black total must be territory 5 + stones 4: {summary}"
@@ -355,7 +361,7 @@ mod tests {
         snapshot
             .root_properties
             .insert("KM".to_owned(), vec!["0".to_owned()]);
-        let summary = super::scoring_summary(&snapshot);
+        let summary = super::scoring_summary(&snapshot, 0);
         assert!(
             summary.contains("group tax (2 groups)"),
             "summary: {summary}"
@@ -380,7 +386,7 @@ mod tests {
         snapshot
             .root_properties
             .insert("KM".to_owned(), vec!["10".to_owned()]);
-        let summary = super::scoring_summary(&snapshot);
+        let summary = super::scoring_summary(&snapshot, 0);
         assert!(
             summary.contains("+ 10.0 komi") && summary.contains("→ White"),
             "komi must flip the winner: {summary}"

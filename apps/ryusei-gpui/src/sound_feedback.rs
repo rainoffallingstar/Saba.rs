@@ -7,6 +7,10 @@
 pub enum SoundCue {
     StonePlaced,
     Pass,
+    /// Byo-yomi countdown tick, emitted as the remaining period seconds run low.
+    ByoYomiTick,
+    /// Clock expired (a player lost on time).
+    TimeExpired,
 }
 
 pub trait SoundSink: 'static {
@@ -49,6 +53,8 @@ impl SoundSink for MacosSoundSink {
         let asset = match cue {
             SoundCue::StonePlaced => "/System/Library/Sounds/Tink.aiff",
             SoundCue::Pass => "/System/Library/Sounds/Pop.aiff",
+            SoundCue::ByoYomiTick => "/System/Library/Sounds/Morse.aiff",
+            SoundCue::TimeExpired => "/System/Library/Sounds/Sosumi.aiff",
         };
         let _ = std::process::Command::new("/usr/bin/afplay")
             .arg(asset)

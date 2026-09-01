@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 use std::{collections::BTreeMap, rc::Rc};
 
+use std::time::Duration;
+
 use gpui::{
-    App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Stateful, Styled, Window, div, hsla, px, rgb,
+    Animation, AnimationExt as _, App, BoxShadow, Div, FontWeight, InteractiveElement,
+    IntoElement as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
+    Stateful, Styled, Window, div, hsla, point, pulsating_between, px, rgb,
 };
 #[cfg(test)]
 use gpui::{Pixels, Point};
@@ -13,7 +16,7 @@ use ryusei_domain_core::{BoardSnapshot, Color, GameSnapshot, NodeSnapshot, Verte
 
 use crate::engine_console::parse_gtp_vertex;
 use crate::markup::markup_symbol;
-use crate::theme::{ThemeColor, ThemeTokens};
+use crate::theme::{ThemeColor, ThemeTokens, ui_palette};
 
 /// Projects a GTP principal variation into numbered ghost stones without
 /// mutating the document or applying moves to the host. Invalid/pass tokens are
@@ -413,6 +416,19 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
         Color::Black => hsla(0.0, 0.0, 1.0, 0.22),
         Color::White => hsla(0.0, 0.0, 1.0, 0.85),
     };
+
+    // Approximate the design's radial-gradient stones (`#55555c→#1d1d20→#050507`
+    // / `…→#c4c4c8`) with layered translucent overlays: a broad top-left sheen,
+    // a soft top-centre glow, and a deepening bottom-right shade. GPUI has no
+    // radial gradient, so three stacked discs stand in for the three stops.
+    let sheen = match color {
+        Color::Black => hsla(0.0, 0.0, 0.42, 0.35), // #55555c-ish lift
+        Color::White => hsla(0.0, 0.0, 1.0, 0.55),
+    };
+    let shade = match color {
+        Color::Black => hsla(0.0, 0.0, 0.0, 0.45), // #050507 base
+        Color::White => hsla(220.0, 0.10, 0.55, 0.28), // #c4c4c8 base
+    };
     div()
         .absolute()
         .left(px(x - size / 2.0))
@@ -422,8 +438,35 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
         .border_1()
         .border_color(border_color)
         .bg(stone_color)
-        .shadow_md()
-        // Primary specular highlight in top-left
+        // Drop shadow ≈ feDropShadow dx1.5 dy3.5 blur2.5 rgba(0,0,0,0.32)
+        .shadow(vec![BoxShadow {
+            color: hsla(0.0, 0.0, 0.0, 0.32),
+            offset: point(px(1.5), px(3.5)),
+            blur_radius: px(2.5),
+            spread_radius: px(0.0),
+        }])
+        // Deepening bottom-right shade first (the gradient's dark/far stop),
+        // kept inside the stone so the sheen and highlight read on top of it.
+        .child(
+            div()
+                .absolute()
+                .bottom(px(size * 0.0))
+                .right(px(size * 0.0))
+                .size(px(size * 0.80))
+                .rounded_full()
+                .bg(shade),
+        )
+        // Broad top-left sheen (largest, softest lift).
+        .child(
+            div()
+                .absolute()
+                .top(px(size * 0.02))
+                .left(px(size * 0.04))
+                .size(px(size * 0.72))
+                .rounded_full()
+                .bg(sheen),
+        )
+        // Primary specular highlight in top-left.
         .child(
             div()
                 .absolute()
@@ -432,20 +475,6 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
                 .size(px(size * 0.36))
                 .rounded_full()
                 .bg(highlight_color),
-        )
-        // Secondary soft rim reflection in bottom-right
-        .child(
-            div()
-                .absolute()
-                .bottom(px(size * 0.10))
-                .right(px(size * 0.12))
-                .size(px(size * 0.25))
-                .rounded_full()
-                .bg(if color == Color::Black {
-                    hsla(0.0, 0.0, 1.0, 0.07)
-                } else {
-                    hsla(220.0, 0.15, 0.6, 0.16)
-                }),
         )
 }
 
@@ -608,6 +637,14 @@ pub fn render_goban_with_id(
     let stone_black = theme.stone_black_color().rgb_u32();
     let stone_white = theme.stone_white_color().rgb_u32();
 
+    // Semantic analysis/markup colors derived from the active theme so the
+    // board overlays follow the same design tokens as the surrounding shell.
+    let palette = ui_palette(theme);
+    let accent_color = palette.accent; // best candidate / last-move ring
+    let success_color = palette.success; // good move
+    let warn_color = palette.warn; // inaccuracy
+    let danger_color = palette.danger_text; // mistake / blunder / markup
+
     let mut children: Vec<Div> = Vec::new();
 
     for column in 0..width {
@@ -655,7 +692,7 @@ pub fn render_goban_with_id(
         let color = if options.line_preview.as_ref() == Some(&line) {
             0x8e44ad
         } else {
-            0xc0392b
+            danger_color
         };
         children.extend(markup_stroke(start, end, 2.0, color));
         if line.line_type == "arrow" {
@@ -776,7 +813,7 @@ pub fn render_goban_with_id(
                             .left(px(x + 8.0))
                             .top(px(y - 7.0))
                             .text_xs()
-                            .text_color(rgb(0xc0392b))
+                            .text_color(rgb(danger_color))
                             .child(annotation.to_owned()),
                     );
                 }
@@ -824,13 +861,13 @@ pub fn render_goban_with_id(
             );
             let size = stone_size;
             let bg_color = if candidate.is_best {
-                0x0071e3 // Apple Blue: best candidate move
+                accent_color // best candidate move
             } else if candidate.winrate_percent >= 50.0 {
-                0x16a34a // Apple Green: good move
+                success_color // good move
             } else if candidate.winrate_percent >= 40.0 {
-                0xeab308 // Apple Amber: inaccuracy
+                warn_color // inaccuracy
             } else {
-                0xdc2626 // Apple Red: mistake / blunder
+                danger_color // mistake / blunder
             };
 
             let winrate_str = format!("{:.0}%", candidate.winrate_percent);
@@ -842,61 +879,109 @@ pub fn render_goban_with_id(
                 format!("{}v", candidate.visits)
             };
 
-            children.push(
-                div()
-                    .absolute()
-                    .left(px(x - size / 2.0))
-                    .top(px(y - size / 2.0))
-                    .size(px(size))
-                    .rounded_full()
-                    .border_2()
-                    .border_color(rgb(if candidate.is_best {
-                        0xffffff
-                    } else {
-                        0xc0d8f8
-                    }))
-                    .bg(rgb(bg_color))
-                    .shadow_md()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0xffffff))
-                            .line_height(px(size * 0.40))
-                            .child(winrate_str),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0xe0f2fe))
-                            .line_height(px(size * 0.36))
-                            .child(sub_str),
-                    ),
+            let candidate_dot = div()
+                .absolute()
+                .left(px(x - size / 2.0))
+                .top(px(y - size / 2.0))
+                .size(px(size))
+                .rounded_full()
+                .border_2()
+                // Design: the top candidate is a gold-ringed blue dot (金边蓝点);
+                // other candidates keep a pale-blue ring.
+                .border_color(rgb(if candidate.is_best {
+                    0xf5c518
+                } else {
+                    0xc0d8f8
+                }))
+                .bg(rgb(bg_color))
+                .shadow_md()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xffffff))
+                        .line_height(px(size * 0.40))
+                        .child(winrate_str),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(0xe0f2fe))
+                        .line_height(px(size * 0.36))
+                        .child(sub_str),
+                );
+
+            // The recommended (best) candidate breathes gently to draw the eye,
+            // mirroring the design's pulsing top pick. Other candidates stay
+            // static so the board doesn't shimmer.
+            let dot_id = (
+                "ai-candidate",
+                (candidate.vertex.column * 64 + candidate.vertex.row),
             );
+            let candidate_dot = if candidate.is_best {
+                candidate_dot
+                    .with_animation(
+                        dot_id,
+                        Animation::new(Duration::from_millis(1600))
+                            .repeat()
+                            .with_easing(pulsating_between(0.6, 1.0)),
+                        |element, delta| element.opacity(delta),
+                    )
+                    .into_any_element()
+            } else {
+                candidate_dot.into_any_element()
+            };
+            children.push(div().child(candidate_dot));
         }
     }
 
-    // KaTrain-style Move Quality Eval Dots on played stones
+    // KaTrain-style Move Quality Eval Dots on played stones. All five tiers
+    // (Best/Good/Inaccuracy/Mistake/Blunder) render as a color dot; a Blunder
+    // additionally carries a white "!" and pulses (design: 大恶手红色闪烁微标).
     for (vtx, quality) in &options.eval_dots {
         if vtx.row < height && vtx.column < width {
             let (x, y) = intersection_position(board, board_pixel_size, vtx.column, vtx.row);
             let dot_size = (spacing * 0.32).clamp(6.0, 12.0);
-            children.push(
-                div()
-                    .absolute()
-                    .left(px(x + spacing * 0.18))
-                    .top(px(y - spacing * 0.32))
-                    .size(px(dot_size))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgb(0xffffff))
-                    .bg(rgb(quality.color_u32())),
-            );
+            let is_blunder = *quality == ryusei_host::MoveQuality::Blunder;
+            let mut dot = div()
+                .absolute()
+                .left(px(x + spacing * 0.18))
+                .top(px(y - spacing * 0.32))
+                .size(px(dot_size))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(0xffffff))
+                .bg(rgb(quality.color_u32()))
+                .flex()
+                .items_center()
+                .justify_center();
+            if is_blunder {
+                dot = dot.child(
+                    div()
+                        .text_color(rgb(0xffffff))
+                        .font_weight(FontWeight::BOLD)
+                        .line_height(px(dot_size))
+                        .child("!"),
+                );
+            }
+            let dot = if is_blunder {
+                dot.with_animation(
+                    ("blunder-pulse", (vtx.column * 64 + vtx.row)),
+                    Animation::new(Duration::from_millis(1200))
+                        .repeat()
+                        .with_easing(pulsating_between(0.55, 1.0)),
+                    |element, delta| element.opacity(delta),
+                )
+                .into_any_element()
+            } else {
+                dot.into_any_element()
+            };
+            children.push(div().child(dot));
         }
     }
 
@@ -951,7 +1036,7 @@ pub fn render_goban_with_id(
                 .rounded_full()
                 .border_2()
                 .border_color(rgb(0xffffff))
-                .bg(rgb(0xc0392b)),
+                .bg(rgb(danger_color)),
         );
     }
 
@@ -977,7 +1062,7 @@ pub fn render_goban_with_id(
                         .items_center()
                         .justify_center()
                         .text_sm()
-                        .text_color(rgb(0xc0392b))
+                        .text_color(rgb(danger_color))
                         .child(markup_symbol(&marker.marker_type, marker.label.as_deref())),
                 );
             }
@@ -1001,7 +1086,7 @@ pub fn render_goban_with_id(
                 .items_center()
                 .justify_center()
                 .text_sm()
-                .text_color(rgb(0xc0392b))
+                .text_color(rgb(danger_color))
                 .child("×"),
         );
     }
@@ -1091,6 +1176,37 @@ pub fn render_goban_with_id(
         }
     }
 
+    // For the kaya skin the surrounding container already paints the warm
+    // gradient + border + shadow; painting the inner wood flat on top would
+    // hide it, so let the gradient show through. Other skins keep their solid
+    // board color.
+    let skin = crate::theme::BoardSkin::from_theme(theme);
+    let inner_wood = if skin.gradient.is_some() {
+        hsla(0.0, 0.0, 0.0, 0.0).into()
+    } else {
+        rgb(wood_color)
+    };
+
+    // Kaya inset glow (design `inset 0 0 40px rgba(160,110,40,0.28)`): GPUI
+    // has no inset box-shadow, so approximate it with a soft dark vignette ring
+    // hugging the board edge. Painted only for the gradient (kaya) skin.
+    let inset_glow: Option<Div> = skin.gradient.is_some().then(|| {
+        div()
+            .absolute()
+            .left(px(BOARD_MARGIN_PX / 2.0))
+            .top(px(BOARD_MARGIN_PX / 2.0))
+            .size(px(board_size - BOARD_MARGIN_PX))
+            .rounded(px(crate::theme::BOARD_RADIUS / 2.0))
+            .border_1()
+            .border_color(hsla(0.08, 0.55, 0.25, 0.28))
+            .shadow(vec![gpui::BoxShadow {
+                color: hsla(0.08, 0.55, 0.30, 0.22),
+                offset: point(px(0.0), px(0.0)),
+                blur_radius: px(18.0),
+                spread_radius: px(-6.0),
+            }])
+    });
+
     div()
         .id(element_id)
         .debug_selector(move || element_id.to_owned())
@@ -1104,8 +1220,9 @@ pub fn render_goban_with_id(
                 .left(px(BOARD_MARGIN_PX / 2.0))
                 .top(px(BOARD_MARGIN_PX / 2.0))
                 .size(px(board_size - BOARD_MARGIN_PX))
-                .bg(rgb(wood_color)),
+                .bg(inner_wood),
         )
+        .children(inset_glow)
         .children(children)
 }
 

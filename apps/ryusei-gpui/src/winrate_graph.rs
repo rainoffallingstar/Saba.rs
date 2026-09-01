@@ -264,6 +264,7 @@ mod tests {
             pv: Vec::new(),
             is_during_search: false,
             ownership: None,
+            prior: None,
         };
         assert_eq!(
             analysis_sgf_properties(&entry, Color::White),

@@ -537,6 +537,7 @@ mod tests {
             pv: vec![],
             is_during_search: true,
             ownership: None,
+            prior: None,
         }];
         let second = vec![
             AnalysisEntry {
@@ -548,6 +549,7 @@ mod tests {
                 pv: vec![],
                 is_during_search: false,
                 ownership: None,
+                prior: None,
             },
             AnalysisEntry {
                 id: None,
@@ -558,6 +560,7 @@ mod tests {
                 pv: vec![],
                 is_during_search: false,
                 ownership: None,
+                prior: None,
             },
         ];
 
@@ -604,6 +607,7 @@ mod tests {
                     pv: Vec::new(),
                     is_during_search: false,
                     ownership: None,
+                    prior: None,
                 },
                 ryusei_host::AnalysisEntry {
                     id: None,
@@ -614,6 +618,7 @@ mod tests {
                     pv: Vec::new(),
                     is_during_search: false,
                     ownership: None,
+                    prior: None,
                 },
             ],
         );

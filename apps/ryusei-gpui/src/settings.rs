@@ -41,15 +41,15 @@ impl ThemeChoice {
     pub fn tokens(self) -> ThemeTokens {
         match self {
             ThemeChoice::Classic => ThemeTokens::parse(
-                r##"{"schemaVersion":2,"boardWood":"#e2b177","boardLine":"#3d2814","starPoint":"#2a1a0b","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f5f7","shell":{"text":"#1d1d1f","muted":"#6e6e73","subtle":"#86868b","panel":"#ffffff","input":"#f0f0f3","border":"#e5e5ea","button":"#ebebef","buttonActive":"#dedee4","accent":"#007aff","danger":"#fee2e2","dangerText":"#ff3b30","success":"#34c759","track":"#e5e5ea"}}"##,
+                r##"{"schemaVersion":2,"boardWood":"#e2b177","boardLine":"#3d2814","starPoint":"#2a1a0b","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f5f7","shell":{"text":"#1d1d1f","muted":"#6e6e73","subtle":"#86868b","panel":"#ffffff","input":"#f0f0f3","border":"#e5e5ea","button":"#ebebef","buttonActive":"#dedee4","accent":"#0071e3","danger":"#fee2e2","dangerText":"#dc2626","success":"#16a34a","track":"#e5e5ea","textSecondary":"#424245","borderSoft":"#e8e8ed","accentHover":"#0077ed","accentActive":"#0066cc","warn":"#dd9d06","mistake":"#f97316","elevated":"#ffffff","info":"#0ea5e9"}}"##,
             )
             .expect("the classic theme tokens are valid"),
             ThemeChoice::Dark => ThemeTokens::parse(
-                r##"{"schemaVersion":2,"boardWood":"#2e2a24","boardLine":"#8a7a5a","starPoint":"#a89264","stoneBlack":"#0f0f0f","stoneWhite":"#ececec","background":"#1c1c1e","shell":{"text":"#f5f5f7","muted":"#98989d","subtle":"#636366","panel":"#252528","input":"#1e1e20","border":"#38383a","button":"#2c2c2e","buttonActive":"#3a3a3c","accent":"#0a84ff","danger":"#3d1c1c","dangerText":"#ff453a","success":"#30d158","track":"#38383a"}}"##,
+                r##"{"schemaVersion":2,"boardWood":"#2e2a24","boardLine":"#8a7a5a","starPoint":"#a89264","stoneBlack":"#0f0f0f","stoneWhite":"#ececec","background":"#1c1c1e","shell":{"text":"#f5f5f7","muted":"#98989d","subtle":"#636366","panel":"#252528","input":"#1e1e20","border":"#38383a","button":"#2c2c2e","buttonActive":"#3a3a3c","accent":"#0a84ff","danger":"#3d1c1c","dangerText":"#ff453a","success":"#30d158","track":"#38383a","textSecondary":"#d2d2d7","borderSoft":"#2a2a2f","accentHover":"#409cff","accentActive":"#0a84ff","warn":"#ffd60a","mistake":"#ff9f0a","elevated":"#2c2c2e","info":"#64d2ff"}}"##,
             )
             .expect("the dark theme tokens are valid"),
             ThemeChoice::Mist => ThemeTokens::parse(
-                r##"{"schemaVersion":2,"boardWood":"#cad5c7","boardLine":"#334a33","starPoint":"#243824","stoneBlack":"#141c14","stoneWhite":"#f4faf4","background":"#f2f5f2","shell":{"text":"#18221a","muted":"#4d5e50","subtle":"#788a7b","panel":"#ffffff","input":"#ebf0eb","border":"#d2ded2","button":"#e4ede4","buttonActive":"#d4e3d4","accent":"#248a3d","danger":"#fee2e2","dangerText":"#dc2626","success":"#28753a","track":"#d2ded2"}}"##,
+                r##"{"schemaVersion":2,"boardWood":"#cad5c7","boardLine":"#334a33","starPoint":"#243824","stoneBlack":"#141c14","stoneWhite":"#f4faf4","background":"#f2f5f2","shell":{"text":"#18221a","muted":"#4d5e50","subtle":"#788a7b","panel":"#ffffff","input":"#ebf0eb","border":"#d2ded2","button":"#e4ede4","buttonActive":"#d4e3d4","accent":"#248a3d","danger":"#fee2e2","dangerText":"#dc2626","success":"#28753a","track":"#d2ded2","textSecondary":"#3c4a3e","borderSoft":"#dfe9df","accentHover":"#2ea04a","accentActive":"#1e7a33","warn":"#a97c04","mistake":"#c2571a","elevated":"#ffffff","info":"#1f7a8c"}}"##,
             )
             .expect("the mist theme tokens are valid"),
         }
