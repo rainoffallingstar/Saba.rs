@@ -90,6 +90,11 @@ pub struct ThemeTokens {
 /// Validated semantic colors for native shell chrome, drawers, inputs, graphs
 /// and status feedback. A single group avoids leaking raw colors through UI
 /// modules while still letting a theme define a coherent application surface.
+///
+/// Schema v2 packages originally carried only the core thirteen colors; the
+/// extended semantic set below is optional so existing packages keep parsing.
+/// When a field is absent the render layer derives a value aligned with the
+/// design prototype (`sabaki-web-prototype.html`) from the core colors.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellThemeTokens {
@@ -106,6 +111,31 @@ pub struct ShellThemeTokens {
     pub danger_text: String,
     pub success: String,
     pub track: String,
+    // ── Extended semantic tokens (design prototype alignment) ─────────────
+    /// Secondary foreground, one step below `text` (design `--fg-2`).
+    #[serde(default)]
+    pub text_secondary: Option<String>,
+    /// Softer hairline divider, subtler than `border` (design `--border-soft`).
+    #[serde(default)]
+    pub border_soft: Option<String>,
+    /// Accent hover lift (design `--accent-hover`).
+    #[serde(default)]
+    pub accent_hover: Option<String>,
+    /// Accent pressed state (design `--accent-active`).
+    #[serde(default)]
+    pub accent_active: Option<String>,
+    /// Warning / inaccuracy amber (design `--warn`).
+    #[serde(default)]
+    pub warn: Option<String>,
+    /// Mistake orange, between `warn` and `danger` (move-quality ramp).
+    #[serde(default)]
+    pub mistake: Option<String>,
+    /// Raised surface for cards/menus above `panel` (dark: lighter, light: white).
+    #[serde(default)]
+    pub elevated: Option<String>,
+    /// Graph centerline / info blue used for axes, log commands, crosshairs.
+    #[serde(default)]
+    pub info: Option<String>,
 }
 
 impl ThemeTokens {
@@ -146,6 +176,21 @@ impl ThemeTokens {
                 &shell.success,
                 &shell.track,
             ] {
+                parse_hex_color(color)?;
+            }
+            for color in [
+                &shell.text_secondary,
+                &shell.border_soft,
+                &shell.accent_hover,
+                &shell.accent_active,
+                &shell.warn,
+                &shell.mistake,
+                &shell.elevated,
+                &shell.info,
+            ]
+            .into_iter()
+            .flatten()
+            {
                 parse_hex_color(color)?;
             }
         }

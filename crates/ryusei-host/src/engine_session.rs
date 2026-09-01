@@ -371,6 +371,11 @@ impl<T: GtpTransport> EngineSession<T> {
                 period_time_secs.to_string(),
                 periods.to_string(),
             ],
+            // GTP `time_settings` has no increment field; map a Fischer clock
+            // to its main time and let the local controller own the increment.
+            TimeControl::Fischer { main_time_secs, .. } => {
+                vec![main_time_secs.to_string(), "0".to_owned(), "0".to_owned()]
+            }
         };
         self.send_ordinary("time_settings", arguments)
     }

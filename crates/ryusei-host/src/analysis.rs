@@ -31,6 +31,10 @@ pub struct AnalysisEntry {
     pub is_during_search: bool,
     /// Optional board territory ownership probabilities (-1.0 to +1.0) for each intersection.
     pub ownership: Option<Vec<f64>>,
+    /// Policy-network prior probability for this candidate in `[0, 1]`, when the
+    /// engine reports one (`prior` in lz / KataGo JSON). Drives the candidate
+    /// card's "先验" readout in the right inspector.
+    pub prior: Option<f64>,
 }
 
 /// Parses one Leela-family analysis line:
@@ -50,6 +54,7 @@ pub fn parse_lz_analysis_line(line: &str) -> Option<AnalysisEntry> {
         pv: Vec::new(),
         is_during_search: false,
         ownership: None,
+        prior: None,
     };
     let mut saw_core_field = false;
     while let Some(field) = tokens.next() {
@@ -69,6 +74,9 @@ pub fn parse_lz_analysis_line(line: &str) -> Option<AnalysisEntry> {
             "scoreLead" => {
                 entry.score_lead = tokens.next()?.parse().ok();
                 saw_core_field = true;
+            }
+            "prior" => {
+                entry.prior = tokens.next()?.parse().ok();
             }
             "ownership" => {
                 let mut ownership_vals = Vec::new();
@@ -164,6 +172,7 @@ pub fn parse_kata_analysis_line(line: &str) -> Option<AnalysisEntry> {
             .get("ownership")
             .and_then(serde_json::Value::as_array)
             .map(|array| array.iter().filter_map(serde_json::Value::as_f64).collect()),
+        prior: value.get("prior").and_then(serde_json::Value::as_f64),
     })
 }
 
