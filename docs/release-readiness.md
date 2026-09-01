@@ -52,14 +52,17 @@ current worktree:
 The only remaining warnings are the two **transitive** future-incompatible
 packages (`block 0.1.6`, `proc-macro-error2 2.0.1`), not project source.
 
-The final candidate commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed the
+The latest candidate commit `1cc6404c44e99f4d1e2e9c4d9adbc3291244c4b6` passed the
 three-platform CI matrix in run
-[`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577).
-The final release workflow in run
-[`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374)
-passed macOS, Windows, Ubuntu and Flatpak packaging for that same commit. The
-workflow artifacts were downloaded and their archive formats were locally
-validated; SHA-256 values are recorded below.
+[`33466668494`](https://github.com/rainoffallingstar/ryusei/actions/runs/33466668494).
+The release workflow in run
+[`33467089572`](https://github.com/rainoffallingstar/ryusei/actions/runs/33467089572)
+passed macOS (`.app` + `.dmg`), Windows (`.zip` + NSIS `setup.exe`), Ubuntu (`.tar.gz` + `.AppImage`)
+and Flatpak packaging for this same commit.
+
+The earlier candidate commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed historical runs
+[`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577) and
+[`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374).
 
 The earlier missing-crate doctest failure was not reproduced serially: it was
 caused by overlapping Cargo processes competing for the same `target/` build
@@ -108,8 +111,8 @@ candidate builds on every runner. There is no published GitHub Release yet.
 |---|---|---|
 | Repository authority | Ready | Root is Ryusei mainline; `refer-repo/` is ignored. Keep CI/Tag/Release here. |
 | Formatting, tests, clippy, locked release build | Locally ready | All four commands passed serially; keep CI gates serial. CI now also runs the vendored GPUI patch-contract guard on all three runners. |
-| Current commit three-platform CI | Passed | Commit `8880412e54bef87ddf3091e0f9cc830696c067b0` passed Ubuntu/macOS/Windows in run [`32693487577`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693487577). |
-| Current commit packaging | Passed | Same commit passed macOS/Windows/Ubuntu/Flatpak release packaging in run [`32693823374`](https://github.com/rainoffallingstar/Ryusei/actions/runs/32693823374); artifact hashes are recorded above. |
+| Current commit three-platform CI | Passed | Commit `1cc6404c44e99f4d1e2e9c4d9adbc3291244c4b6` passed Ubuntu/macOS/Windows in run [`33466668494`](https://github.com/rainoffallingstar/ryusei/actions/runs/33466668494). |
+| Current commit packaging | Passed | Same commit passed macOS/Windows/Ubuntu/Flatpak release packaging in run [`33467089572`](https://github.com/rainoffallingstar/ryusei/actions/runs/33467089572). |
 | macOS fullscreen and file-dialog regressions | Passed once, candidate retest required | Re-run `release-qa.md` for every candidate and GPUI upgrade. |
 | Application packages | Structure verified; unsigned | Final workflow artifacts passed ZIP and tar listings, executable/file-type checks, plus DMG attach. Mounted `.app` passed `plutil` and `codesign --verify --deep --strict`. AppImage and Flatpak cannot execute/import on this ARM macOS host; CI built them successfully. |
 | macOS signing, hardened runtime, notarization | Not started | The DMG app is ad-hoc-valid but `spctl --assess` rejects it, as expected for an unsigned candidate. Provide Developer ID credentials; notarize, staple and test on a clean Mac. |
