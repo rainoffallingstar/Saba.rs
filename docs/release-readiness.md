@@ -74,19 +74,21 @@ Cargo still reports two **transitive** future-incompatible packages:
 `proc_macro` re-export). Neither is project source; track upstream upgrades or
 a scoped dependency patch before a Rust toolchain makes either warning fatal.
 
-### Final candidate artifact evidence
+### v0.1.0-beta.1 official release artifacts (commit `c51e8fe2`)
 
-The final release workflow produced and locally validated these artifacts for
-commit `8880412e`:
+The official tag release workflow in run [`33469008661`](https://github.com/rainoffallingstar/ryusei/actions/runs/33469008661)
+produced, packaged and published the `v0.1.0-beta.1` GitHub Release with verified checksums:
 
 | Artifact | SHA-256 |
 |---|---|
-| `ryusei-v0.1.0-macos.dmg` | `98ee3e8f94a592553693b725aca3938f10bf2b245a635dca68d4d1717408af25` |
-| `ryusei-v0.1.0-linux-x86_64.tar.gz` | `e9639f9014c8bf7c23f2804d4e2a3fa76370913ef2d90ec964f4f282064bd245` |
-| `ryusei-v0.1.0-linux-x86_64.AppImage` | `a3261f451777744c912f3f28ec46ec5574b738783dc4a545b30756b78580f693` |
-| `ryusei-v0.1.0-linux-x86_64.flatpak` | `9c3a109705b2b48a06a0ddce1516760e512851a914a0821c97110228fd9a7f08` |
-| `ryusei-v0.1.0-windows-x86_64.zip` | `e9d87a962625f1e6b5e4c9831c0ba5326eb7ca37593f4485e91d6b1232b613bd` |
-| `ryusei-v0.1.0-windows-x86_64-setup.exe` | `c45b8280d2e703013507c8acd4a1b495a89aba59315924e9c6acf7677340cb48` |
+| `ryusei-v0.1.0-beta.1-macos.dmg` | `20f614114529fe39fad9208939d937c82ca2d78ef4cc9ba1e2df8a607ca54960` |
+| `ryusei-v0.1.0-beta.1-linux-x86_64.tar.gz` | `c1825f7c96fd56dc3571b02055eda27a17eb91d2a055ee198c4374ef5895d804` |
+| `ryusei-v0.1.0-beta.1-linux-x86_64.AppImage` | `d4da1dad9fb96ccded5e5513d8c682c6b5b0b6219f160c8da685fb23df8819e5` |
+| `ryusei-v0.1.0-beta.1-linux-x86_64.flatpak` | `97ed412bd197030441ad961b273d692e0567ec8398f69e30b335e18522eaf6ac` |
+| `ryusei-v0.1.0-beta.1-windows-x86_64.zip` | `1bdee8b92526f5c78e4cae6271e5da220367ca56270b665d2ae5c2aece2792f4` |
+| `ryusei-v0.1.0-beta.1-windows-x86_64-setup.exe` | `b9dcf00c3d4a9fa1cd8e0edba272d1b763c3ddcaf8eb28fb16983d3540fbbb4a` |
+
+### Historical candidate artifact evidence (commit `8880412e`)
 
 The ZIP passed `unzip -t`; the Linux tarball passed `tar -tzf`; `file`
 identified the expected ELF, PE, Flatpak data and DMG payload types. This is
