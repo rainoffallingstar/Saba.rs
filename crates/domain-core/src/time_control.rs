@@ -24,15 +24,21 @@ pub enum TimeControl {
         period_time_secs: u64,
         periods: u32,
     },
+    /// Fischer / increment clock: main time plus a fixed increment credited
+    /// after every committed move (PRD §4.4 读秒加秒制).
+    Fischer {
+        main_time_secs: u64,
+        increment_secs: u64,
+    },
 }
 
 impl TimeControl {
     pub fn main_time_secs(self) -> u64 {
         match self {
             Self::None => 0,
-            Self::Absolute { main_time_secs } | Self::ByoYomi { main_time_secs, .. } => {
-                main_time_secs
-            }
+            Self::Absolute { main_time_secs }
+            | Self::ByoYomi { main_time_secs, .. }
+            | Self::Fischer { main_time_secs, .. } => main_time_secs,
         }
     }
 
@@ -49,6 +55,13 @@ impl TimeControl {
             } => Some((
                 main_time_secs.to_string(),
                 format!("{periods}x{period_time_secs}s byo-yomi"),
+            )),
+            Self::Fischer {
+                main_time_secs,
+                increment_secs,
+            } => Some((
+                main_time_secs.to_string(),
+                format!("fischer +{increment_secs}s"),
             )),
         }
     }
@@ -73,6 +86,13 @@ impl TimeControl {
             .to_ascii_lowercase();
         if overtime == "absolute" {
             return Self::Absolute { main_time_secs };
+        }
+        // Fischer / increment overtime (`fischer +10s`, `+10s`, `fischer 10s`).
+        if let Some(increment_secs) = Self::parse_fischer_overtime(&overtime) {
+            return Self::Fischer {
+                main_time_secs,
+                increment_secs,
+            };
         }
         // Absent `OT` means a plain main-time clock.
         if overtime.is_empty() {
@@ -113,6 +133,32 @@ impl TimeControl {
             periods.trim().parse::<u32>().ok()?,
             period_time.trim().parse::<u64>().ok()?,
         ))
+    }
+
+    /// Parses a Fischer/increment overtime description. Accepts `fischer +10s`,
+    /// `fischer 10s`, `+10s`, `fischer +10`. Returns `None` for anything that
+    /// is not a recognizable increment pattern.
+    fn parse_fischer_overtime(overtime: &str) -> Option<u64> {
+        let body = overtime
+            .strip_prefix("fischer")
+            .map(str::trim)
+            .unwrap_or(overtime);
+        // Require the explicit `fischer` label or a leading `+` so a bare
+        // byo-yomi `5x30s` is never mistaken for an increment.
+        if !overtime.starts_with("fischer") && !body.starts_with('+') {
+            return None;
+        }
+        let numeric = body
+            .strip_prefix('+')
+            .unwrap_or(body)
+            .trim()
+            .strip_suffix('s')
+            .unwrap_or_else(|| body.strip_prefix('+').unwrap_or(body).trim());
+        numeric
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
     }
 }
 
@@ -398,6 +444,15 @@ impl ClockController {
     }
 
     fn reset_period_if_needed(&mut self, color: Color) {
+        // A Fischer/increment clock credits the increment after every committed
+        // move instead of resetting a byo-yomi period.
+        if let TimeControl::Fischer { increment_secs, .. } = self.state.control {
+            let player = self.player_mut(color);
+            if player.phase == ClockPhase::MainTime {
+                player.main_time_remaining += Duration::from_secs(increment_secs);
+            }
+            return;
+        }
         let period_length = match self.state.control {
             TimeControl::ByoYomi {
                 period_time_secs, ..
@@ -430,6 +485,53 @@ mod tests {
         );
         assert_eq!(clock.state().expired, None);
         assert_eq!(clock.state().active_color, None);
+    }
+
+    #[test]
+    fn fischer_clock_credits_increment_after_each_move() {
+        let mut clock = ClockController::new(TimeControl::Fischer {
+            main_time_secs: 60,
+            increment_secs: 10,
+        });
+        clock.start(Color::Black);
+        // Spend 12s, then commit: consume 3s of elapsed, then +10s increment.
+        assert_eq!(clock.tick(Duration::from_secs(12)), None);
+        clock.on_move_committed(Color::Black, Duration::from_secs(3));
+        // 60 - 12 - 3 + 10 = 55.
+        assert_eq!(
+            clock.state().black.main_time_remaining,
+            Duration::from_secs(55)
+        );
+        assert_eq!(clock.state().active_color, Some(Color::White));
+    }
+
+    #[test]
+    fn fischer_clock_expires_when_time_runs_out() {
+        let mut clock = ClockController::new(TimeControl::Fischer {
+            main_time_secs: 5,
+            increment_secs: 10,
+        });
+        clock.start(Color::Black);
+        // 6s elapsed exceeds the 5s main time; no byo-yomi to fall back to.
+        assert_eq!(
+            clock.tick(Duration::from_secs(6)),
+            Some(ClockEvent::Expired(Color::Black))
+        );
+    }
+
+    #[test]
+    fn fischer_sgf_round_trips() {
+        let control = TimeControl::Fischer {
+            main_time_secs: 600,
+            increment_secs: 10,
+        };
+        let (tm, ot) = control.to_sgf().unwrap();
+        assert_eq!(tm, "600");
+        assert_eq!(ot, "fischer +10s");
+        let mut properties = BTreeMap::new();
+        properties.insert("TM".to_owned(), vec![tm]);
+        properties.insert("OT".to_owned(), vec![ot]);
+        assert_eq!(TimeControl::from_sgf(&properties), control);
     }
 
     #[test]

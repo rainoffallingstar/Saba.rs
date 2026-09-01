@@ -291,6 +291,8 @@ mod tests {
             can_redo: false,
             source_path: None,
             score_overrides: BTreeMap::new(),
+            black_captures: 0,
+            white_captures: 0,
         };
         assert_eq!(active_lineage_review_nodes(&snapshot), vec!["root", "b1"]);
     }
@@ -354,6 +356,8 @@ mod tests {
             can_redo: false,
             source_path: None,
             score_overrides: BTreeMap::new(),
+            black_captures: 0,
+            white_captures: 0,
         };
         let lineage = active_lineage_moves(&snapshot);
         assert_eq!(

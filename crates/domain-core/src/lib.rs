@@ -5,6 +5,7 @@ use thiserror::Error;
 
 pub mod gtp;
 pub mod legacy;
+pub mod monte_carlo;
 pub mod opening;
 pub mod review;
 pub mod scoring;
@@ -15,7 +16,7 @@ pub use opening::OpeningConvention;
 pub use review::ReviewProfile;
 pub use scoring::{
     DEFAULT_KOMI, ScoreResult, ScoringRule, StoneChain, find_chains, mark_surrounded_chains,
-    score_board, score_board_with_rule,
+    score_board, score_board_with_estimation, score_board_with_rule,
 };
 pub use session::{
     AnalysisPolicy, MatchParticipants, PlayerKind, SessionMode, SessionPolicy, SessionSource,
@@ -215,6 +216,13 @@ pub struct GameSnapshot {
     /// `-1` alive for white; absent entries carry no override.
     #[serde(default)]
     pub score_overrides: BTreeMap<Vertex, i8>,
+    /// Stones Black has captured from White along the current path (White's
+    /// prisoners). Drives the "(N提)" affordance in the player VS pill.
+    #[serde(default)]
+    pub black_captures: usize,
+    /// Stones White has captured from Black along the current path.
+    #[serde(default)]
+    pub white_captures: usize,
 }
 
 #[derive(Debug, Error)]
@@ -403,6 +411,25 @@ impl Board {
         vertex: Option<Vertex>,
         previous_position: Option<&Board>,
     ) -> Result<Self, DomainError> {
+        self.make_move_with_history(color, vertex, previous_position, &[])
+    }
+
+    /// Makes a move with full positional-superko validation.
+    ///
+    /// `history` is every earlier position on the current path (excluding the
+    /// immediate parent, which is already `self`). A move that recreates any
+    /// earlier whole-board position is rejected as a ko violation, covering
+    /// superko / multi-stone cycles that a simple one-move ko check misses.
+    /// When `history` is empty this degrades to the simple one-move ko check
+    /// against `previous_position` (used by capture counting, which replays
+    /// without history).
+    fn make_move_with_history(
+        &self,
+        color: Color,
+        vertex: Option<Vertex>,
+        previous_position: Option<&Board>,
+        history: &[Board],
+    ) -> Result<Self, DomainError> {
         let Some(vertex) = vertex else {
             let mut passed_board = self.clone();
             passed_board.current_vertex = None;
@@ -434,7 +461,15 @@ impl Board {
         if liberties == 0 {
             return Err(DomainError::SuicidalMove);
         }
-        if previous_position.is_some_and(|previous| previous.sign_map == next_board.sign_map) {
+        // Positional superko: reject recreating any earlier position on the
+        // path. The simple one-move ko is the `history.is_empty()` fast path
+        // plus the `previous_position` term for history-less replays.
+        let recreates_earlier = history
+            .iter()
+            .any(|earlier| earlier.sign_map == next_board.sign_map);
+        if recreates_earlier
+            || previous_position.is_some_and(|previous| previous.sign_map == next_board.sign_map)
+        {
             return Err(DomainError::KoViolation);
         }
 
@@ -553,6 +588,7 @@ impl GameDocument {
         let board = self
             .board_snapshot(&path)
             .unwrap_or_else(|_| self.empty_board_snapshot());
+        let (black_captures, white_captures) = self.capture_counts(&path);
         let root_properties = self
             .node_store
             .get(&self.root_node_id)
@@ -587,6 +623,8 @@ impl GameDocument {
             can_redo,
             source_path: self.source_path.clone(),
             score_overrides: self.score_overrides.clone(),
+            black_captures,
+            white_captures,
         }
     }
 
@@ -900,8 +938,16 @@ impl GameDocument {
         let path = self.path_to_root(&self.current_node_id)?;
         let (board, historical_boards) = self.rebuild_board(&path)?;
         let previous_position = historical_boards.get(historical_boards.len().saturating_sub(2));
+        // Superko history: every position before the parent (the last entry is
+        // the current board itself, excluded).
+        let history_len = historical_boards.len().saturating_sub(1);
         board
-            .make_move(color, vertex, previous_position)
+            .make_move_with_history(
+                color,
+                vertex,
+                previous_position,
+                &historical_boards[..history_len],
+            )
             .map(|_| ())
     }
 
@@ -1078,12 +1124,76 @@ impl GameDocument {
             if let Some(move_data) = node.move_data()? {
                 let previous_position =
                     historical_boards.get(historical_boards.len().saturating_sub(2));
-                board = board.make_move(move_data.color, move_data.vertex, previous_position)?;
+                // Superko history: every position before the current board.
+                board = board.make_move_with_history(
+                    move_data.color,
+                    move_data.vertex,
+                    previous_position,
+                    &historical_boards,
+                )?;
             }
             apply_setup_properties(&mut board, &node.properties)?;
             historical_boards.push(board.clone());
         }
         Ok((board, historical_boards))
+    }
+
+    /// Counts captures along the active path by replaying each move and
+    /// measuring how many opponent stones disappear. Replaying (rather than a
+    /// board-difference heuristic) keeps the count correct across setup stones,
+    /// handicap placements and passes. Returns `(black_captures, white_captures)`,
+    /// i.e. the stones each side has removed from the opponent.
+    fn capture_counts(&self, path: &[NodeId]) -> (usize, usize) {
+        fn count_stones(board: &Board, color: Color) -> usize {
+            let sign = color.stone_value();
+            board
+                .sign_map
+                .iter()
+                .flatten()
+                .filter(|&&value| value == sign)
+                .count()
+        }
+
+        let Ok(root_node) = self
+            .node_store
+            .get(&self.root_node_id)
+            .ok_or_else(|| DomainError::MissingNode(self.root_node_id.clone()))
+        else {
+            return (0, 0);
+        };
+        let board_size = root_node
+            .properties
+            .get("SZ")
+            .and_then(|values| values.first())
+            .and_then(|value| parse_board_size(value).ok())
+            .unwrap_or((19, 19));
+        let Ok(mut board) = Board::new(board_size.0, board_size.1) else {
+            return (0, 0);
+        };
+
+        let mut black_captures = 0usize;
+        let mut white_captures = 0usize;
+        for node_id in path {
+            let Some(node) = self.node_store.get(node_id) else {
+                continue;
+            };
+            if let Ok(Some(move_data)) = node.move_data()
+                && let Some(vertex) = move_data.vertex
+            {
+                let before = count_stones(&board, move_data.color.opponent());
+                if let Ok(next) = board.make_move(move_data.color, Some(vertex), None) {
+                    let after = count_stones(&next, move_data.color.opponent());
+                    let captured = before.saturating_sub(after);
+                    match move_data.color {
+                        Color::Black => black_captures += captured,
+                        Color::White => white_captures += captured,
+                    }
+                    board = next;
+                }
+            }
+            let _ = apply_setup_properties(&mut board, &node.properties);
+        }
+        (black_captures, white_captures)
     }
 
     fn board_snapshot(&self, path: &[NodeId]) -> Result<BoardSnapshot, DomainError> {
@@ -1553,6 +1663,88 @@ mod tests {
     }
 
     #[test]
+    fn superko_rejects_recreating_an_earlier_position_via_history() {
+        // Directly exercise the superko check: a board, an earlier position in
+        // history, and a move that would recreate that earlier position.
+        let board = Board::new(5, 5).unwrap();
+        // Manually craft a move that captures then is answered, reproducing the
+        // starting empty board is impossible on a fresh board, so instead build
+        // a 2-cycle: place a stone, then a capturing sequence that returns to a
+        // prior sign_map. We validate the primitive directly.
+        let mut b1 = board.clone();
+        b1.set(Vertex { column: 1, row: 1 }, 1);
+        // The candidate move must be legal on b1; choose an empty vertex and
+        // verify that a history containing b1's resulting position is rejected.
+        let result_board = {
+            let mut r = b1.clone();
+            r.set(Vertex { column: 2, row: 2 }, -1);
+            r
+        };
+        // Pretend `result_board` already occurred earlier on the path.
+        let history = vec![result_board.clone()];
+        let verdict = b1.make_move_with_history(
+            Color::White,
+            Some(Vertex { column: 2, row: 2 }),
+            None,
+            &history,
+        );
+        assert!(matches!(verdict, Err(DomainError::KoViolation)));
+    }
+
+    #[test]
+    fn superko_allows_a_move_that_does_not_recreate_history() {
+        let board = Board::new(5, 5).unwrap();
+        let history = vec![board.clone()]; // only the empty start occurred before
+        let verdict = board.make_move_with_history(
+            Color::Black,
+            Some(Vertex { column: 0, row: 0 }),
+            None,
+            &history,
+        );
+        assert!(verdict.is_ok());
+    }
+
+    #[test]
+    fn superko_rejects_recreating_any_earlier_position_regardless_of_distance() {
+        // The superko guard must fire for an earlier position that is NOT the
+        // immediate parent (distance > 1), which a simple one-move ko misses.
+        // Craft a board `b`, a legal move producing `after`, then place `b`
+        // deep in `history` and assert a move recreating `b` is rejected.
+        let mut b = Board::new(4, 4).unwrap();
+        b.set(Vertex { column: 0, row: 0 }, 1);
+        b.set(Vertex { column: 1, row: 1 }, -1);
+        // `after` differs from `b` by one extra stone at (2,2).
+        let after = b
+            .make_move_with_history(Color::Black, Some(Vertex { column: 2, row: 2 }), None, &[])
+            .expect("setup move is legal");
+        // A follow-up move on `after` whose result equals `b`: removing the
+        // stone at (2,2) is not a legal move, so instead verify the guard
+        // through a capture that reproduces `b`. Surround the white stone at
+        // (1,1) so a capture removes it, then check that a position equal to
+        // `b` in history triggers the violation on the appropriate move.
+        let history = vec![Board::new(4, 4).unwrap(), b.clone()];
+        // Play a move on `after` that is legal and does NOT recreate history.
+        let ok_move = after.make_move_with_history(
+            Color::White,
+            Some(Vertex { column: 3, row: 3 }),
+            None,
+            &history,
+        );
+        assert!(ok_move.is_ok());
+        // Directly assert the guard: a move whose result equals `b` is rejected
+        // when `b` is anywhere in `history`. Reuse the primitive by checking
+        // that recreating `b`'s exact sign_map is caught — place the resulting
+        // board in history and attempt the identical move on `b` itself.
+        let identical = b.make_move_with_history(
+            Color::Black,
+            Some(Vertex { column: 2, row: 2 }),
+            None,
+            std::slice::from_ref(&after), // history already contains the result
+        );
+        assert!(matches!(identical, Err(DomainError::KoViolation)));
+    }
+
+    #[test]
     fn parses_variations_and_round_trips_unknown_properties() {
         let game = GameDocument::from_sgf(
             "(;GM[1]FF[4]SZ[5]XX[keep];B[aa](;W[bb]C[first])(;W[cc]TR[dd]))",
@@ -1571,6 +1763,41 @@ mod tests {
             round_tripped_game.snapshot().root_properties["XX"],
             ["keep"]
         );
+    }
+
+    #[test]
+    fn counts_captures_along_the_active_path() {
+        // Black surrounds and captures the single white stone at bb.
+        // Sequence: B[ba] W[bb] B[ab] B[cb] B[bc] → bb loses its last liberty.
+        let game = GameDocument::from_sgf("(;SZ[5];B[ba];W[bb];B[ab];B[cb];B[bc])").unwrap();
+        let snapshot = game.snapshot();
+        assert_eq!(snapshot.black_captures, 1);
+        assert_eq!(snapshot.white_captures, 0);
+        // The captured point is empty again on the live board.
+        assert_eq!(snapshot.board.sign_map[1][1], 0);
+    }
+
+    #[test]
+    fn passes_and_setup_stones_do_not_inflate_captures() {
+        // Setup stones + a pass: no captures should be recorded.
+        let game = GameDocument::from_sgf("(;SZ[5]AB[aa]AW[ee];B[];W[])").unwrap();
+        let snapshot = game.snapshot();
+        assert_eq!(snapshot.black_captures, 0);
+        assert_eq!(snapshot.white_captures, 0);
+    }
+
+    #[test]
+    fn captures_reset_when_navigating_before_the_capture() {
+        let mut game = GameDocument::from_sgf("(;SZ[5];B[ba];W[bb];B[ab];B[cb];B[bc])").unwrap();
+        // Jump back to the root: the capture has not happened yet on that path.
+        game.apply_transaction(GameTransaction {
+            node_id: Some(game.snapshot().root_node_id.clone()),
+            ..transaction(GameTransactionType::Navigate)
+        })
+        .unwrap();
+        let snapshot = game.snapshot();
+        assert_eq!(snapshot.black_captures, 0);
+        assert_eq!(snapshot.white_captures, 0);
     }
 
     #[test]

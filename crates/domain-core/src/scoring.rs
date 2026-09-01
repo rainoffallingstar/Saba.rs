@@ -235,15 +235,43 @@ pub fn score_board_with_rule(
     score_overrides: &std::collections::BTreeMap<Vertex, i8>,
     rule: ScoringRule,
 ) -> ScoreResult {
+    score_board_with_estimation(board, komi, score_overrides, rule, 0)
+}
+
+/// Scores the board, optionally using Monte-Carlo playout to decide life and
+/// death instead of the zero-liberty heuristic. `estimator_iterations` is the
+/// number of random playouts per chain (the `score.estimator_iterations`
+/// setting); `0` keeps the deterministic heuristic. Results are deterministic
+/// for a given board and iteration count.
+pub fn score_board_with_estimation(
+    board: &BoardSnapshot,
+    komi: Option<f64>,
+    score_overrides: &std::collections::BTreeMap<Vertex, i8>,
+    rule: ScoringRule,
+    estimator_iterations: usize,
+) -> ScoreResult {
     let mut chains = find_chains(board);
     mark_surrounded_chains(board, &mut chains);
+
+    // Monte-Carlo life-and-death: when enabled, a chain is dead when its
+    // playout survival rate falls below the threshold, unless the user
+    // overrode it. This catches seki / snapback / enclosed-but-alive groups
+    // that the zero-liberty heuristic misjudges.
+    const DEATH_THRESHOLD: f64 = 0.5;
+    let survival: Option<Vec<f64>> = (estimator_iterations > 0).then(|| {
+        let chain_keys: Vec<(Color, Vec<Vertex>)> = chains
+            .iter()
+            .map(|chain| (chain.color, chain.vertices.clone()))
+            .collect();
+        crate::monte_carlo::estimate_chain_survival(board, &chain_keys, estimator_iterations)
+    });
 
     // Chain-level dead determination: a chain is dead when the heuristic
     // marks it surrounded, unless the user overrode any of its stones.
     let mut dead_vertices = std::collections::BTreeSet::new();
     let mut black_captured = 0usize;
     let mut white_captured = 0usize;
-    for chain in &chains {
+    for (index, chain) in chains.iter().enumerate() {
         let override_value = chain
             .vertices
             .iter()
@@ -252,12 +280,18 @@ pub fn score_board_with_rule(
             .next();
         let alive_override = override_value == Some(chain.color.sign());
         let dead_override = override_value == Some(-chain.color.sign());
+        // Monte-Carlo verdict overrides the heuristic when enabled; the user's
+        // explicit alive/dead flags always win over both.
+        let heuristic_dead = match &survival {
+            Some(rates) => rates[index] < DEATH_THRESHOLD,
+            None => chain.fully_surrounded,
+        };
         let dead = if dead_override {
             true
         } else if alive_override {
             false
         } else {
-            chain.fully_surrounded
+            heuristic_dead
         };
         if dead {
             for vertex in &chain.vertices {
@@ -462,5 +496,57 @@ mod tests {
         let result = score_board(&board, Some(0.0), &overrides);
         assert_eq!(result.black_captured, 1);
         assert_eq!(result.black_stones, 0);
+    }
+
+    #[test]
+    fn monte_carlo_also_kills_a_fully_surrounded_stone() {
+        // The same enclosed white stone the heuristic kills should also be
+        // judged dead by Monte-Carlo playout (survival ≈ 0).
+        let board = board_from_rows(&["BB.", "BWB", "BB."]);
+        let result = score_board_with_estimation(
+            &board,
+            Some(0.0),
+            &Default::default(),
+            ScoringRule::ChineseArea,
+            64,
+        );
+        assert_eq!(result.white_captured, 1);
+        assert_eq!(result.white_stones, 0);
+    }
+
+    #[test]
+    fn monte_carlo_keeps_a_live_group_alive() {
+        // A group with ample liberties must stay alive under Monte-Carlo
+        // (survival ≈ 1), matching the heuristic.
+        let board = board_from_rows(&["BB.", "BB.", "..."]);
+        let result = score_board_with_estimation(
+            &board,
+            Some(0.0),
+            &Default::default(),
+            ScoringRule::ChineseArea,
+            64,
+        );
+        assert_eq!(result.black_captured, 0);
+        assert_eq!(result.black_stones, 4);
+    }
+
+    #[test]
+    fn monte_carlo_estimation_is_deterministic() {
+        let board = board_from_rows(&["BB.", "BWB", "BB."]);
+        let first = score_board_with_estimation(
+            &board,
+            Some(0.0),
+            &Default::default(),
+            ScoringRule::ChineseArea,
+            48,
+        );
+        let second = score_board_with_estimation(
+            &board,
+            Some(0.0),
+            &Default::default(),
+            ScoringRule::ChineseArea,
+            48,
+        );
+        assert_eq!(first, second);
     }
 }
