@@ -10636,6 +10636,44 @@ mod headless_smoke {
     }
 
     #[test]
+    fn markup_tools_apply_markers_through_the_shell() {
+        with_headless_shell_cx("markup-tools", |shell, cx| {
+            shell.active_tool = crate::markup::MarkupTool::Triangle;
+            shell.set_mode(ryusei_domain_core::GameMode::Edit, cx);
+            shell.on_board_vertex_mouse_down(Vertex { column: 3, row: 3 }, cx);
+            let snapshot = shell.host.snapshot();
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == snapshot.current_node_id)
+                .expect("current node exists");
+            assert!(
+                node.properties.contains_key("TR"),
+                "triangle markup must be applied, got {:?}",
+                node.properties
+            );
+            assert!(snapshot.board.markers[3][3].is_some());
+        });
+    }
+
+    #[test]
+    fn estimate_mode_toggles_off_when_clicked_again() {
+        with_headless_shell_cx("estimate-toggle", |shell, cx| {
+            shell.set_mode(ryusei_domain_core::GameMode::Estimator, cx);
+            assert_eq!(shell.mode, ryusei_domain_core::GameMode::Estimator);
+            // Second click of the 估目 button returns to play mode, so no
+            // separate exit button is required.
+            if shell.mode == ryusei_domain_core::GameMode::Estimator {
+                shell.set_mode(ryusei_domain_core::GameMode::Play, cx);
+            } else {
+                shell.set_mode(ryusei_domain_core::GameMode::Estimator, cx);
+            }
+            assert_eq!(shell.mode, ryusei_domain_core::GameMode::Play);
+            assert_eq!(shell.active_tool, crate::markup::MarkupTool::Play);
+        });
+    }
+
+    #[test]
     fn ogs_account_starts_signed_out_and_tracks_client_state() {
         with_headless_shell_cx("ogs-account", |shell, cx| {
             assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);

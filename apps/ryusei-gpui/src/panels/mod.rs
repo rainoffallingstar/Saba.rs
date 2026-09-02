@@ -669,9 +669,13 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                 .ghost()
                 .selected(mode == GameMode::Estimator)
                 .label("估目")
-                .tooltip("形势判断与估目 (Territory)")
+                .tooltip("形势判断与估目；再次点击退出 (Territory)")
                 .on_click(cx.listener(|shell, _, _, cx| {
-                    shell.set_mode(GameMode::Estimator, cx);
+                    if shell.mode == GameMode::Estimator {
+                        shell.set_mode(GameMode::Play, cx);
+                    } else {
+                        shell.set_mode(GameMode::Estimator, cx);
+                    }
                 })),
         )
         .children(has_markups.then(|| {
@@ -2421,9 +2425,13 @@ pub fn render_floating_markup_bar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                 .ghost()
                 .selected(mode == GameMode::Estimator)
                 .label("估目")
-                .tooltip("形势判断与估目 (Territory)")
+                .tooltip("形势判断与估目；再次点击退出 (Territory)")
                 .on_click(cx.listener(|shell, _, _, cx| {
-                    shell.set_mode(GameMode::Estimator, cx);
+                    if shell.mode == GameMode::Estimator {
+                        shell.set_mode(GameMode::Play, cx);
+                    } else {
+                        shell.set_mode(GameMode::Estimator, cx);
+                    }
                 })),
         )
         .children(has_markups.then(|| {

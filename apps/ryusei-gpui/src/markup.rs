@@ -40,23 +40,6 @@ impl MarkupTool {
         }
     }
 
-    /// The SGF property used by this tool (`CR`, `MA`, `SQ`, `TR`, `LB`).
-    fn sgf_property(self) -> Option<&'static str> {
-        match self {
-            MarkupTool::Circle => Some("CR"),
-            MarkupTool::Square => Some("SQ"),
-            MarkupTool::Triangle => Some("TR"),
-            MarkupTool::Cross => Some("MA"),
-            MarkupTool::Label => Some("LB"),
-            MarkupTool::Play
-            | MarkupTool::Line
-            | MarkupTool::Arrow
-            | MarkupTool::SetupBlack
-            | MarkupTool::SetupWhite
-            | MarkupTool::SetupClear => None,
-        }
-    }
-
     /// The SGF setup property for this tool (`AB`, `AW`, `AE`).
     pub fn setup_property(self) -> Option<&'static str> {
         match self {
@@ -89,13 +72,25 @@ impl MarkupTool {
 
 /// Builds the `AddMarkup` transaction for the current node, or `None` when the
 /// tool is `Play` (which is handled as a normal move instead).
+///
+/// `MarkerSnapshot.marker_type` uses the domain-core semantic names
+/// (`circle`/`square`/`triangle`/`cross`/`label`) — the same vocabulary the
+/// board renderer and the document normalizer expect. Writing SGF property
+/// names here makes `add_markup` reject the transaction.
 pub fn create_markup_transaction(
     node_id: &NodeId,
     vertex: Vertex,
     tool: MarkupTool,
     label: &str,
 ) -> Option<GameTransaction> {
-    let marker_type = tool.sgf_property()?;
+    let marker_type = match tool {
+        MarkupTool::Circle => "circle",
+        MarkupTool::Square => "square",
+        MarkupTool::Triangle => "triangle",
+        MarkupTool::Cross => "cross",
+        MarkupTool::Label => "label",
+        _ => return None,
+    };
     Some(GameTransaction {
         schema_version: CURRENT_TRANSACTION_SCHEMA_VERSION,
         transaction_type: GameTransactionType::AddMarkup,
@@ -427,7 +422,7 @@ mod tests {
         assert_eq!(transaction.transaction_type, GameTransactionType::AddMarkup);
         assert_eq!(transaction.vertex, Some(Vertex { column: 3, row: 3 }));
         let marker = transaction.marker.expect("markup needs a marker");
-        assert_eq!(marker.marker_type, "CR");
+        assert_eq!(marker.marker_type, "circle");
         assert_eq!(marker.label, None);
     }
 
@@ -442,18 +437,18 @@ mod tests {
         .expect("a label tool must build a transaction");
 
         let marker = transaction.marker.expect("markup needs a marker");
-        assert_eq!(marker.marker_type, "LB");
+        assert_eq!(marker.marker_type, "label");
         assert_eq!(marker.label.as_deref(), Some("Q"));
     }
 
     #[test]
-    fn each_tool_maps_to_its_sgf_property() {
+    fn each_tool_maps_to_its_marker_type() {
         let cases = [
-            (MarkupTool::Circle, "CR"),
-            (MarkupTool::Square, "SQ"),
-            (MarkupTool::Triangle, "TR"),
-            (MarkupTool::Cross, "MA"),
-            (MarkupTool::Label, "LB"),
+            (MarkupTool::Circle, "circle"),
+            (MarkupTool::Square, "square"),
+            (MarkupTool::Triangle, "triangle"),
+            (MarkupTool::Cross, "cross"),
+            (MarkupTool::Label, "label"),
         ];
         for (tool, expected) in cases {
             let transaction = create_markup_transaction(
@@ -466,7 +461,7 @@ mod tests {
             assert_eq!(
                 transaction.marker.unwrap().marker_type,
                 expected,
-                "{tool:?} must use SGF property {expected}"
+                "{tool:?} must use the domain-core marker type {expected}"
             );
         }
     }
