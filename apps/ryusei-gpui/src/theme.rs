@@ -248,14 +248,16 @@ pub struct BoardSkin {
 }
 
 impl BoardSkin {
-    /// Picks the skin from the board-wood luminance: light warm wood → kaya
-    /// gradient + border; very dark wood → midnight ring; anything else → flat
-    /// studio surface.
+    /// Picks the skin from the board wood. Dark wood → midnight ring; warm
+    /// (red-dominant) wood → kaya gradient; neutral or cool light wood → flat
+    /// studio surface. Warmth, not luminance, separates kaya from studio: both
+    /// are light, but the kaya board is golden while the studio board is not.
     pub fn from_theme(theme: &ThemeTokens) -> Self {
         let wood = theme.board_wood_color();
         let lum = relative_luminance(wood);
+        let warmth = i32::from(wood.red) - i32::from(wood.blue);
         let is_dark = lum < 0.18;
-        let is_light_wood = !is_dark && lum > 0.30;
+        let is_warm_wood = !is_dark && warmth >= 40;
         if is_dark {
             // midnight: inset ring only, strong shadow.
             BoardSkin {
@@ -263,12 +265,12 @@ impl BoardSkin {
                 border: None,
                 shadow: true,
             }
-        } else if is_light_wood {
-            // kaya: warm gradient approximating the radial highlight, plus a
-            // thin wood border and a soft shadow.
+        } else if is_warm_wood {
+            // kaya: warm gradient derived from the wood itself (bright top-left,
+            // deepening bottom-right), a wood-toned border, and a soft shadow.
             BoardSkin {
-                gradient: Some((0xf1dcab, 0xd8b46e)),
-                border: Some(0xc9a45e),
+                gradient: Some(wood_gradient(wood)),
+                border: Some(darken(wood.rgb_u32(), 0.20)),
                 shadow: true,
             }
         } else {
@@ -302,9 +304,34 @@ fn relative_luminance_u32(color: u32) -> f32 {
     })
 }
 
+/// Blends each RGB channel toward a target color by `amount` in `[0, 1]`.
+fn blend_u32(color: u32, toward: u32, amount: f32) -> u32 {
+    let mix = |shift: u32| -> u32 {
+        let value = (color >> shift) & 0xff;
+        let target = (toward >> shift) & 0xff;
+        (value as f32 + (target as f32 - value as f32) * amount).round() as u32
+    };
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
+fn lighten(color: u32, amount: f32) -> u32 {
+    blend_u32(color, 0xffffff, amount)
+}
+
+fn darken(color: u32, amount: f32) -> u32 {
+    blend_u32(color, 0x000000, amount)
+}
+
+/// A kaya-style highlight gradient derived from the theme's own wood color, so
+/// distinct wood hues produce distinct boards instead of one shared tan.
+fn wood_gradient(wood: ThemeColor) -> (u32, u32) {
+    let base = wood.rgb_u32();
+    (lighten(base, 0.18), darken(base, 0.16))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{UiPalette, ui_palette};
+    use super::{BoardSkin, UiPalette, ui_palette};
     use ryusei_host::ThemeTokens;
 
     #[test]
@@ -373,5 +400,30 @@ mod tests {
         assert!(!palette.is_dark());
         palette.panel = 0x252528;
         assert!(UiPalette { ..palette }.is_dark());
+    }
+
+    #[test]
+    fn board_skin_distinguishes_kaya_studio_and_midnight() {
+        let theme_with_wood = |wood: &str| {
+            ThemeTokens::parse(&format!(
+                r##"{{"schemaVersion":1,"boardWood":"{wood}","boardLine":"#000000","starPoint":"#000000","stoneBlack":"#1a1a1a","stoneWhite":"#ffffff","background":"#f5f5f7"}}"##
+            ))
+            .unwrap()
+        };
+
+        // Warm golden wood → kaya gradient + wood border.
+        let kaya = BoardSkin::from_theme(&theme_with_wood("#e2b177"));
+        assert!(kaya.gradient.is_some());
+        assert!(kaya.border.is_some());
+
+        // Light neutral/green wood → flat studio surface, no gradient.
+        let studio = BoardSkin::from_theme(&theme_with_wood("#cad5c7"));
+        assert!(studio.gradient.is_none());
+        assert!(studio.border.is_some());
+
+        // Dark wood → midnight ring, no gradient or border.
+        let midnight = BoardSkin::from_theme(&theme_with_wood("#2e2a24"));
+        assert!(midnight.gradient.is_none());
+        assert!(midnight.border.is_none());
     }
 }
