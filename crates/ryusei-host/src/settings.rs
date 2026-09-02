@@ -99,6 +99,7 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "view.fuzzy_stone_placement"
         | "view.show_menubar"
         | "view.show_leftsidebar"
+        | "view.show_analysis_preview"
         | "view.show_comments"
         | "view.show_coordinates"
         | "view.show_graph"

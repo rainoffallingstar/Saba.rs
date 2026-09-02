@@ -87,7 +87,6 @@ use crate::settings_form::{
 use crate::sound_feedback::{SoundCue, SoundSink, platform_sound_sink, play_if_enabled};
 use crate::text_inputs::TextInputs;
 use crate::theme::{ThemeTokens, UiPalette, ui_palette};
-use crate::variation_tree::build_variation_tree_layout;
 use crate::winrate_graph::{
     CANDIDATES_PROPERTY, WinrateGraphMetric, analysis_sgf_properties,
     deserialize_analysis_candidates, graph_plot_points, serialize_analysis_candidates,
@@ -5618,20 +5617,18 @@ impl ShellApp {
     }
 
     fn toggle_right_sidebar(&mut self, cx: &mut Context<Self>) {
-        // The right pane follows Sabaki's inferred visibility
-        // (`show_graph || show_comments`). The toolbar toggle flips both
-        // switches so the button always means "show/hide this pane".
-        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
+        // The right pane hosts the AI preview and comments (the variation tree
+        // lives in the bottom deck now). The toggle flips both switches so the
+        // button always means "show/hide this pane".
         let show_comments = self.settings.get_bool("view.show_comments").unwrap_or(true);
         let show_analysis_preview = self
             .settings
             .get_bool("view.show_analysis_preview")
             .unwrap_or(true);
-        let visible = right_pane_visible(show_graph, show_comments, show_analysis_preview);
+        let visible = right_pane_visible(show_comments, show_analysis_preview);
         let target = !visible;
         let mut failed = false;
         for (key, value) in [
-            ("view.show_graph", target),
             (
                 "view.show_comments",
                 if target { show_comments } else { false },
@@ -5920,7 +5917,37 @@ impl ShellApp {
         // Restore persisted per-move analysis candidates when navigating to a
         // reviewed node, so the board shows its candidate points and winrate.
         self.restore_analysis_candidates_for_current_node();
+        // 打谱研讨模式逐手分析：跳转后把分析同步到新局面，不分黑白，每一手都分析。
+        self.sync_analysis_to_current_position(cx);
         cx.notify();
+    }
+
+    /// Study mode (打谱研讨) analyzes every move regardless of which color
+    /// played. Navigating re-syncs the engine to the new position: a streaming
+    /// session replays onto it, an idle attached session starts fresh, and a
+    /// configured-but-disconnected engine reconnects automatically. Batch
+    /// review owns the engine while it runs and is left alone.
+    fn sync_analysis_to_current_position(&mut self, cx: &mut Context<Self>) {
+        if self.session_policy.mode != SessionMode::Record
+            || self.session_policy.source == SessionSource::RemoteCompetition
+            || self.background_review
+            || self.batch_review_state.is_some()
+        {
+            return;
+        }
+        if self.analysis_task.is_some() {
+            // The streaming worker replays the latest position when it stops,
+            // so rapid navigation coalesces into a single restart.
+            self.restart_analysis_after_position_change = true;
+            self.analysis_run.request_replay_and_stop();
+            return;
+        }
+        if self.engine_controller.is_attached(EngineRole::Analysis)
+            || self.engine_roles.get(EngineRole::Analysis).is_some()
+        {
+            self.analysis_enabled = true;
+            self.start_analysis(cx);
+        }
     }
 
     /// Loads the persisted candidate list (`RYK`) for the current node back
@@ -6658,7 +6685,8 @@ impl ShellApp {
             _ => self.session_policy.source,
         };
         self.session_policy = SessionPolicy::new(mode, source);
-        self.analysis_enabled = self.session_policy.analysis == AnalysisPolicy::Continuous;
+        // 打谱研讨与观战默认开启分析；对弈模式默认关闭。
+        self.analysis_enabled = matches!(mode, SessionMode::Record | SessionMode::Live);
         if !self.analysis_enabled && self.analysis_task.is_some() {
             self.analysis_run.request_stop();
         }
@@ -8660,7 +8688,6 @@ impl Render for ShellApp {
         let _path_label = file_state.path.as_deref().unwrap_or("no source file");
         let _availability = navigation_availability(&snapshot);
         let _position = position_label(&snapshot);
-        let variation_layout = build_variation_tree_layout(&snapshot);
         // `best_analysis_winrate` already returns Black perspective; the graph
         // history builder performs the same conversion for White-to-play data,
         // so feed it the engine's raw player-to-move fraction to avoid a double
@@ -8703,39 +8730,18 @@ impl Render for ShellApp {
                 | ryusei_host::ExternalFileStatus::Unreadable
         );
         // Left engines sidebar defaults to collapsed on first launch (matching reference screenshot);
-        // right sidebar (game graph & comments) defaults to expanded.
+        // right sidebar (AI preview & comments) defaults to expanded.
         let show_left_sidebar = self
             .settings
             .get_bool("view.show_leftsidebar")
             .unwrap_or(false);
-        let show_graph = self.settings.get_bool("view.show_graph").unwrap_or(true);
         let show_comments = self.settings.get_bool("view.show_comments").unwrap_or(true);
         let show_analysis_preview = self
             .settings
             .get_bool("view.show_analysis_preview")
             .unwrap_or(true);
-        let show_right_sidebar =
-            right_pane_visible(show_graph, show_comments, show_analysis_preview);
+        let show_right_sidebar = right_pane_visible(show_comments, show_analysis_preview);
         let palette = self.palette;
-        let weak_shell = cx.entity().downgrade();
-        let on_node_clicked = Rc::new(
-            move |node_id: &ryusei_domain_core::NodeId, _window: &mut Window, cx: &mut App| {
-                weak_shell
-                    .update(cx, |shell, cx| shell.navigate_to_node(node_id.clone(), cx))
-                    .ok();
-            },
-        );
-
-        let weak_shell_for_context = cx.entity().downgrade();
-        let on_node_context_requested = Rc::new(
-            move |node_id: &ryusei_domain_core::NodeId, _window: &mut Window, cx: &mut App| {
-                weak_shell_for_context
-                    .update(cx, |shell, cx| {
-                        shell.open_game_graph_context_menu(node_id.clone(), cx)
-                    })
-                    .ok();
-            },
-        );
 
         // Adaptive goban: fill the center pane as a square, bounded by the
         // available width (after sidebars) and height (after the player bar).
@@ -8910,45 +8916,9 @@ impl Render for ShellApp {
                                 div().id("analysis-preview-panel-hidden")
                             })
                             .child(div().id("winrate-graph-panel-hidden"))
-                            .child(
-                                div()
-                                    .id("game-graph-region")
-                                    .debug_selector(|| "game-graph-region".to_owned())
-                                    .flex_1()
-                                    .min_h(px(140.0))
-                                    .overflow_x_scroll()
-                                    .overflow_y_scroll()
-                                    .child(if show_graph {
-                                        panels::render_variation_tree_panel(
-                                            "variation-tree-panel",
-                                            &variation_layout,
-                                            self.settings
-                                                .get("graph.grid_size")
-                                                .and_then(serde_json::Value::as_f64)
-                                                .map(|value| value as f32)
-                                                .unwrap_or(26.0),
-                                            self.settings
-                                                .get("graph.node_size")
-                                                .and_then(serde_json::Value::as_f64)
-                                                .map(|value| value as f32)
-                                                .unwrap_or(4.0),
-                                            palette,
-                                            self,
-                                            cx,
-                                            move |node_id, window, cx| {
-                                                on_node_clicked(node_id, window, cx)
-                                            },
-                                            {
-                                                let handler = on_node_context_requested.clone();
-                                                move |node_id, window, cx| {
-                                                    handler(node_id, window, cx)
-                                                }
-                                            },
-                                        )
-                                    } else {
-                                        div().id("variation-tree-panel-hidden")
-                                    }),
-                            )
+                            // The variation tree lives in the bottom deck tab;
+                            // the right sidebar keeps only the AI preview and
+                            // the comments / node inspector.
                             .child(if show_comments {
                                 panels::render_right_sidebar_split_handle(
                                     SplitPane::Properties,
@@ -9661,7 +9631,13 @@ fn main() {
         let shell_toggle_graph = shell.clone();
         cx.on_action(move |_: &ToggleGameGraph, cx| {
             shell_toggle_graph.update(cx, |shell, cx| {
-                shell.toggle_sidebar_setting("view.show_graph", "game graph", cx)
+                // The variation tree moved to the bottom deck: the action now
+                // toggles that tab instead of a right-sidebar panel.
+                if shell.active_bottom_tab() == crate::BottomDeckTab::VariationTree {
+                    shell.close_bottom_deck(cx);
+                } else {
+                    shell.switch_bottom_tab(crate::BottomDeckTab::VariationTree, cx);
+                }
             });
         });
         let shell_toggle_comments = shell.clone();
@@ -10674,6 +10650,19 @@ mod headless_smoke {
     }
 
     #[test]
+    fn record_mode_defaults_to_per_move_analysis() {
+        with_headless_shell_cx("record-analysis", |shell, cx| {
+            // 打谱研讨模式默认逐手分析（不分黑白）；对弈默认关闭；观战连续。
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Record, cx);
+            assert!(shell.analysis_enabled);
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Match, cx);
+            assert!(!shell.analysis_enabled);
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Live, cx);
+            assert!(shell.analysis_enabled);
+        });
+    }
+
+    #[test]
     fn ogs_account_starts_signed_out_and_tracks_client_state() {
         with_headless_shell_cx("ogs-account", |shell, cx| {
             assert_eq!(shell.ogs_auth_state, ryusei_host::OgsAuthState::SignedOut);
@@ -10894,8 +10883,8 @@ mod frontend_smoke {
         assert_eq!(
             shell.read_with(&vcx.cx, |shell, _| {
                 (
-                    shell.settings.get_bool("view.show_graph"),
                     shell.settings.get_bool("view.show_comments"),
+                    shell.settings.get_bool("view.show_analysis_preview"),
                 )
             }),
             (Some(false), Some(false)),
@@ -11082,9 +11071,9 @@ mod frontend_smoke {
         assert_eq!(right_sidebar.size.width, px(200.0));
         let panels = [
             (
-                "variation-tree-panel",
-                vcx.debug_bounds("variation-tree-panel")
-                    .expect("variation panel must have a debug selector"),
+                "analysis-preview-panel",
+                vcx.debug_bounds("analysis-preview-panel")
+                    .expect("analysis preview panel must have a debug selector"),
             ),
             (
                 "node-inspector-panel",
@@ -11165,16 +11154,16 @@ mod frontend_smoke {
             engine_sidebar,
             left_sidebar
         );
-        let game_graph_region = vcx
-            .debug_bounds("game-graph-region")
-            .expect("game graph region must have a debug selector");
+        let analysis_preview = vcx
+            .debug_bounds("analysis-preview-panel")
+            .expect("analysis preview must have a debug selector");
         let properties_region = vcx
             .debug_bounds("properties-region")
             .expect("properties region must have a debug selector");
         assert!(
-            f32::from(game_graph_region.bottom()) <= f32::from(properties_region.origin.y) + 0.5,
-            "game graph region {:?} must sit above properties region {:?}",
-            game_graph_region,
+            f32::from(analysis_preview.bottom()) <= f32::from(properties_region.origin.y) + 0.5,
+            "analysis preview {:?} must sit above properties region {:?}",
+            analysis_preview,
             properties_region
         );
         let properties_splitter = vcx
@@ -11184,10 +11173,10 @@ mod frontend_smoke {
             .debug_bounds("node-comment-input-box")
             .expect("enabled CommentBox must render");
         assert!(
-            game_graph_region.origin.y <= properties_splitter.origin.y
+            analysis_preview.origin.y <= properties_splitter.origin.y
                 && properties_splitter.origin.y <= properties_region.origin.y,
-            "GameGraph {:?}, properties splitter {:?}, and CommentBox {:?} must be vertically ordered",
-            game_graph_region,
+            "AI preview {:?}, properties splitter {:?}, and CommentBox {:?} must be vertically ordered",
+            analysis_preview,
             properties_splitter,
             properties_region
         );
@@ -11243,6 +11232,15 @@ mod frontend_smoke {
             matches!(after_pass.1, Some(None)),
             "pass must append a pass move"
         );
+        vcx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        vcx.run_until_parked();
+        // The variation tree moved from the right sidebar into the bottom
+        // deck's 变着树 tab; open it there before exercising graph navigation.
+        shell.update(&mut vcx.cx, |shell, cx| {
+            shell.switch_bottom_tab(crate::BottomDeckTab::VariationTree, cx);
+        });
         vcx.update(|window, cx| {
             let _ = window.draw(cx);
         });
