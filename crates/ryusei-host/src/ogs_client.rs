@@ -348,9 +348,21 @@ impl LiveOgsClient {
             .user
             .as_ref()
             .and_then(|user| user.get("id"))
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "OGS user identity is unknown".to_owned())?;
-        if game.black_id != Some(user_id) && game.white_id != Some(user_id) {
+            .and_then(|id| id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok())))
+            .unwrap_or(0);
+        let username = inner
+            .snapshot
+            .user
+            .as_ref()
+            .and_then(|u| u.get("username"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let is_participant = (user_id != 0
+            && (game.black_id == Some(user_id) || game.white_id == Some(user_id)))
+            || (!username.is_empty()
+                && (game.black_name.eq_ignore_ascii_case(username)
+                    || game.white_name.eq_ignore_ascii_case(username)));
+        if !is_participant {
             return Err("You are not a participant in this game".to_owned());
         }
         Ok(())
@@ -370,11 +382,22 @@ impl LiveOgsClient {
             .user
             .as_ref()
             .and_then(|user| user.get("id"))
-            .and_then(Value::as_u64)
+            .and_then(|id| id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok())))
             .unwrap_or(0);
-        let my_color = if game.black_id == Some(user_id) {
+        let username = inner
+            .snapshot
+            .user
+            .as_ref()
+            .and_then(|u| u.get("username"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let my_color = if user_id != 0 && game.black_id == Some(user_id) {
             Some(Color::Black)
-        } else if game.white_id == Some(user_id) {
+        } else if user_id != 0 && game.white_id == Some(user_id) {
+            Some(Color::White)
+        } else if !username.is_empty() && game.black_name.eq_ignore_ascii_case(username) {
+            Some(Color::Black)
+        } else if !username.is_empty() && game.white_name.eq_ignore_ascii_case(username) {
             Some(Color::White)
         } else {
             None
@@ -692,8 +715,26 @@ impl LiveOgsClient {
         let clock = parse_clock(payload.get("clock"));
         let black_name = player_name(payload, "black");
         let white_name = player_name(payload, "white");
-        let black_id = payload.pointer("/players/black/id").and_then(Value::as_u64);
-        let white_id = payload.pointer("/players/white/id").and_then(Value::as_u64);
+        let black_id = payload
+            .pointer("/players/black/id")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .pointer("/players/black/id")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .or_else(|| payload.get("black_player_id").and_then(Value::as_u64));
+        let white_id = payload
+            .pointer("/players/white/id")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .pointer("/players/white/id")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .or_else(|| payload.get("white_player_id").and_then(Value::as_u64));
         let phase = payload
             .get("phase")
             .and_then(Value::as_str)
@@ -822,7 +863,9 @@ impl LiveOgsClient {
         if game.game_id != game_id {
             return;
         }
-        game.next_player = clock.as_ref().and_then(|c| c.active_color);
+        if let Some(active) = clock.as_ref().and_then(|c| c.active_color) {
+            game.next_player = Some(active);
+        }
         game.clock = clock;
         game.stone_removal_mode = stone_removal_mode;
     }
@@ -1005,11 +1048,35 @@ fn reader_loop(
 // -- pure payload parsers ----------------------------------------------------
 
 fn player_to_move(payload: &Value, move_number: u32) -> Option<Color> {
-    let black_id = payload.pointer("/players/black/id").and_then(Value::as_u64);
-    let white_id = payload.pointer("/players/white/id").and_then(Value::as_u64);
+    let black_id = payload
+        .pointer("/players/black/id")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            payload
+                .pointer("/players/black/id")
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .or_else(|| payload.get("black_player_id").and_then(Value::as_u64));
+    let white_id = payload
+        .pointer("/players/white/id")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            payload
+                .pointer("/players/white/id")
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .or_else(|| payload.get("white_player_id").and_then(Value::as_u64));
     let current_player = payload
         .pointer("/clock/current_player")
-        .and_then(Value::as_u64);
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            payload
+                .pointer("/clock/current_player")
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse::<u64>().ok())
+        });
     match current_player {
         Some(id) if Some(id) == black_id => Some(Color::Black),
         Some(id) if Some(id) == white_id => Some(Color::White),
