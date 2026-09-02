@@ -7598,6 +7598,13 @@ impl ShellApp {
                     .into();
                     self.show_toast(self.status.to_string(), cx);
                 } else if new_moves {
+                    // 服务器确认的新一手（自己或对手）落盘：与本地落子一致，
+                    // 落子播 StonePlaced、停一手播 Pass，让远程对局也有音效反馈。
+                    self.play_sound_if_enabled(if game.last_move.as_deref() == Some("..") {
+                        SoundCue::Pass
+                    } else {
+                        SoundCue::StonePlaced
+                    });
                     // 每手棋投影后，按选项做 80v 后台复盘（OGS 对局期间不上屏
                     // 只持久化，对局结束后胜率图自动呈现）。
                     self.maybe_background_review_current_position(cx);
