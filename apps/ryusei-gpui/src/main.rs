@@ -8763,7 +8763,7 @@ impl Render for ShellApp {
                 0.0
             };
         let bottom_panel_height = if self.is_bottom_deck_open() {
-            180.0
+            panels::BOTTOM_DECK_HEIGHT
         } else {
             0.0
         };
@@ -8844,19 +8844,40 @@ impl Render for ShellApp {
                             .overflow_hidden()
                             .flex()
                             .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .child(panels::render_session_toolbar(self, cx))
-                            .child(panels::render_goban_area(
-                                &snapshot,
-                                &self.theme,
-                                self.analysis_best_move,
-                                board_pixel_size,
-                                self,
-                                cx,
-                            ))
-                            .child(panels::render_floating_playback_bar(&snapshot, self, cx)),
+                            .child(
+                                // Board region: toolbar capsule + goban + playback
+                                // capsule, centered in the remaining column space.
+                                div()
+                                    .id("center-board-region")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .child(panels::render_session_toolbar(self, cx))
+                                    .child(panels::render_goban_area(
+                                        &snapshot,
+                                        &self.theme,
+                                        self.analysis_best_move,
+                                        board_pixel_size,
+                                        self,
+                                        cx,
+                                    ))
+                                    .child(panels::render_floating_playback_bar(
+                                        &snapshot, self, cx,
+                                    )),
+                            )
+                            // Design: the pull-up analysis deck attaches to the
+                            // center board column only — it no longer spans the
+                            // left/right sidebars.
+                            .children(if self.is_bottom_deck_open() {
+                                Some(panels::render_bottom_deck_panel(&snapshot, self, cx))
+                            } else {
+                                None
+                            }),
                     )
                     .child(if show_right_sidebar {
                         panels::render_split_handle(SplitPane::Right, palette, cx)
@@ -8969,12 +8990,7 @@ impl Render for ShellApp {
                     .flex_col()
                     .child(panels::render_player_bar(
                         &snapshot, &status, palette, self, cx,
-                    ))
-                    .children(if self.is_bottom_deck_open() {
-                        Some(panels::render_bottom_deck_panel(&snapshot, self, cx))
-                    } else {
-                        None
-                    }),
+                    )),
             )
             .child(match self.active_drawer {
                 Some(ActiveDrawer::Preferences) => panels::render_preferences_drawer(self, cx),

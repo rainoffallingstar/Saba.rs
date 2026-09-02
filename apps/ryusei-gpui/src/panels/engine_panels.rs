@@ -549,9 +549,6 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         &snapshot.root_properties,
         snapshot.board.width,
     );
-    let evaluations = ryusei_host::compute_game_move_evaluations(&snapshot);
-    let _summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
-
     // Player metadata & Clocks
     let property = |key: &str| {
         snapshot
@@ -972,7 +969,9 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                             )
                             .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
                     ),
-                // Section 2: 引擎与工具
+                // Section 2: 整局失误统计 (design: below the AI evaluation card)
+                render_game_analytics_card(shell),
+                // Section 3: 引擎与工具
                 render_engine_config_section(shell, cx),
             ],
             crate::LeftSidebarTab::Library => vec![render_left_sidebar_library_panel(shell, cx)],
@@ -1330,9 +1329,6 @@ pub fn render_node_inspector_panel(
     shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
-    let evaluations = ryusei_host::compute_game_move_evaluations(&shell.host.snapshot());
-    let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
-
     div()
         .id("node-inspector-panel")
         .debug_selector(|| "node-inspector-panel".to_owned())
@@ -1519,205 +1515,215 @@ pub fn render_node_inspector_panel(
                     .child("comments hidden — enable view.show_comments to edit")
             },
         )
+}
+
+/// The whole-game mistake & accuracy statistics card (PRD §4.3). Rendered in
+/// the left engine sidebar under the AI position evaluation card, so the
+/// per-player comparison is always visible next to the live winrate readout.
+pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
+    let evaluations = ryusei_host::compute_game_move_evaluations(&shell.host.snapshot());
+    let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+
+    div()
+        .p_2p5()
+        .rounded_md()
+        .bg(rgb(shell.palette.input))
+        .border_1()
+        .border_color(rgb(shell.palette.border))
+        .flex()
+        .flex_col()
+        .gap_1p5()
         .child(
             div()
-                .p_2p5()
-                .rounded_md()
-                .bg(rgb(shell.palette.input))
-                .border_1()
-                .border_color(rgb(shell.palette.border))
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(shell.palette.text))
+                .child(icon_label(
+                    ShellIcon::BarChart,
+                    "整局失误与精度统计",
+                    shell.palette.text,
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .p_2()
+                        .rounded(px(4.0))
+                        .bg(rgb(shell.palette.panel))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .child("● 黑棋 (Black)"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!(
+                                    "恶手: {} · 失误: {}",
+                                    summary.black_blunder_count, summary.black_mistake_count
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(shell.palette.success))
+                                .child(format!("均损: {:.2}目", summary.black_avg_loss)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .p_2()
+                        .rounded(px(4.0))
+                        .bg(rgb(shell.palette.panel))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .child("○ 白棋 (White)"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child(format!(
+                                    "恶手: {} · 失误: {}",
+                                    summary.white_blunder_count, summary.white_mistake_count
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(shell.palette.danger_text))
+                                .child(format!("均损: {:.2}目", summary.white_avg_loss)),
+                        ),
+                ),
+        )
+        // Per-player comparison bars (PRD §4.3: 双方恶手数/失误数对比条形图 +
+        // 均损对比). Widths are normalised to the larger value.
+        .child({
+            let bar = |label: &'static str, value: f64, other: f64, color: u32, text: String| {
+                let ratio = crate::ui_format::loss_ratio(value, other);
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(28.0))
+                            .text_xs()
+                            .text_color(rgb(shell.palette.muted))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(8.0))
+                            .rounded(px(4.0))
+                            .bg(rgb(shell.palette.track))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .rounded(px(4.0))
+                                    .bg(rgb(color))
+                                    .w(gpui::relative(ratio)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(color))
+                            .child(text),
+                    )
+            };
+            let compare = move |value_black: f64,
+                                value_white: f64,
+                                text_black: String,
+                                text_white: String| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(bar(
+                        "黑",
+                        value_black,
+                        value_white,
+                        shell.palette.success,
+                        text_black,
+                    ))
+                    .child(bar(
+                        "白",
+                        value_white,
+                        value_black,
+                        shell.palette.danger_text,
+                        text_white,
+                    ))
+            };
+            let blunder_cmp = compare(
+                summary.black_blunder_count as f64,
+                summary.white_blunder_count as f64,
+                format!("{}", summary.black_blunder_count),
+                format!("{}", summary.white_blunder_count),
+            );
+            let mistake_cmp = compare(
+                summary.black_mistake_count as f64,
+                summary.white_mistake_count as f64,
+                format!("{}", summary.black_mistake_count),
+                format!("{}", summary.white_mistake_count),
+            );
+            let loss_cmp = compare(
+                summary.black_avg_loss,
+                summary.white_avg_loss,
+                format!("{:.2}", summary.black_avg_loss),
+                format!("{:.2}", summary.white_avg_loss),
+            );
+            div()
                 .flex()
                 .flex_col()
-                .gap_1p5()
+                .gap_2()
+                .pt_1()
                 .child(
                     div()
                         .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child(icon_label(ShellIcon::BarChart, "整局失误与精度统计", shell.palette.text)),
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("恶手数对比"),
                 )
+                .child(blunder_cmp)
                 .child(
                     div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .p_2()
-                                .rounded(px(4.0))
-                                .bg(rgb(shell.palette.panel))
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::BOLD)
-                                        .child("● 黑棋 (Black)"),
-                                )
-                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
-                                    format!(
-                                        "恶手: {} · 失误: {}",
-                                        summary.black_blunder_count, summary.black_mistake_count
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(shell.palette.success))
-                                        .child(format!("均损: {:.2}目", summary.black_avg_loss)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .p_2()
-                                .rounded(px(4.0))
-                                .bg(rgb(shell.palette.panel))
-                                .border_1()
-                                .border_color(rgb(shell.palette.border))
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::BOLD)
-                                        .child("○ 白棋 (White)"),
-                                )
-                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
-                                    format!(
-                                        "恶手: {} · 失误: {}",
-                                        summary.white_blunder_count, summary.white_mistake_count
-                                    ),
-                                ))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(rgb(shell.palette.danger_text))
-                                        .child(format!("均损: {:.2}目", summary.white_avg_loss)),
-                                ),
-                        ),
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("失误数对比"),
                 )
-                // Per-player comparison bars (PRD §4.3: 双方恶手数/失误数对比
-                // 条形图 + 均损对比). Widths are normalised to the larger value.
-                .child({
-                    // A single labelled bar: label, track + filled portion,
-                    // value. `value`/`other` are the two players' numbers.
-                    let bar = |label: &'static str,
-                               value: f64,
-                               other: f64,
-                               color: u32,
-                               text: String| {
-                        let ratio = crate::ui_format::loss_ratio(value, other);
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(28.0))
-                                    .text_xs()
-                                    .text_color(rgb(shell.palette.muted))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(8.0))
-                                    .rounded(px(4.0))
-                                    .bg(rgb(shell.palette.track))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .rounded(px(4.0))
-                                            .bg(rgb(color))
-                                            .w(gpui::relative(ratio)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_xs()
-                                    .text_color(rgb(color))
-                                    .child(text),
-                            )
-                    };
-                    // A two-row comparison group (黑/白) for one metric.
-                    let compare = move |value_black: f64,
-                                        value_white: f64,
-                                        text_black: String,
-                                        text_white: String| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(bar(
-                                "黑",
-                                value_black,
-                                value_white,
-                                shell.palette.success,
-                                text_black,
-                            ))
-                            .child(bar(
-                                "白",
-                                value_white,
-                                value_black,
-                                shell.palette.danger_text,
-                                text_white,
-                            ))
-                    };
-                    let blunder_cmp = compare(
-                        summary.black_blunder_count as f64,
-                        summary.white_blunder_count as f64,
-                        format!("{}", summary.black_blunder_count),
-                        format!("{}", summary.white_blunder_count),
-                    );
-                    let mistake_cmp = compare(
-                        summary.black_mistake_count as f64,
-                        summary.white_mistake_count as f64,
-                        format!("{}", summary.black_mistake_count),
-                        format!("{}", summary.white_mistake_count),
-                    );
-                    let loss_cmp = compare(
-                        summary.black_avg_loss,
-                        summary.white_avg_loss,
-                        format!("{:.2}", summary.black_avg_loss),
-                        format!("{:.2}", summary.white_avg_loss),
-                    );
+                .child(mistake_cmp)
+                .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .pt_1()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("恶手数对比"),
-                        )
-                        .child(blunder_cmp)
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("失误数对比"),
-                        )
-                        .child(mistake_cmp)
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.subtle))
-                                .child("均损对比 (目)"),
-                        )
-                        .child(loss_cmp)
-                }),
-        )
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child("均损对比 (目)"),
+                )
+                .child(loss_cmp)
+        })
 }
 
 /// Compact right-sidebar board for the currently hovered engine candidate.

@@ -45,6 +45,12 @@ pub(crate) fn icon_label(icon: ShellIcon, label: &str, color: u32) -> Div {
         .child(div().child(label.to_owned()))
 }
 
+/// Height of the bottom analysis deck. Following the design, the deck is an
+/// attachment of the center board column (inside `center-canvas`), not a
+/// window-wide dock; the extra height over the design's 180px keeps the
+/// winrate curve clearly readable in the narrower column.
+pub const BOTTOM_DECK_HEIGHT: f32 = 240.0;
+
 /// The design's focus ring (`--focus-ring`: 3px accent at 65% transparency),
 /// applied to focused text inputs on top of their accent border.
 pub(crate) fn focus_ring(accent: u32) -> gpui::BoxShadow {
@@ -1065,6 +1071,7 @@ pub fn render_winrate_graph_panel(
     height: f32,
     palette: UiPalette,
     shell: &ShellApp,
+    current_label: Option<String>,
     on_node_clicked: impl Fn(&ryusei_domain_core::NodeId, &mut Window, &mut App) + 'static,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
@@ -1092,9 +1099,8 @@ pub fn render_winrate_graph_panel(
     div()
         .id("winrate-graph-panel")
         .debug_selector(|| "winrate-graph-panel".to_owned())
-        .flex_none()
-        .h(px(height))
-        .min_h_0()
+        .flex_1()
+        .min_h(px(height))
         .flex()
         .flex_col()
         .gap_1p5()
@@ -1138,12 +1144,19 @@ pub fn render_winrate_graph_panel(
                     div()
                         .flex()
                         .items_center()
-                        .gap_1p5()
+                        .gap_2()
+                        .children(current_label.map(|label| {
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(palette.info))
+                                .child(label)
+                        }))
                         .child(
                             div()
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(palette.info))
+                                .text_color(rgb(palette.muted))
                                 .child(if metric == WinrateGraphMetric::Winrate {
                                     "黑优 ↑ / 白优 ↓"
                                 } else {
@@ -1187,13 +1200,13 @@ pub fn render_winrate_graph_panel(
                         .child(
                             // Y-Axis Coordinate Labels (Left Column)
                             div()
-                                .w(px(32.0))
+                                .w(px(42.0))
                                 .h_full()
                                 .flex()
                                 .flex_col()
                                 .justify_between()
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(palette.muted))
                                 .child(div().text_color(rgb(palette.info)).child(y_labels[0]))
                                 .child(div().child(y_labels[1]))
@@ -1778,14 +1791,14 @@ pub fn render_bottom_deck_panel(
     div()
         .id("bottom-deck-panel")
         .debug_selector(|| "bottom-deck-panel".to_owned())
-        .h(px(180.0))
+        .h(px(BOTTOM_DECK_HEIGHT))
+        .w_full()
         .flex_none()
         .flex()
         .flex_col()
         .border_t_1()
         .border_color(rgb(shell.palette.border))
         .bg(rgb(shell.palette.panel))
-        .shadow_lg()
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
             cx.stop_propagation();
         })
@@ -1874,6 +1887,8 @@ pub fn render_bottom_deck_panel(
                 .min_h_0()
                 .p_2()
                 .overflow_y_scroll()
+                .flex()
+                .flex_col()
                 .child(match active_tab {
                     crate::BottomDeckTab::WinrateGraph => {
                         let live_player_winrate = if shell.analysis.is_empty() {
@@ -1915,6 +1930,23 @@ pub fn render_bottom_deck_panel(
                                 .and_then(serde_json::Value::as_f64)
                                 .unwrap_or(2.0),
                         );
+                        // Bold current-value readout: the graph's headline so
+                        // the live winrate / score lead is clear at a glance.
+                        let current_label = winrate_points
+                            .iter()
+                            .find(|point| point.is_current)
+                            .and_then(|point| match winrate_metric {
+                                WinrateGraphMetric::Winrate => point.black_winrate.map(|w| {
+                                    format!("黑 {:.1}% · 白 {:.1}%", w * 100.0, (1.0 - w) * 100.0)
+                                }),
+                                WinrateGraphMetric::ScoreLead => point.black_score_lead.map(|s| {
+                                    if s >= 0.0 {
+                                        format!("黑领先 +{s:.1} 目")
+                                    } else {
+                                        format!("白领先 +{:.1} 目", -s)
+                                    }
+                                }),
+                            });
                         let weak_shell = cx.entity().downgrade();
                         let on_node_clicked =
                             move |node_id: &ryusei_domain_core::NodeId,
@@ -1926,15 +1958,20 @@ pub fn render_bottom_deck_panel(
                                     })
                                     .ok();
                             };
-                        div().child(render_winrate_graph_panel(
-                            &points,
-                            winrate_metric,
-                            230.0,
-                            shell.palette,
-                            shell,
-                            on_node_clicked,
-                            cx,
-                        ))
+                        div()
+                            .w_full()
+                            .h_full()
+                            .flex()
+                            .child(render_winrate_graph_panel(
+                                &points,
+                                winrate_metric,
+                                160.0,
+                                shell.palette,
+                                shell,
+                                current_label,
+                                on_node_clicked,
+                                cx,
+                            ))
                     }
                     crate::BottomDeckTab::VariationTree => {
                         let variation_layout =
