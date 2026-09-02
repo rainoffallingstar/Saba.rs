@@ -143,13 +143,11 @@ pub fn move_numbers_for_snapshot(
         "last_5" => total_lineage.saturating_sub(5),
         "last_10" => total_lineage.saturating_sub(10),
         "last_20" => total_lineage.saturating_sub(20),
-        "variation" => {
-            lineage
-                .iter()
-                .rposition(|node| node.child_ids.len() > 1)
-                .map(|index| index + 1)
-                .unwrap_or(0)
-        }
+        "variation" => lineage
+            .iter()
+            .rposition(|node| node.child_ids.len() > 1)
+            .map(|index| index + 1)
+            .unwrap_or(0),
         "hotspot" => lineage
             .iter()
             .rposition(|node| node.properties.contains_key("HO"))

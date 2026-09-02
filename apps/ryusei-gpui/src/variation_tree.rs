@@ -398,7 +398,9 @@ where
                 color,
             );
             for (seg_idx, segment) in segments.into_iter().enumerate() {
-                children.push(segment.id(gpui::SharedString::from(format!("{prefix}-edge-{edge_index}-{seg_idx}"))));
+                children.push(segment.id(gpui::SharedString::from(format!(
+                    "{prefix}-edge-{edge_index}-{seg_idx}"
+                ))));
             }
         }
     }
@@ -451,7 +453,9 @@ where
 
         children.push(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-node-{node_index}")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-node-{node_index}"
+                )))
                 .debug_selector(move || format!("game-graph-node-{node_index}"))
                 .absolute()
                 .left(px(x - hitbox_size / 2.0))

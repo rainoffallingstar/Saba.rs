@@ -1572,18 +1572,21 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .on_click(cx.listener(move |shell, _, _, cx| shell.set_time_control(control, cx)))
         };
 
-    let participant_button =
-        |id: &'static str, label: &'static str, selected: bool, participants: MatchParticipants, mode: ryusei_domain_core::SessionMode| {
-            Button::new(id)
-                .small()
-                .ghost()
-                .selected(selected && policy.mode == mode)
-                .label(label)
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    shell.set_session_mode(mode, cx);
-                    shell.set_match_participants(participants, cx);
-                }))
-        };
+    let participant_button = |id: &'static str,
+                              label: &'static str,
+                              selected: bool,
+                              participants: MatchParticipants,
+                              mode: ryusei_domain_core::SessionMode| {
+        Button::new(id)
+            .small()
+            .ghost()
+            .selected(selected && policy.mode == mode)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.set_session_mode(mode, cx);
+                shell.set_match_participants(participants, cx);
+            }))
+    };
 
     let size_button = |size: usize, label: &'static str| {
         Button::new(gpui::SharedString::from(format!("setup-size-{size}")))
@@ -1669,28 +1672,39 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .child(participant_button(
                     "setup-players-human",
                     "双人对弈",
-                    policy.participants == MatchParticipants::human_vs_human() && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    policy.participants == MatchParticipants::human_vs_human()
+                        && policy.mode == ryusei_domain_core::SessionMode::Match,
                     MatchParticipants::human_vs_human(),
                     ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-human-ai",
                     "人机对弈 (执黑)",
-                    policy.participants == MatchParticipants::human_vs_ai() && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    policy.participants == MatchParticipants::human_vs_ai()
+                        && policy.mode == ryusei_domain_core::SessionMode::Match,
                     MatchParticipants::human_vs_ai(),
                     ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-ai-human",
                     "机人对弈 (执白)",
-                    policy.participants == MatchParticipants { black: PlayerKind::Ai, white: PlayerKind::Human } && policy.mode == ryusei_domain_core::SessionMode::Match,
-                    MatchParticipants { black: PlayerKind::Ai, white: PlayerKind::Human },
+                    policy.participants
+                        == MatchParticipants {
+                            black: PlayerKind::Ai,
+                            white: PlayerKind::Human,
+                        }
+                        && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    MatchParticipants {
+                        black: PlayerKind::Ai,
+                        white: PlayerKind::Human,
+                    },
                     ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-ai-ai",
                     "AI×AI (自弈)",
-                    policy.participants == MatchParticipants::ai_vs_ai() && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    policy.participants == MatchParticipants::ai_vs_ai()
+                        && policy.mode == ryusei_domain_core::SessionMode::Match,
                     MatchParticipants::ai_vs_ai(),
                     ryusei_domain_core::SessionMode::Match,
                 ))
@@ -1745,26 +1759,56 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .child(time_button(
                     "setup-time-absolute",
                     "10 分钟包干",
-                    clock.control == TimeControl::Absolute { main_time_secs: 600 },
-                    TimeControl::Absolute { main_time_secs: 600 },
+                    clock.control
+                        == TimeControl::Absolute {
+                            main_time_secs: 600,
+                        },
+                    TimeControl::Absolute {
+                        main_time_secs: 600,
+                    },
                 ))
                 .child(time_button(
                     "setup-time-byo-yomi",
                     "20m + 3×30s 读秒",
-                    clock.control == TimeControl::ByoYomi { main_time_secs: 1200, period_time_secs: 30, periods: 3 },
-                    TimeControl::ByoYomi { main_time_secs: 1200, period_time_secs: 30, periods: 3 },
+                    clock.control
+                        == TimeControl::ByoYomi {
+                            main_time_secs: 1200,
+                            period_time_secs: 30,
+                            periods: 3,
+                        },
+                    TimeControl::ByoYomi {
+                        main_time_secs: 1200,
+                        period_time_secs: 30,
+                        periods: 3,
+                    },
                 ))
                 .child(time_button(
                     "setup-time-blitz",
                     "1m + 5×10s 快棋",
-                    clock.control == TimeControl::ByoYomi { main_time_secs: 60, period_time_secs: 10, periods: 5 },
-                    TimeControl::ByoYomi { main_time_secs: 60, period_time_secs: 10, periods: 5 },
+                    clock.control
+                        == TimeControl::ByoYomi {
+                            main_time_secs: 60,
+                            period_time_secs: 10,
+                            periods: 5,
+                        },
+                    TimeControl::ByoYomi {
+                        main_time_secs: 60,
+                        period_time_secs: 10,
+                        periods: 5,
+                    },
                 ))
                 .child(time_button(
                     "setup-time-fischer",
                     "10m + 10s 加秒",
-                    clock.control == TimeControl::Fischer { main_time_secs: 600, increment_secs: 10 },
-                    TimeControl::Fischer { main_time_secs: 600, increment_secs: 10 },
+                    clock.control
+                        == TimeControl::Fischer {
+                            main_time_secs: 600,
+                            increment_secs: 10,
+                        },
+                    TimeControl::Fischer {
+                        main_time_secs: 600,
+                        increment_secs: 10,
+                    },
                 ))
                 .into_any_element(),
         ))
@@ -1808,10 +1852,11 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .child(
                     Button::new("setup-start-game-btn")
                         .primary()
-                        .disabled(policy.source == ryusei_domain_core::SessionSource::RemoteCompetition)
+                        .disabled(
+                            policy.source == ryusei_domain_core::SessionSource::RemoteCompetition,
+                        )
                         .label(
-                            if policy.source
-                                == ryusei_domain_core::SessionSource::RemoteCompetition
+                            if policy.source == ryusei_domain_core::SessionSource::RemoteCompetition
                             {
                                 "远程对局由服务器自动开始"
                             } else {
@@ -1819,7 +1864,11 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             },
                         )
                         .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.start_new_match_from_setup(&MouseDownEvent::default(), window, cx);
+                            shell.start_new_match_from_setup(
+                                &MouseDownEvent::default(),
+                                window,
+                                cx,
+                            );
                         })),
                 ),
         );

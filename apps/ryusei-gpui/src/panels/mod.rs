@@ -30,9 +30,7 @@ use gpui::{
     linear_gradient, point, prelude::*, px, rgb,
 };
 
-use ryusei_domain_core::{
-    AnalysisPolicy, GameMode, GameSnapshot, SessionMode,
-};
+use ryusei_domain_core::{AnalysisPolicy, GameMode, GameSnapshot, SessionMode};
 
 use crate::icons::{self, ShellIcon};
 
@@ -1573,7 +1571,9 @@ pub fn render_variation_tree_panel(
             if let Some(node_id) = shell.game_graph_context_node.as_ref() {
                 render_game_graph_context_menu(panel_id, node_id, shell, cx)
             } else {
-                div().id(gpui::SharedString::from(format!("{panel_id}-context-menu-hidden")))
+                div().id(gpui::SharedString::from(format!(
+                    "{panel_id}-context-menu-hidden"
+                )))
             },
         )
 }
@@ -1594,7 +1594,9 @@ fn render_game_graph_context_menu(
         .find(|node| &node.id == node_id)
         .is_some_and(|node| node.properties.contains_key("HO"));
     div()
-        .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-menu")))
+        .id(gpui::SharedString::from(format!(
+            "{prefix}-game-graph-context-menu"
+        )))
         .debug_selector(move || format!("{prefix}-game-graph-context-menu"))
         .absolute()
         .top(px(32.0))
@@ -1612,7 +1614,9 @@ fn render_game_graph_context_menu(
         .child(node_id.clone())
         .child(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-navigate")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-game-graph-context-navigate"
+                )))
                 .debug_selector(move || format!("{prefix}-game-graph-context-navigate"))
                 .px_2()
                 .py_1()
@@ -1627,7 +1631,9 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-hotspot")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-game-graph-context-hotspot"
+                )))
                 .debug_selector(move || format!("{prefix}-game-graph-context-hotspot"))
                 .px_2()
                 .py_1()
@@ -1647,7 +1653,9 @@ fn render_game_graph_context_menu(
         // Variation structure actions (PRD §4.2: 设为主干 / 删除分支).
         .child(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-promote")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-game-graph-context-promote"
+                )))
                 .debug_selector(move || format!("{prefix}-game-graph-context-promote"))
                 .px_2()
                 .py_1()
@@ -1662,7 +1670,9 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-delete")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-game-graph-context-delete"
+                )))
                 .debug_selector(move || format!("{prefix}-game-graph-context-delete"))
                 .px_2()
                 .py_1()
@@ -1678,7 +1688,9 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-close")))
+                .id(gpui::SharedString::from(format!(
+                    "{prefix}-game-graph-context-close"
+                )))
                 .px_2()
                 .py_1()
                 .rounded_sm()

@@ -129,14 +129,16 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                                 .gap_0p5()
                                 .child(button)
                                 .children(has_multiple.then(|| {
-                                    Button::new(gpui::SharedString::from(format!("nav-close-{tab_id_for_close}")))
-                                        .xsmall()
-                                        .ghost()
-                                        .label("×")
-                                        .tooltip(format!("关闭会话 {tab_title}"))
-                                        .on_click(cx.listener(move |shell, _, _, cx| {
-                                            shell.close_workspace_tab(&tab_id_for_close, cx);
-                                        }))
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "nav-close-{tab_id_for_close}"
+                                    )))
+                                    .xsmall()
+                                    .ghost()
+                                    .label("×")
+                                    .tooltip(format!("关闭会话 {tab_title}"))
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.close_workspace_tab(&tab_id_for_close, cx);
+                                    }))
                                 }))
                         }))
                         .child(
