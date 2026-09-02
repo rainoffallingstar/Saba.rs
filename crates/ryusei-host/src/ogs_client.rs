@@ -402,8 +402,13 @@ impl LiveOgsClient {
         } else {
             None
         };
-        if game.next_player != my_color {
-            return Err("It is not your turn".to_owned());
+        let Some(my_color) = my_color else {
+            return Err("You are not a participant in this game".to_owned());
+        };
+        if let Some(next_player) = game.next_player {
+            if next_player != my_color {
+                return Err("It is not your turn".to_owned());
+            }
         }
         Ok(())
     }

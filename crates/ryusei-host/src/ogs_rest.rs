@@ -211,6 +211,37 @@ pub struct OgsLoginResult {
     pub user: serde_json::Value,
 }
 
+fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
+    let mut bits = 0u32;
+    let mut bit_count = 0;
+    let mut out = Vec::new();
+    for byte in input.bytes() {
+        let val = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            b'=' | b' ' | b'\n' | b'\r' => continue,
+            _ => return None,
+        };
+        bits = (bits << 6) | (val as u32);
+        bit_count += 6;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            out.push((bits >> bit_count) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Decodes the JSON payload from a standard 3-part JWT (`header.payload.sig`).
+pub fn extract_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let decoded = base64_url_decode(payload_b64)?;
+    serde_json::from_slice(&decoded).ok()
+}
+
 /// Parses the `POST /api/v0/login` response body into a JWT and user payload.
 pub fn parse_ogs_login_response(body: &str) -> Result<OgsLoginResult, String> {
     let value: serde_json::Value =
@@ -221,10 +252,44 @@ pub fn parse_ogs_login_response(body: &str) -> Result<OgsLoginResult, String> {
         .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| "OGS did not return a session token".to_owned())?;
-    let user = value
+    let mut user = value
         .get("user")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+
+    // If the server omitted the full user object or its id/username, extract
+    // what we can from the JWT claims or top-level body keys so turn checking
+    // always has the player's identity.
+    if user.is_null() || user.get("id").is_none() || user.get("username").is_none() {
+        let mut user_obj = match user {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        if let Some(jwt_payload) = extract_jwt_payload(&jwt_token) {
+            if !user_obj.contains_key("id") {
+                if let Some(id) = jwt_payload.get("user_id").or_else(|| jwt_payload.get("id")) {
+                    user_obj.insert("id".to_owned(), id.clone());
+                }
+            }
+            if !user_obj.contains_key("username") {
+                if let Some(username) = jwt_payload.get("username") {
+                    user_obj.insert("username".to_owned(), username.clone());
+                }
+            }
+        }
+        if !user_obj.contains_key("id") {
+            if let Some(top_id) = value.get("user_id").or_else(|| value.get("id")) {
+                user_obj.insert("id".to_owned(), top_id.clone());
+            }
+        }
+        if !user_obj.contains_key("username") {
+            if let Some(top_username) = value.get("username") {
+                user_obj.insert("username".to_owned(), top_username.clone());
+            }
+        }
+        user = serde_json::Value::Object(user_obj);
+    }
+
     Ok(OgsLoginResult {
         jwt_token,
         cookie_header: None,
