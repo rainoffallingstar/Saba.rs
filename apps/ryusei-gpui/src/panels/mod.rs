@@ -1064,6 +1064,7 @@ fn winrate_hover_tooltip(
 
 /// Renders an OGS-style Winrate & Score Lead Graph with coordinate ticks,
 /// reference baselines, split advantage shading, and move number markers.
+#[allow(clippy::too_many_arguments)]
 pub fn render_winrate_graph_panel(
     points: &[GraphPlotPoint],
     metric: WinrateGraphMetric,
