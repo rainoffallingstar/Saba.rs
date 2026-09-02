@@ -47,9 +47,7 @@ MimeType=application/x-go-sgf;application/x-cyberoro-ngf;application/x-tygem-gib
 StartupWMClass=ryusei
 DESKTOP
 
-cat > "$APPDIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg" <<SVG
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" rx="32" fill="#d9a866"/><circle cx="96" cy="96" r="22" fill="#1a1a1a"/><circle cx="160" cy="160" r="22" fill="#1a1a1a"/></svg>
-SVG
+cp "$ROOT_DIR/fig/ryusei-logo.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg"
 
 APPIMAGE_EXTRACT_AND_RUN=1 "$LINUXDEPLOY" --appdir "$APPDIR" --desktop-file "$APPDIR/$APP_NAME.desktop" --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/$APP_NAME.svg" --executable "$APPDIR/usr/bin/$APP_NAME"
 mkdir -p "$OUTPUT_DIR"

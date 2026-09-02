@@ -1,54 +1,59 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">Ryusei logo</title>
-  <desc id="desc">A bright orange meteor with a flowing blue, violet and magenta tail.</desc>
+  <desc id="desc">A black Go stone as a meteor head, trailing a cyan-to-magenta comet tail over a faint go board.</desc>
   <defs>
-    <linearGradient id="tail" x1="58" y1="86" x2="400" y2="414" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#16D9F2"/>
-      <stop offset=".32" stop-color="#176BFF"/>
-      <stop offset=".62" stop-color="#7A20F4"/>
-      <stop offset=".84" stop-color="#F21CA8"/>
-      <stop offset="1" stop-color="#FF5B32"/>
-    </linearGradient>
-    <linearGradient id="tailHighlight" x1="92" y1="105" x2="390" y2="390" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#A8FBFF"/>
-      <stop offset=".46" stop-color="#6DD8FF"/>
-      <stop offset=".78" stop-color="#FF8DE1"/>
-      <stop offset="1" stop-color="#FFE36D"/>
-    </linearGradient>
-    <radialGradient id="head" cx="34%" cy="28%" r="82%">
-      <stop offset="0" stop-color="#FFF59A"/>
-      <stop offset=".28" stop-color="#FFD52F"/>
-      <stop offset=".64" stop-color="#FF851C"/>
-      <stop offset="1" stop-color="#E52B27"/>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0" stop-color="#182136"/>
+      <stop offset="0.55" stop-color="#0e1422"/>
+      <stop offset="1" stop-color="#070a12"/>
     </radialGradient>
-    <linearGradient id="headEdge" x1="330" y1="260" x2="478" y2="470" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFEF62"/>
-      <stop offset=".52" stop-color="#FF9A1F"/>
-      <stop offset="1" stop-color="#D71C32"/>
+    <pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse" x="31" y="31">
+      <path d="M25 0 L25 25 M0 25 L25 25" stroke="#7aa2ff" stroke-width="1" opacity="0.05"/>
+    </pattern>
+    <linearGradient id="tail" x1="96" y1="432" x2="332" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#37e0ff"/>
+      <stop offset="0.35" stop-color="#2f6bff"/>
+      <stop offset="0.68" stop-color="#8b3bff"/>
+      <stop offset="1" stop-color="#ff3fa8"/>
     </linearGradient>
-    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="10" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <radialGradient id="stone" cx="38%" cy="30%" r="72%">
+      <stop offset="0" stop-color="#5b6475"/>
+      <stop offset="0.32" stop-color="#1a1e28"/>
+      <stop offset="0.72" stop-color="#0c0e15"/>
+      <stop offset="1" stop-color="#20242f"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6fd7ff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#6fd7ff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
-  <!-- Main flowing tail: compact at app-icon sizes, expressive at large sizes. -->
-  <path d="M58 76C128 155 180 188 266 218C188 188 111 183 48 151C111 221 181 258 283 278C207 271 124 286 65 320C160 315 236 333 317 368C246 346 173 356 110 405C208 388 288 404 356 438C298 391 253 329 244 269C229 198 163 135 58 76Z" fill="url(#tail)" filter="url(#softGlow)"/>
-  <path d="M75 104C145 171 198 202 280 233C205 201 141 199 86 181C148 235 208 257 292 278C225 265 167 277 119 303C189 299 245 315 302 341C257 319 215 313 174 321C221 337 267 361 304 389C266 347 238 302 236 260C232 204 168 148 75 104Z" fill="url(#tailHighlight)" opacity=".72"/>
+  <rect width="512" height="512" fill="url(#bg)"/>
 
-  <!-- Secondary flame ribbons create the rainbow identity without fine detail. -->
-  <path d="M183 139C246 178 291 207 342 239C299 197 266 166 227 126C260 181 309 228 374 269C318 232 271 215 226 213C276 247 319 282 356 320C321 270 270 222 183 139Z" fill="#F21CA8" opacity=".9"/>
-  <path d="M118 364C188 337 246 349 325 393C267 358 222 321 197 274C223 326 268 384 344 438C276 395 202 374 118 364Z" fill="#FF3E78" opacity=".88"/>
+  <!-- Faint 19x19 go board with star points. -->
+  <rect x="31" y="31" width="450" height="450" fill="url(#grid)"/>
+  <g fill="#9cc0ff">
+    <circle cx="106" cy="106" r="5" opacity="0.30"/>
+    <circle cx="256" cy="106" r="5" opacity="0.30"/>
+    <circle cx="406" cy="106" r="5" opacity="0.30"/>
+    <circle cx="106" cy="256" r="5" opacity="0.30"/>
+    <circle cx="256" cy="256" r="5" opacity="0.30"/>
+    <circle cx="406" cy="256" r="5" opacity="0.30"/>
+    <circle cx="106" cy="406" r="5" opacity="0.30"/>
+    <circle cx="256" cy="406" r="5" opacity="0.30"/>
+    <circle cx="406" cy="406" r="5" opacity="0.30"/>
+  </g>
 
-  <!-- Meteor head. -->
-  <path d="M328 207C382 212 450 250 480 314C509 376 494 439 449 472C404 505 337 487 299 447C263 409 252 347 274 291C286 260 303 232 328 207Z" fill="url(#headEdge)" opacity=".96"/>
-  <path d="M340 220C392 227 442 258 466 313C489 366 477 421 438 452C400 482 344 465 311 429C281 396 272 346 291 300C302 270 320 240 340 220Z" fill="url(#head)"/>
+  <!-- Soft glow behind the meteor head. -->
+  <circle cx="322" cy="198" r="150" fill="url(#glow)"/>
 
-  <!-- Craters and restrained highlights. -->
-  <ellipse cx="365" cy="347" rx="30" ry="42" transform="rotate(24 365 347)" fill="#B93624" opacity=".7"/>
-  <ellipse cx="422" cy="309" rx="16" ry="23" transform="rotate(28 422 309)" fill="#C74420" opacity=".68"/>
-  <ellipse cx="420" cy="403" rx="18" ry="27" transform="rotate(30 420 403)" fill="#B92B2C" opacity=".7"/>
-  <ellipse cx="331" cy="403" rx="13" ry="19" transform="rotate(25 331 403)" fill="#C53A25" opacity=".6"/>
-  <path d="M332 254C354 233 391 234 417 249C382 244 354 257 338 285C329 300 321 319 315 339C312 303 317 274 332 254Z" fill="#FFF9B1" opacity=".8"/>
-  <ellipse cx="389" cy="267" rx="14" ry="9" transform="rotate(28 389 267)" fill="#fff" opacity=".72"/>
+  <!-- Comet tail: a tapered gradient ribbon trailing to the lower left. -->
+  <path d="M88 430 Q180 384 262 308 L300 344 Q210 418 118 458 Z" fill="url(#tail)"/>
+  <path d="M112 420 Q188 384 258 318 L274 330 Q204 394 140 434 Z" fill="#37e0ff" opacity="0.35"/>
+
+  <!-- Meteor head: a black go stone with a crisp specular highlight. -->
+  <circle cx="322" cy="198" r="102" fill="url(#stone)"/>
+  <ellipse cx="288" cy="156" rx="34" ry="20" transform="rotate(-24 288 156)" fill="#ffffff" opacity="0.82"/>
+  <ellipse cx="312" cy="140" rx="11" ry="6" transform="rotate(-24 312 140)" fill="#ffffff" opacity="0.55"/>
+  <path d="M232 240 A102 102 0 0 0 300 298 A96 96 0 0 1 236 246 Z" fill="#5f9bff" opacity="0.20"/>
 </svg>
