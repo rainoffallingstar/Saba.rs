@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ryusei_domain_core::Color;
+use ryusei_domain_core::{Color, TimeControl};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -28,6 +28,26 @@ const MAX_CHAT_LINES: usize = 200;
 const MAX_CHAT_BODY_CHARS: usize = 4096;
 /// Maximum characters retained per chat username.
 const MAX_CHAT_USERNAME_CHARS: usize = 64;
+/// Reconnect delays are capped so a transient OGS outage cannot strand a live
+/// game indefinitely. The test build uses a short delay to keep lifecycle tests
+/// fast while exercising the same retry state machine.
+const OGS_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+
+fn ogs_heartbeat_interval() -> Duration {
+    if cfg!(test) {
+        Duration::from_millis(10)
+    } else {
+        Duration::from_secs(20)
+    }
+}
+
+fn ogs_reconnect_delay(attempt: u32) -> Duration {
+    if cfg!(test) {
+        Duration::from_millis(10u64.saturating_mul(1u64 << attempt.min(6)))
+    } else {
+        Duration::from_secs(1u64 << attempt.min(5)).min(OGS_RECONNECT_MAX_DELAY)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OgsSocketStatus {
@@ -69,6 +89,10 @@ pub struct OgsOnlineGame {
     pub handicap: Option<u32>,
     /// Komi, when the server reports it.
     pub komi: Option<f64>,
+    /// Server rules identifier (for example `japanese` or `chinese`).
+    pub rules: Option<String>,
+    /// Server time-control configuration.
+    pub time_control: Option<TimeControl>,
     /// Setup stones placed before the first move (handicap / free placement).
     pub initial_black: Vec<String>,
     pub initial_white: Vec<String>,
@@ -348,7 +372,10 @@ impl LiveOgsClient {
             .user
             .as_ref()
             .and_then(|user| user.get("id"))
-            .and_then(|id| id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok())))
+            .and_then(|id| {
+                id.as_u64()
+                    .or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok()))
+            })
             .unwrap_or(0);
         let username = inner
             .snapshot
@@ -368,47 +395,16 @@ impl LiveOgsClient {
         Ok(())
     }
 
-    /// Rejects a move/pass unless it is the logged-in user's turn during the
-    /// `play` phase. This prevents spectators and out-of-turn submissions.
+    /// Validates the local prerequisites for a move/pass. Turn ownership is
+    /// deliberately not rejected from cached state: OGS is authoritative and
+    /// its realtime clock can briefly lag the move event. Sending the move lets
+    /// the server accept a valid move instead of creating a false local lockout.
     fn require_my_turn(&self, game_id: u64) -> Result<(), String> {
         self.require_participant(game_id)?;
         let inner = self.inner.lock().unwrap();
         let game = inner.snapshot.online_game.as_ref().unwrap();
         if game.phase != "play" {
             return Err("Moves are only allowed during play".to_owned());
-        }
-        let user_id = inner
-            .snapshot
-            .user
-            .as_ref()
-            .and_then(|user| user.get("id"))
-            .and_then(|id| id.as_u64().or_else(|| id.as_str().and_then(|s| s.parse::<u64>().ok())))
-            .unwrap_or(0);
-        let username = inner
-            .snapshot
-            .user
-            .as_ref()
-            .and_then(|u| u.get("username"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let my_color = if user_id != 0 && game.black_id == Some(user_id) {
-            Some(Color::Black)
-        } else if user_id != 0 && game.white_id == Some(user_id) {
-            Some(Color::White)
-        } else if !username.is_empty() && game.black_name.eq_ignore_ascii_case(username) {
-            Some(Color::Black)
-        } else if !username.is_empty() && game.white_name.eq_ignore_ascii_case(username) {
-            Some(Color::White)
-        } else {
-            None
-        };
-        let Some(my_color) = my_color else {
-            return Err("You are not a participant in this game".to_owned());
-        };
-        if let Some(next_player) = game.next_player {
-            if next_player != my_color {
-                return Err("It is not your turn".to_owned());
-            }
         }
         Ok(())
     }
@@ -628,9 +624,45 @@ impl LiveOgsClient {
         if inner.generation == generation {
             inner.snapshot.socket_status = OgsSocketStatus::Error;
             inner.snapshot.last_error = Some(message);
+            if let Some(game) = inner.snapshot.online_game.as_mut() {
+                game.connected = false;
+            }
         }
         drop(inner);
         self.emit_state();
+    }
+
+    fn reconnect_after_disconnect(self: &Arc<Self>, jwt: String, game_id: Option<u64>) {
+        let client = Arc::clone(self);
+        std::thread::Builder::new()
+            .name("ogs-reconnect".to_owned())
+            .spawn(move || {
+                for attempt in 0.. {
+                    std::thread::sleep(ogs_reconnect_delay(attempt));
+                    let still_logged_in = client
+                        .inner
+                        .lock()
+                        .unwrap()
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.jwt_token == jwt);
+                    if !still_logged_in {
+                        return;
+                    }
+                    if client.connect_and_authenticate(&jwt).is_ok() {
+                        if let Some(game_id) = game_id {
+                            // Re-subscribe without replacing the preserved board;
+                            // the following gamedata event refreshes it authoritatively.
+                            let _ = client.send_event(
+                                "game/connect",
+                                &serde_json::json!({"game_id": game_id, "chat": true}),
+                            );
+                        }
+                        return;
+                    }
+                }
+            })
+            .ok();
     }
 
     fn stop_reader(&self) {
@@ -667,6 +699,9 @@ impl LiveOgsClient {
                 inner.snapshot.matched_game_id = None;
             }
             "net/pong" | "user/state" | "active_game" | "notification" => {}
+            "net/ping" => {
+                let _ = self.send_event("net/pong", payload);
+            }
             other => {
                 // Per-game events arrive as `game/<id>/<type>`.
                 let Some(rest) = other.strip_prefix("game/") else {
@@ -711,35 +746,28 @@ impl LiveOgsClient {
 
     fn apply_gamedata(&self, game_id: u64, payload: &Value) {
         let moves = parse_ogs_moves(payload);
-        let move_number = payload
-            .get("move_number")
-            .and_then(Value::as_u64)
-            .map(|n| n as u32)
-            .unwrap_or(moves.len() as u32);
-        let next_player = player_to_move(payload, move_number);
-        let clock = parse_clock(payload.get("clock"));
+        let move_number = if moves.is_empty() {
+            payload
+                .get("move_number")
+                .and_then(value_as_u32)
+                .unwrap_or(0)
+        } else {
+            // The move list is the authoritative count in a complete OGS
+            // snapshot. Some server payloads carry an auxiliary move_number
+            // cursor with different semantics.
+            moves.len() as u32
+        };
         let black_name = player_name(payload, "black");
         let white_name = player_name(payload, "white");
-        let black_id = payload
-            .pointer("/players/black/id")
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                payload
-                    .pointer("/players/black/id")
-                    .and_then(Value::as_str)
-                    .and_then(|s| s.parse::<u64>().ok())
-            })
-            .or_else(|| payload.get("black_player_id").and_then(Value::as_u64));
-        let white_id = payload
-            .pointer("/players/white/id")
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                payload
-                    .pointer("/players/white/id")
-                    .and_then(Value::as_str)
-                    .and_then(|s| s.parse::<u64>().ok())
-            })
-            .or_else(|| payload.get("white_player_id").and_then(Value::as_u64));
+        let black_id = player_id_for_color(payload, "black");
+        let white_id = player_id_for_color(payload, "white");
+        let initial_player = payload
+            .get("initial_player")
+            .and_then(Value::as_str)
+            .unwrap_or("black")
+            .to_owned();
+        let next_player = player_to_move(payload, move_number, &initial_player);
+        let clock = parse_clock(payload.get("clock"), black_id, white_id);
         let phase = payload
             .get("phase")
             .and_then(Value::as_str)
@@ -751,16 +779,16 @@ impl LiveOgsClient {
             .pointer("/clock/stone_removal_mode")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let initial_player = payload
-            .get("initial_player")
-            .and_then(Value::as_str)
-            .unwrap_or("black")
-            .to_owned();
         let handicap = payload
             .get("handicap")
             .and_then(Value::as_u64)
             .map(|n| n as u32);
-        let komi = payload.get("komi").and_then(Value::as_f64);
+        let komi = payload.get("komi").and_then(value_as_f64);
+        let rules = payload
+            .get("rules")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let time_control = parse_ogs_time_control(payload.get("time_control"));
         let initial_black = payload
             .pointer("/initial_state/black")
             .and_then(Value::as_str)
@@ -771,6 +799,20 @@ impl LiveOgsClient {
             .and_then(Value::as_str)
             .map(decode_packed_coords)
             .unwrap_or_default();
+
+        // OGS can replay a complete game snapshot after an incremental move.
+        // Never let a delayed snapshot rewind the confirmed board or turn.
+        if self
+            .inner
+            .lock()
+            .unwrap()
+            .snapshot
+            .online_game
+            .as_ref()
+            .is_some_and(|game| game.game_id == game_id && move_number < game.move_number)
+        {
+            return;
+        }
 
         let update = build_game_update(game_id, move_number, next_player, clock.as_ref());
         let mut inner = self.inner.lock().unwrap();
@@ -791,6 +833,8 @@ impl LiveOgsClient {
             initial_player,
             handicap,
             komi,
+            rules,
+            time_control,
             initial_black,
             initial_white,
             last_move: moves.last().cloned(),
@@ -808,10 +852,9 @@ impl LiveOgsClient {
     }
 
     fn apply_move(&self, game_id: u64, payload: &Value) {
-        let move_number = payload
-            .get("move_number")
-            .and_then(Value::as_u64)
-            .map(|n| n as u32);
+        // OGS reports the move number after applying this move. The official
+        // client verifies that its current position is move_number - 1 first.
+        let move_number = payload.get("move_number").and_then(value_as_u32);
         let mut inner = self.inner.lock().unwrap();
         let Some(game) = inner.snapshot.online_game.as_mut() else {
             return;
@@ -819,15 +862,29 @@ impl LiveOgsClient {
         if game.game_id != game_id {
             return;
         }
-        let was_ours = game.pending_move;
-        game.move_number = move_number.unwrap_or(game.move_number + 1);
-        game.pending_move = false;
         // The `move` field may be a string ("dd") or an array ([x, y]); reuse
         // the same tolerant parser as gamedata so both forms project correctly.
         let move_string = payload
             .get("move")
             .and_then(encode_ogs_move_item)
-            .or_else(|| payload.get("move").and_then(Value::as_str).map(ToOwned::to_owned));
+            .or_else(|| {
+                payload
+                    .get("move")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
+        // Incremental events can be duplicated or arrive after a complete
+        // snapshot. In OGS, move_number is the resulting number of moves.
+        if move_number.is_some_and(|number| number <= game.move_number)
+            || (move_number.is_none() && move_string.as_ref() == game.moves.last())
+        {
+            return;
+        }
+        let was_ours = game.pending_move;
+        let next_player_from_server =
+            player_color_from_move_payload(payload, game.black_id, game.white_id);
+        game.move_number = move_number.unwrap_or_else(|| game.move_number.saturating_add(1));
+        game.pending_move = false;
         game.last_move = move_string.clone();
         game.last_move_was_ours = was_ours;
         if let Some(coord) =
@@ -835,11 +892,12 @@ impl LiveOgsClient {
         {
             game.moves.push(coord);
         }
-        // After a move, the player to move flips.
-        game.next_player = game.next_player.map(|color| match color {
-            Color::Black => Color::White,
-            Color::White => Color::Black,
-        });
+        // Prefer the server-authoritative next player. Only use local parity as
+        // a fallback for old OGS frames that omit current_player entirely.
+        let expected_next_player = next_player_for_position(game.move_number, &game.initial_player);
+        game.next_player = next_player_from_server
+            .filter(|player| Some(*player) == expected_next_player)
+            .or(expected_next_player);
         let update = build_game_update(
             game_id,
             game.move_number,
@@ -856,11 +914,6 @@ impl LiveOgsClient {
     }
 
     fn apply_clock(&self, game_id: u64, payload: &Value) {
-        let clock = parse_clock(Some(payload));
-        let stone_removal_mode = payload
-            .get("stone_removal_mode")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         let mut inner = self.inner.lock().unwrap();
         let Some(game) = inner.snapshot.online_game.as_mut() else {
             return;
@@ -868,11 +921,23 @@ impl LiveOgsClient {
         if game.game_id != game_id {
             return;
         }
-        if let Some(active) = clock.as_ref().and_then(|c| c.active_color) {
+        let clock = parse_clock(Some(payload), game.black_id, game.white_id);
+        let expected_next_player = next_player_for_position(game.move_number, &game.initial_player);
+        if let Some(active) = clock.as_ref().and_then(|c| c.active_color)
+            && Some(active) == expected_next_player
+        {
             game.next_player = Some(active);
+        } else if expected_next_player.is_some() {
+            // Clock frames can be delivered around the move frame. Do not let a
+            // stale pre-move clock overwrite the turn derived from confirmed
+            // moves and the game's initial player.
+            game.next_player = expected_next_player;
         }
         game.clock = clock;
-        game.stone_removal_mode = stone_removal_mode;
+        game.stone_removal_mode = payload
+            .get("stone_removal_mode")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     }
 
     fn apply_chat(&self, game_id: u64, payload: &Value) {
@@ -1026,6 +1091,7 @@ fn reader_loop(
         if client.inner.lock().unwrap().generation != generation {
             return;
         }
+        let mut failed = None;
         match transport.recv_text(Duration::from_secs(1)) {
             Ok(Some(text)) => {
                 if let Ok(incoming) = decode_incoming(&text)
@@ -1034,75 +1100,152 @@ fn reader_loop(
                     client.handle_incoming(incoming);
                 }
             }
-            Ok(None) => {
-                // Send a heartbeat so OGS does not drop an otherwise idle
-                // socket (which surfaced as "the account signed itself out").
-                if last_ping.elapsed() >= Duration::from_secs(20) {
-                    let _ = transport.send_text(&encode_event("net/ping", &serde_json::json!({})));
-                    last_ping = std::time::Instant::now();
-                }
-            }
+            Ok(None) => {}
             Err(error) => {
-                client.set_connection_error(generation, format!("OGS socket read failed: {error}"));
-                return;
+                failed = Some(format!("OGS socket read failed: {error}"));
             }
         }
+
+        // Heartbeats must be based on elapsed wall time, not on receiving an
+        // empty read. A busy game can deliver a frame every second forever and
+        // otherwise starve this keep-alive indefinitely.
+        if failed.is_none() && last_ping.elapsed() >= ogs_heartbeat_interval() {
+            if let Err(error) = transport.send_text(&encode_event(
+                "net/ping",
+                &serde_json::json!({"client": unix_time_millis()}),
+            )) {
+                failed = Some(format!("OGS socket heartbeat failed: {error}"));
+            } else {
+                last_ping = std::time::Instant::now();
+            }
+        }
+
+        if let Some(error) = failed {
+            transport.close();
+            client.set_connection_error(generation, error);
+            let reconnect = {
+                let inner = client.inner.lock().unwrap();
+                if inner.generation == generation {
+                    inner.session.as_ref().map(|session| {
+                        (
+                            session.jwt_token.clone(),
+                            inner.snapshot.online_game.as_ref().map(|game| game.game_id),
+                        )
+                    })
+                } else {
+                    None
+                }
+            };
+            if let Some((jwt, game_id)) = reconnect {
+                client.reconnect_after_disconnect(jwt, game_id);
+            }
+            return;
+        }
     }
+}
+
+fn unix_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 // -- pure payload parsers ----------------------------------------------------
 
-fn player_to_move(payload: &Value, move_number: u32) -> Option<Color> {
-    let black_id = payload
-        .pointer("/players/black/id")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            payload
-                .pointer("/players/black/id")
-                .and_then(Value::as_str)
-                .and_then(|s| s.parse::<u64>().ok())
-        })
-        .or_else(|| payload.get("black_player_id").and_then(Value::as_u64));
-    let white_id = payload
-        .pointer("/players/white/id")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            payload
-                .pointer("/players/white/id")
-                .and_then(Value::as_str)
-                .and_then(|s| s.parse::<u64>().ok())
-        })
-        .or_else(|| payload.get("white_player_id").and_then(Value::as_u64));
-    let current_player = payload
-        .pointer("/clock/current_player")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            payload
-                .pointer("/clock/current_player")
-                .and_then(Value::as_str)
-                .and_then(|s| s.parse::<u64>().ok())
-        });
+fn value_as_u32(value: &Value) -> Option<u32> {
+    value
+        .as_u64()
+        .and_then(|number| u32::try_from(number).ok())
+        .or_else(|| value.as_str().and_then(|text| text.parse::<u32>().ok()))
+}
+
+fn player_id(payload: &Value, pointer: &str) -> Option<u64> {
+    payload.pointer(pointer).and_then(|id| {
+        id.as_u64()
+            .or_else(|| id.as_str().and_then(|text| text.parse::<u64>().ok()))
+    })
+}
+
+fn player_id_for_color(payload: &Value, color: &str) -> Option<u64> {
+    player_id(payload, &format!("/players/{color}/id"))
+        .or_else(|| player_id(payload, &format!("/{color}/id")))
+        .or_else(|| player_id(payload, &format!("/{color}_player_id")))
+        .or_else(|| player_id(payload, &format!("/{color}")))
+}
+
+fn next_player_for_position(move_number: u32, initial_player: &str) -> Option<Color> {
+    let first = if initial_player.eq_ignore_ascii_case("white") {
+        Color::White
+    } else {
+        Color::Black
+    };
+    if move_number.is_multiple_of(2) {
+        Some(first)
+    } else {
+        Some(first.opponent())
+    }
+}
+
+fn color_for_player_value(
+    value: &Value,
+    black_id: Option<u64>,
+    white_id: Option<u64>,
+) -> Option<Color> {
+    if let Some(color) = value.as_str() {
+        if color.eq_ignore_ascii_case("black") || color.eq_ignore_ascii_case("b") {
+            return Some(Color::Black);
+        }
+        if color.eq_ignore_ascii_case("white") || color.eq_ignore_ascii_case("w") {
+            return Some(Color::White);
+        }
+    }
+    let id = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))?;
+    if Some(id) == black_id {
+        Some(Color::Black)
+    } else if Some(id) == white_id {
+        Some(Color::White)
+    } else {
+        None
+    }
+}
+
+fn player_color_from_move_payload(
+    payload: &Value,
+    black_id: Option<u64>,
+    white_id: Option<u64>,
+) -> Option<Color> {
+    payload
+        .get("next_player")
+        .or_else(|| payload.get("current_player"))
+        .or_else(|| payload.pointer("/clock/current_player"))
+        .and_then(|value| color_for_player_value(value, black_id, white_id))
+}
+
+fn player_to_move(payload: &Value, move_number: u32, initial_player: &str) -> Option<Color> {
+    let black_id = player_id_for_color(payload, "black");
+    let white_id = player_id_for_color(payload, "white");
+    let current_player = player_id(payload, "/clock/current_player");
     match current_player {
         Some(id) if Some(id) == black_id => Some(Color::Black),
         Some(id) if Some(id) == white_id => Some(Color::White),
-        _ => {
-            // `move_number` counts moves already played: after 0 moves Black is
-            // to move, after 1 move White is to move, after 2 Black again.
-            if move_number.is_multiple_of(2) {
-                Some(Color::Black)
-            } else {
-                Some(Color::White)
-            }
-        }
+        _ => next_player_for_position(move_number, initial_player),
     }
 }
 
 fn player_name(payload: &Value, color: &str) -> String {
-    payload
-        .pointer(&format!("/players/{color}/username"))
-        .and_then(Value::as_str)
-        .unwrap_or(color)
-        .to_owned()
+    [
+        format!("/players/{color}/username"),
+        format!("/players/{color}/name"),
+        format!("/{color}/username"),
+        format!("/{color}/name"),
+    ]
+    .iter()
+    .find_map(|pointer| payload.pointer(pointer).and_then(Value::as_str))
+    .unwrap_or(color)
+    .to_owned()
 }
 
 /// Decodes OGS `moves` into coordinate strings (`"dd"`, pass `".."`). Items may
@@ -1164,6 +1307,47 @@ fn encode_ogs_coordinates(x: i64, y: i64) -> Option<String> {
     Some(format!("{column}{row}"))
 }
 
+fn value_as_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+}
+
+fn time_control_seconds(value: Option<&Value>) -> Option<u64> {
+    let seconds = value_as_f64(value?)?;
+    seconds
+        .is_finite()
+        .then_some(seconds.max(0.0).round() as u64)
+}
+
+fn parse_ogs_time_control(value: Option<&Value>) -> Option<TimeControl> {
+    let object = value?.as_object()?;
+    match object
+        .get("system")
+        .and_then(Value::as_str)?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "none" => Some(TimeControl::None),
+        "absolute" => Some(TimeControl::Absolute {
+            main_time_secs: time_control_seconds(object.get("total_time"))?,
+        }),
+        "fischer" => Some(TimeControl::Fischer {
+            main_time_secs: time_control_seconds(object.get("initial_time"))?,
+            increment_secs: time_control_seconds(object.get("time_increment"))?,
+        }),
+        "byoyomi" => Some(TimeControl::ByoYomi {
+            main_time_secs: time_control_seconds(object.get("main_time"))?,
+            period_time_secs: time_control_seconds(object.get("period_time"))?,
+            periods: object.get("periods").and_then(value_as_u32)?,
+        }),
+        // These systems have no direct representation in the domain clock yet.
+        // Keep the server clock visible, but do not mislabel it as another system.
+        "simple" | "canadian" => None,
+        _ => None,
+    }
+}
+
 fn seconds_to_duration(seconds: f64) -> Duration {
     if seconds.is_finite() && seconds >= 0.0 {
         // `from_secs_f64` panics on values beyond `Duration::MAX`; a malicious
@@ -1175,61 +1359,59 @@ fn seconds_to_duration(seconds: f64) -> Duration {
     }
 }
 
-fn parse_clock(clock: Option<&Value>) -> Option<OgsServerClock> {
+fn clock_duration(value: Option<&Value>, field: &str) -> Duration {
+    let Some(value) = value else {
+        return Duration::ZERO;
+    };
+    if let Some(object) = value.as_object() {
+        return seconds_to_duration(
+            object
+                .get(field)
+                .or_else(|| object.get("time"))
+                .or_else(|| object.get("period_time"))
+                .and_then(value_as_f64)
+                .unwrap_or(0.0),
+        );
+    }
+    // AdHoc simple-time clocks use milliseconds directly for numeric values.
+    value
+        .as_f64()
+        .filter(|millis| millis.is_finite() && *millis >= 0.0)
+        .map(|millis| Duration::from_millis(millis.round() as u64))
+        .unwrap_or(Duration::ZERO)
+}
+
+fn clock_periods(value: Option<&Value>) -> u32 {
+    value
+        .and_then(|value| value.get("periods").or_else(|| value.get("periods_left")))
+        .and_then(value_as_u32)
+        .unwrap_or(0)
+}
+
+fn parse_clock(
+    clock: Option<&Value>,
+    black_id: Option<u64>,
+    white_id: Option<u64>,
+) -> Option<OgsServerClock> {
     let clock = clock?;
     let black = clock.get("black_time");
     let white = clock.get("white_time");
+    let clock_black_id = player_id(clock, "/black_player_id").or(black_id);
+    let clock_white_id = player_id(clock, "/white_player_id").or(white_id);
     let active_color = clock
         .get("current_player")
-        .and_then(Value::as_u64)
-        .and_then(|id| {
-            let black_id = clock.get("black_player_id").and_then(Value::as_u64);
-            let white_id = clock.get("white_player_id").and_then(Value::as_u64);
-            if Some(id) == black_id {
-                Some(Color::Black)
-            } else if Some(id) == white_id {
-                Some(Color::White)
-            } else {
-                None
-            }
-        });
+        .and_then(|value| color_for_player_value(value, clock_black_id, clock_white_id));
     let paused = clock
         .pointer("/pause/paused")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Some(OgsServerClock {
-        black_main_remaining: seconds_to_duration(
-            black
-                .and_then(|b| b.get("thinking_time"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        ),
-        white_main_remaining: seconds_to_duration(
-            white
-                .and_then(|w| w.get("thinking_time"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        ),
-        black_byo_yomi_remaining: seconds_to_duration(
-            black
-                .and_then(|b| b.get("period_time_left"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        ),
-        white_byo_yomi_remaining: seconds_to_duration(
-            white
-                .and_then(|w| w.get("period_time_left"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        ),
-        black_periods: black
-            .and_then(|b| b.get("periods"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
-        white_periods: white
-            .and_then(|w| w.get("periods"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+        black_main_remaining: clock_duration(black, "thinking_time"),
+        white_main_remaining: clock_duration(white, "thinking_time"),
+        black_byo_yomi_remaining: clock_duration(black, "period_time_left"),
+        white_byo_yomi_remaining: clock_duration(white, "period_time_left"),
+        black_periods: clock_periods(black),
+        white_periods: clock_periods(white),
         active_color,
         paused,
     })
@@ -1287,9 +1469,9 @@ mod tests {
     #[test]
     fn parses_gamedata_move_number_and_next_player() {
         let payload = gamedata_payload();
-        assert_eq!(player_to_move(&payload, 2), Some(Color::White));
+        assert_eq!(player_to_move(&payload, 2, "black"), Some(Color::White));
         assert_eq!(player_name(&payload, "black"), "Black");
-        let clock = parse_clock(payload.get("clock")).unwrap();
+        let clock = parse_clock(payload.get("clock"), Some(7), Some(8)).unwrap();
         assert_eq!(clock.black_main_remaining, Duration::from_secs(500));
         assert_eq!(clock.white_periods, 5);
         assert_eq!(clock.active_color, Some(Color::White));
@@ -1315,6 +1497,13 @@ mod tests {
             "initial_player": "white",
             "handicap": 2,
             "komi": 0.5,
+            "rules": "japanese",
+            "time_control": {
+                "system": "byoyomi",
+                "main_time": 600,
+                "period_time": 30,
+                "periods": 5
+            },
             "initial_state": {"black": "ddpp", "white": ""},
             "moves": [[3, 3, 1]],
             "players": {
@@ -1329,6 +1518,15 @@ mod tests {
         assert_eq!(game.initial_player, "white");
         assert_eq!(game.handicap, Some(2));
         assert_eq!(game.komi, Some(0.5));
+        assert_eq!(game.rules.as_deref(), Some("japanese"));
+        assert_eq!(
+            game.time_control,
+            Some(TimeControl::ByoYomi {
+                main_time_secs: 600,
+                period_time_secs: 30,
+                periods: 5,
+            })
+        );
         assert_eq!(game.initial_black, vec!["dd", "pp"]);
         assert!(game.initial_white.is_empty());
     }
@@ -1336,8 +1534,138 @@ mod tests {
     #[test]
     fn infers_next_player_from_move_parity() {
         let payload = serde_json::json!({"moves": [[3, 3, 1]]});
-        assert_eq!(player_to_move(&payload, 1), Some(Color::White));
-        assert_eq!(player_to_move(&payload, 2), Some(Color::Black));
+        assert_eq!(player_to_move(&payload, 1, "black"), Some(Color::White));
+        assert_eq!(player_to_move(&payload, 2, "black"), Some(Color::Black));
+    }
+
+    #[test]
+    fn infers_next_player_from_initial_player_when_white_starts() {
+        let payload = serde_json::json!({
+            "initial_player": "white",
+            "moves": [[3, 3, 1]],
+        });
+        assert_eq!(player_to_move(&payload, 1, "white"), Some(Color::Black));
+        assert_eq!(player_to_move(&payload, 2, "white"), Some(Color::White));
+    }
+
+    #[test]
+    fn clock_event_maps_string_current_player_ids_from_game_state() {
+        let client = client_with_game(7, 7, 8);
+        client
+            .inner
+            .lock()
+            .unwrap()
+            .snapshot
+            .online_game
+            .as_mut()
+            .unwrap()
+            .move_number = 1;
+        client.apply_clock(
+            1,
+            &serde_json::json!({
+                "current_player": "8",
+                "black_time": {"thinking_time": 100.0},
+                "white_time": {"thinking_time": 100.0}
+            }),
+        );
+        assert_eq!(
+            client.snapshot().online_game.unwrap().next_player,
+            Some(Color::White)
+        );
+    }
+
+    #[test]
+    fn stale_clock_after_opponent_move_does_not_rewind_my_turn() {
+        let client = client_with_game(8, 7, 8);
+        client.apply_move(1, &serde_json::json!({"move": "dd", "move_number": 1}));
+        // This is a pre-move clock frame arriving late; it must not overwrite
+        // the turn derived from the confirmed one-move position.
+        client.apply_clock(
+            1,
+            &serde_json::json!({
+                "current_player": 7,
+                "black_time": {"thinking_time": 100.0},
+                "white_time": {"thinking_time": 100.0}
+            }),
+        );
+        assert!(client.require_my_turn(1).is_ok());
+        assert_eq!(
+            client.snapshot().online_game.unwrap().next_player,
+            Some(Color::White)
+        );
+    }
+
+    #[test]
+    fn stale_gamedata_does_not_rewind_confirmed_moves_or_turn() {
+        let client = client_with_game(7, 7, 8);
+        client.apply_move(1, &serde_json::json!({"move": "dd", "move_number": 1}));
+        client.apply_gamedata(
+            1,
+            &serde_json::json!({
+                "phase": "play",
+                "move_number": 0,
+                "moves": [],
+                "players": {
+                    "black": {"id": 7, "username": "Black"},
+                    "white": {"id": 8, "username": "White"}
+                }
+            }),
+        );
+        let game = client.snapshot().online_game.unwrap();
+        assert_eq!(game.move_number, 1);
+        assert_eq!(game.moves, vec!["dd"]);
+        assert_eq!(game.next_player, Some(Color::White));
+    }
+
+    #[test]
+    fn move_event_uses_server_current_player_over_local_flip() {
+        let client = client_with_game(7, 7, 8);
+        client.apply_move(
+            1,
+            &serde_json::json!({
+                "move": "dd",
+                "move_number": 1,
+                "clock": {"current_player": "8"}
+            }),
+        );
+        assert_eq!(
+            client.snapshot().online_game.unwrap().next_player,
+            Some(Color::White)
+        );
+    }
+
+    #[test]
+    fn duplicate_move_event_does_not_flip_turn_again() {
+        let client = client_with_game(7, 7, 8);
+        let move_event = serde_json::json!({"move": "dd", "move_number": 1});
+        client.apply_move(1, &move_event);
+        client.apply_move(1, &move_event);
+        let game = client.snapshot().online_game.unwrap();
+        assert_eq!(game.move_number, 1);
+        assert_eq!(game.moves, vec!["dd"]);
+        assert_eq!(game.next_player, Some(Color::White));
+    }
+
+    #[test]
+    fn move_submission_uses_official_ogs_payload_shape() {
+        let transport = Arc::new(ScriptedTransport::new(Vec::new()));
+        let client = client_with_game(7, 7, 8);
+        {
+            let mut inner = client.inner.lock().unwrap();
+            inner.transport = Some(transport.clone());
+            let game = inner.snapshot.online_game.as_mut().unwrap();
+            game.move_number = 4;
+            game.next_player = Some(Color::Black);
+        }
+        client
+            .play_move(1, Some("dd".to_owned()))
+            .expect("move submission succeeds");
+        let sent = transport.sent.lock().unwrap();
+        let request: Value = serde_json::from_str(&sent[0]).expect("valid OGS frame");
+        assert_eq!(request[0], "game/move");
+        assert_eq!(request[1]["game_id"], 1);
+        assert_eq!(request[1]["move"], "dd");
+        assert_eq!(request[1].get("move_number"), None);
     }
 
     #[test]
@@ -1369,6 +1697,52 @@ mod tests {
         client.apply_move(1, &serde_json::json!({"move": "pp", "move_number": 2}));
         let game = client.snapshot().online_game.unwrap();
         assert_eq!(game.moves, vec!["dd", "pp"]);
+    }
+
+    #[test]
+    fn parses_ogs_time_control_variants() {
+        assert_eq!(
+            parse_ogs_time_control(Some(&serde_json::json!({
+                "system": "absolute",
+                "total_time": 900
+            }))),
+            Some(TimeControl::Absolute {
+                main_time_secs: 900
+            })
+        );
+        assert_eq!(
+            parse_ogs_time_control(Some(&serde_json::json!({
+                "system": "fischer",
+                "initial_time": 600,
+                "time_increment": 10
+            }))),
+            Some(TimeControl::Fischer {
+                main_time_secs: 600,
+                increment_secs: 10
+            })
+        );
+        assert_eq!(
+            parse_ogs_time_control(Some(&serde_json::json!({
+                "system": "none"
+            }))),
+            Some(TimeControl::None)
+        );
+    }
+
+    #[test]
+    fn numeric_ogs_clock_values_are_milliseconds() {
+        let clock = parse_clock(
+            Some(&serde_json::json!({
+                "current_player": 7,
+                "black_time": 90_000,
+                "white_time": 120_000
+            })),
+            Some(7),
+            Some(8),
+        )
+        .unwrap();
+        assert_eq!(clock.black_main_remaining, Duration::from_secs(90));
+        assert_eq!(clock.white_main_remaining, Duration::from_secs(120));
     }
 
     #[test]
@@ -1468,6 +1842,7 @@ mod tests {
         recv: Mutex<std::collections::VecDeque<Result<Option<String>, String>>>,
         sent: Mutex<Vec<String>>,
         closed: std::sync::atomic::AtomicBool,
+        continuous: bool,
     }
 
     impl ScriptedTransport {
@@ -1476,6 +1851,16 @@ mod tests {
                 recv: Mutex::new(recv.into()),
                 sent: Mutex::new(Vec::new()),
                 closed: std::sync::atomic::AtomicBool::new(false),
+                continuous: false,
+            }
+        }
+
+        fn continuous() -> Self {
+            Self {
+                recv: Mutex::new(std::collections::VecDeque::new()),
+                sent: Mutex::new(Vec::new()),
+                closed: std::sync::atomic::AtomicBool::new(false),
+                continuous: true,
             }
         }
     }
@@ -1489,6 +1874,10 @@ mod tests {
             Ok(())
         }
         fn recv_text(&self, _timeout: Duration) -> Result<Option<String>, String> {
+            if self.continuous {
+                std::thread::sleep(Duration::from_millis(1));
+                return Ok(Some("[\"net/pong\",{}]".to_owned()));
+            }
             match self.recv.lock().unwrap().pop_front() {
                 Some(result) => result,
                 None => {
@@ -1567,6 +1956,78 @@ mod tests {
         client.logout();
     }
 
+    #[test]
+    fn heartbeat_fires_during_continuous_incoming_traffic() {
+        let transport = Arc::new(ScriptedTransport::continuous());
+        let client = Arc::new(LiveOgsClient::with_parts(
+            Box::new(MemoryOgsCredentialStore::available()),
+            Box::new(TestRestFetch),
+        ));
+        let reader_client = Arc::clone(&client);
+        let reader_transport: Arc<dyn OgsWebSocketTransport> = Arc::clone(&transport) as _;
+        std::thread::spawn(move || reader_loop(reader_client, 0, reader_transport));
+        std::thread::sleep(Duration::from_millis(50));
+        client.stop_reader();
+        assert!(
+            transport
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|message| message.contains("net/ping")),
+            "heartbeat must not depend on an empty receive"
+        );
+    }
+
+    #[test]
+    fn reader_failure_reconnects_and_reattaches_session() {
+        let first = Arc::new(ScriptedTransport::new(vec![
+            Ok(Some(auth_reply(1))),
+            Err("connection reset".to_owned()),
+        ]));
+        let second = Arc::new(ScriptedTransport::new(vec![Ok(Some(auth_reply(2)))]));
+        let factory = Arc::new(ScriptedTransportFactory::new(vec![
+            Arc::clone(&first) as Arc<dyn OgsWebSocketTransport>,
+            Arc::clone(&second) as Arc<dyn OgsWebSocketTransport>,
+        ]));
+        let client = Arc::new(LiveOgsClient::with_parts_and_transport_factory(
+            Box::new(MemoryOgsCredentialStore::available()),
+            Box::new(TestRestFetch),
+            factory,
+        ));
+        client.inner.lock().unwrap().session = Some(OgsCredentials {
+            server_url: "https://online-go.com".to_owned(),
+            jwt_token: "jwt".to_owned(),
+            cookie_header: None,
+            user: Some(serde_json::json!({"id": 7})),
+            created_at: None,
+        });
+        client
+            .connect_and_authenticate("jwt")
+            .expect("initial authentication succeeds");
+        for _ in 0..100 {
+            if client.snapshot().socket_status == OgsSocketStatus::Authenticated
+                && !second.sent.lock().unwrap().is_empty()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            client.snapshot().socket_status,
+            OgsSocketStatus::Authenticated
+        );
+        assert!(
+            second
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|message| { message.contains("authenticate") })
+        );
+        client.logout();
+    }
+
     fn client_with_game(user_id: u64, black_id: u64, white_id: u64) -> LiveOgsClient {
         let client = LiveOgsClient::with_parts(
             Box::new(MemoryOgsCredentialStore::available()),
@@ -1595,7 +2056,7 @@ mod tests {
     }
 
     #[test]
-    fn participant_out_of_turn_is_rejected() {
+    fn stale_cached_turn_does_not_block_participant_submission() {
         let client = client_with_game(7, 7, 8);
         client
             .inner
@@ -1606,7 +2067,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .next_player = Some(Color::White);
-        assert!(client.require_my_turn(1).is_err());
+        assert!(client.require_my_turn(1).is_ok());
     }
 
     #[test]

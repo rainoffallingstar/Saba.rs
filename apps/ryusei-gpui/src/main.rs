@@ -89,8 +89,9 @@ use crate::text_inputs::TextInputs;
 use crate::theme::{ThemeTokens, UiPalette, ui_palette};
 use crate::variation_tree::build_variation_tree_layout;
 use crate::winrate_graph::{
-    CANDIDATES_PROPERTY, WinrateGraphMetric, analysis_sgf_properties, deserialize_analysis_candidates,
-    graph_plot_points, serialize_analysis_candidates, winrate_history,
+    CANDIDATES_PROPERTY, WinrateGraphMetric, analysis_sgf_properties,
+    deserialize_analysis_candidates, graph_plot_points, serialize_analysis_candidates,
+    winrate_history,
 };
 
 #[allow(dead_code)]
@@ -836,13 +837,17 @@ impl ShellApp {
                 let mut cx = cx.clone();
                 async move {
                     loop {
-                        cx.background_executor().timer(Duration::from_millis(200)).await;
-                        let keep_going = weak.update(&mut cx, |shell, cx| {
-                            if shell.clock.state().running && !shell.clock.state().paused {
-                                shell.advance_clock(Instant::now(), cx);
-                                cx.notify();
-                            }
-                        }).is_ok();
+                        cx.background_executor()
+                            .timer(Duration::from_millis(200))
+                            .await;
+                        let keep_going = weak
+                            .update(&mut cx, |shell, cx| {
+                                if shell.clock.state().running && !shell.clock.state().paused {
+                                    shell.advance_clock(Instant::now(), cx);
+                                    cx.notify();
+                                }
+                            })
+                            .is_ok();
                         if !keep_going {
                             break;
                         }
@@ -2385,7 +2390,9 @@ impl ShellApp {
     /// Requests analysis from the role-specific Analysis engine and marks the
     /// best candidate on the board.
     fn start_analysis(&mut self, cx: &mut Context<Self>) {
-        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff && !self.background_review {
+        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff
+            && !self.background_review
+        {
             self.status = "AI analysis is locked for this remote competition".into();
             cx.notify();
             return;
@@ -5305,8 +5312,16 @@ impl ShellApp {
         let winner_code = if winner == Color::Black { "B" } else { "W" };
         self.host
             .set_root_property("RE", vec![format!("{winner_code}+R")]);
-        let resigning_label = if resigning == Color::Black { "黑方" } else { "白方" };
-        let winner_label = if winner == Color::Black { "黑方" } else { "白方" };
+        let resigning_label = if resigning == Color::Black {
+            "黑方"
+        } else {
+            "白方"
+        };
+        let winner_label = if winner == Color::Black {
+            "黑方"
+        } else {
+            "白方"
+        };
         self.synchronize_recovery();
         self.finish_local_game(&format!("{resigning_label} 认输，{winner_label} 获胜"), cx);
     }
@@ -6507,7 +6522,11 @@ impl ShellApp {
                 .set_root_property("RE", vec![format!("{winner}+T")]);
             let result = format!(
                 "{} 超时判负",
-                if loser == Color::Black { "黑方" } else { "白方" }
+                if loser == Color::Black {
+                    "黑方"
+                } else {
+                    "白方"
+                }
             );
             self.synchronize_recovery();
             self.finish_local_game(&result, cx);
@@ -6591,10 +6610,7 @@ impl ShellApp {
         self.synchronize_recovery();
         // 发起 OGS 自动匹配（寻找对手并连接）。
         self.ogs_start_automatch(cx);
-        self.show_toast(
-            "已进入 OGS 远程对局模式，正在自动匹配对手…".to_owned(),
-            cx,
-        );
+        self.show_toast("已进入 OGS 远程对局模式，正在自动匹配对手…".to_owned(), cx);
         cx.notify();
     }
 
@@ -7552,6 +7568,16 @@ impl ShellApp {
             // board to the new (empty) game instead of leaving the old board.
             let new_game = self.ogs_projected_game_id != Some(game.game_id);
             let new_moves = game.moves.len() as u32 != self.ogs_projected_moves;
+            if game.connected
+                && let (Some(control), Some(server_clock)) = (game.time_control, game.clock)
+            {
+                // OGS is authoritative for remote clocks. Replace the local
+                // prediction on every realtime update, including clock-only
+                // frames between moves.
+                self.clock
+                    .apply_remote_clock(server_clock.to_clock_state(control));
+                self.clock_last_updated = Instant::now();
+            }
             if game.connected && (new_game || new_moves) {
                 self.project_ogs_server_moves(game);
                 if new_game {
@@ -7592,10 +7618,7 @@ impl ShellApp {
             {
                 self.project_ogs_server_moves(game);
                 self.finish_local_game(
-                    &format!(
-                        "OGS 对局结束：{} vs {}",
-                        game.black_name, game.white_name
-                    ),
+                    &format!("OGS 对局结束：{} vs {}", game.black_name, game.white_name),
                     cx,
                 );
             }
@@ -7622,8 +7645,16 @@ impl ShellApp {
         if let Some(handicap) = game.handicap.filter(|h| *h > 0) {
             sgf.push_str(&format!("HA[{handicap}]"));
         }
+        if let Some(rules) = game.rules.as_deref() {
+            sgf.push_str(&format!("RU[{rules}]"));
+        }
         if let Some(komi) = game.komi {
             sgf.push_str(&format!("KM[{komi}]"));
+        }
+        if let Some(time_control) = game.time_control
+            && let Some((main_time, overtime)) = time_control.to_sgf()
+        {
+            sgf.push_str(&format!("TM[{main_time}]OT[{overtime}]"));
         }
         if game.initial_player == "white" {
             sgf.push_str("PL[W]");
@@ -9004,9 +9035,7 @@ impl gpui::EntityInputHandler for ShellApp {
         // The native text bridge needs a non-zero caret rectangle. If the
         // binding element collapsed (e.g. inside a block layout), fall back to
         // a minimum-height rect so the I-beam cursor remains visible.
-        if self.active_text_input.is_none() {
-            return None;
-        }
+        self.active_text_input.as_ref()?;
         let height = element_bounds.size.height.max(gpui::px(14.0));
         let width = element_bounds.size.width.max(gpui::px(1.0));
         Some(Bounds {

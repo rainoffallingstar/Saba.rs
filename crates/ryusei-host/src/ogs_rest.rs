@@ -266,26 +266,26 @@ pub fn parse_ogs_login_response(body: &str) -> Result<OgsLoginResult, String> {
             _ => serde_json::Map::new(),
         };
         if let Some(jwt_payload) = extract_jwt_payload(&jwt_token) {
-            if !user_obj.contains_key("id") {
-                if let Some(id) = jwt_payload.get("user_id").or_else(|| jwt_payload.get("id")) {
-                    user_obj.insert("id".to_owned(), id.clone());
-                }
+            if !user_obj.contains_key("id")
+                && let Some(id) = jwt_payload.get("user_id").or_else(|| jwt_payload.get("id"))
+            {
+                user_obj.insert("id".to_owned(), id.clone());
             }
-            if !user_obj.contains_key("username") {
-                if let Some(username) = jwt_payload.get("username") {
-                    user_obj.insert("username".to_owned(), username.clone());
-                }
-            }
-        }
-        if !user_obj.contains_key("id") {
-            if let Some(top_id) = value.get("user_id").or_else(|| value.get("id")) {
-                user_obj.insert("id".to_owned(), top_id.clone());
+            if !user_obj.contains_key("username")
+                && let Some(username) = jwt_payload.get("username")
+            {
+                user_obj.insert("username".to_owned(), username.clone());
             }
         }
-        if !user_obj.contains_key("username") {
-            if let Some(top_username) = value.get("username") {
-                user_obj.insert("username".to_owned(), top_username.clone());
-            }
+        if !user_obj.contains_key("id")
+            && let Some(top_id) = value.get("user_id").or_else(|| value.get("id"))
+        {
+            user_obj.insert("id".to_owned(), top_id.clone());
+        }
+        if !user_obj.contains_key("username")
+            && let Some(top_username) = value.get("username")
+        {
+            user_obj.insert("username".to_owned(), top_username.clone());
         }
         user = serde_json::Value::Object(user_obj);
     }

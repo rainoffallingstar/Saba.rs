@@ -240,7 +240,9 @@ fn socket_worker(
                 break;
             }
         }
-        drain_commands(&mut ws, &command_rx, &connected);
+        if !drain_commands(&mut ws, &command_rx, &event_tx, &connected) {
+            break;
+        }
     }
     connected.store(false, Ordering::SeqCst);
 }
@@ -263,22 +265,26 @@ fn connect_stream(url: &str, ready: &Sender<Result<(), String>>) -> Option<WsStr
 fn drain_commands(
     ws: &mut WsStream,
     command_rx: &Receiver<SocketCommand>,
+    event_tx: &Sender<Result<String, String>>,
     connected: &Arc<AtomicBool>,
-) {
+) -> bool {
     loop {
         match command_rx.try_recv() {
             Ok(SocketCommand::Send(text)) => {
-                if ws.send(Message::text(text)).is_err() {
-                    break;
+                if let Err(error) = ws.send(Message::text(text)) {
+                    let _ = event_tx.send(Err(format!("OGS socket write failed: {error}")));
+                    connected.store(false, Ordering::SeqCst);
+                    return false;
                 }
             }
             Ok(SocketCommand::Close) => {
                 connected.store(false, Ordering::SeqCst);
                 let _ = ws.close(None);
-                return;
+                return false;
             }
             Ok(SocketCommand::Connect { .. }) => {}
-            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => return false,
         }
     }
 }
