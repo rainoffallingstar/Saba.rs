@@ -1022,6 +1022,14 @@ pub fn render_player_bar(
         )
 }
 
+/// X-axis normalization for the winrate graph. The axis is pre-loaded for 50
+/// moves: while the game is shorter, move `i` renders at `i/49` and the curve
+/// grows into the reserved space as each new result arrives; beyond 50 moves
+/// the curve re-normalizes to fill the plot width (natural compression).
+fn winrate_axis_denominator(point_count: usize) -> f32 {
+    point_count.saturating_sub(1).max(49) as f32
+}
+
 /// Builds the floating readout tooltip for the winrate graph (design
 /// `.graph-tooltip`): an inverted pill floating above the hovered point that
 /// shows the move number, the metric value and the move-quality flag.
@@ -1036,7 +1044,7 @@ fn winrate_hover_tooltip(
     let point = points.get(index)?;
     let y = point.y?;
     // Position the tooltip above the hovered x, clamped inside the plot.
-    let last_index = points.len().saturating_sub(1).max(1) as f32;
+    let last_index = winrate_axis_denominator(points.len());
     let x_ratio = (index as f32 / last_index).clamp(0.0, 1.0);
     let value_label = match metric {
         WinrateGraphMetric::Winrate => format!("胜率 {:.1}%", y * 100.0),
@@ -1081,7 +1089,9 @@ pub fn render_winrate_graph_panel(
 ) -> Stateful<Div> {
     let on_node_clicked = Rc::new(on_node_clicked);
     let has_values = points.iter().any(|point| point.y.is_some());
-    let last_index = points.len().saturating_sub(1).max(1) as f32;
+    // Pre-loaded 50-move axis: early games render into the reserved span
+    // instead of stretching to the full width.
+    let last_index = winrate_axis_denominator(points.len());
     let total_moves = points.len();
 
     let y_labels = match metric {
@@ -1099,6 +1109,11 @@ pub fn render_winrate_graph_panel(
     } else {
         100
     };
+    // The tick labels follow the pre-loaded 50-move axis: while the game is
+    // short they read 0/10/20/30/40/50; beyond 50 moves the axis compresses
+    // and the right edge shows the real move count.
+    let axis_moves = total_moves.max(50);
+    let axis_step = if total_moves <= 50 { 10 } else { x_step };
 
     div()
         .id("winrate-graph-panel")
@@ -1286,11 +1301,10 @@ pub fn render_winrate_graph_panel(
                                                     .enumerate()
                                                     .filter_map(|(index, point)| {
                                                         let y = point.y? as f32;
-                                                        let x = if graph_points.len() <= 1 {
-                                                            0.5
-                                                        } else {
-                                                            index as f32 / last_index
-                                                        };
+                                                        // The pre-loaded 50-move
+                                                        // axis starts at the left
+                                                        // edge: move 0 sits at x=0.
+                                                        let x = index as f32 / last_index;
                                                         let color = if point.is_blunder {
                                                             graph_danger
                                                         } else {
@@ -1513,10 +1527,10 @@ pub fn render_winrate_graph_panel(
                         .text_color(rgb(palette.subtle))
                         .child("0")
                         .children((1..=4).filter_map(|i| {
-                            let move_val = i * x_step;
-                            (move_val < total_moves).then(|| div().child(move_val.to_string()))
+                            let move_val = i * axis_step;
+                            (move_val < axis_moves).then(|| div().child(move_val.to_string()))
                         }))
-                        .child(format!("{total_moves}")),
+                        .child(format!("{axis_moves}")),
                 )
         } else {
             div()
