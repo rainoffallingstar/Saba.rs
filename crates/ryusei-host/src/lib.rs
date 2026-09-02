@@ -99,7 +99,7 @@ pub use ogs::{
     ogs_game_id_from_public_url, ogs_game_id_from_url, ogs_public_game_api_url,
     parse_ogs_public_game,
 };
-pub use ogs_auth::{OGS_LOGIN_URL, OgsAuthState, open_ogs_login_page};
+pub use ogs_auth::OgsAuthState;
 pub use ogs_client::{
     LiveOgsClient, OgsChatLine, OgsClientSnapshot, OgsMatchmakingStatus, OgsOnlineGame,
     OgsSocketStatus,

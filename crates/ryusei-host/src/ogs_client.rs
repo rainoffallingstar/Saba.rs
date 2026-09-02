@@ -270,14 +270,21 @@ impl LiveOgsClient {
                     .unwrap_or(0),
             ),
         };
-        if self.store.is_available() {
-            let _ = self.store.save(&credentials);
-        }
+        // Keep the live session even when the OS credential store is unavailable,
+        // but never hide the fact that this login will not survive a restart.
+        let persistence_error = if !self.store.is_available() {
+            Some("OGS 登录成功，但系统钥匙串不可用；重启后需要重新登录".to_owned())
+        } else {
+            self.store
+                .save(&credentials)
+                .err()
+                .map(|error| format!("OGS 登录成功，但会话保存失败；重启后需要重新登录：{error}"))
+        };
 
         let mut inner = self.inner.lock().unwrap();
         inner.session = Some(credentials);
         inner.snapshot.user = Some(user.clone());
-        inner.snapshot.last_error = None;
+        inner.snapshot.last_error = persistence_error;
         self.emit_state();
         Ok(user)
     }
@@ -1444,7 +1451,7 @@ fn build_game_update(
 mod tests {
     use super::*;
     use crate::ogs_credentials::MemoryOgsCredentialStore;
-    use crate::ogs_rest::OgsHttpResponse;
+    use crate::ogs_rest::{OgsHttpResponse, OgsLoginResult};
 
     fn gamedata_payload() -> Value {
         serde_json::json!({
@@ -1920,6 +1927,33 @@ mod tests {
 
     fn auth_error_reply(id: u64) -> String {
         serde_json::json!([id, null, "invalid token"]).to_string()
+    }
+
+    #[test]
+    fn login_keeps_live_session_but_reports_unavailable_persistence() {
+        let transport = Arc::new(ScriptedTransport::new(vec![Ok(Some(auth_reply(1)))]));
+        let factory = Arc::new(ScriptedTransportFactory::new(vec![transport]));
+        let client = Arc::new(LiveOgsClient::with_parts_and_transport_factory(
+            Box::new(MemoryOgsCredentialStore::unavailable()),
+            Box::new(TestRestFetch),
+            factory,
+        ));
+
+        let user = client
+            .finish_login(OgsLoginResult {
+                jwt_token: "jwt".to_owned(),
+                cookie_header: None,
+                user: serde_json::json!({"id": 7, "username": "player"}),
+            })
+            .expect("the online session itself still succeeds");
+
+        assert_eq!(user["username"], "player");
+        assert_eq!(client.snapshot().user.unwrap()["id"], 7);
+        assert_eq!(
+            client.snapshot().last_error.as_deref(),
+            Some("OGS 登录成功，但系统钥匙串不可用；重启后需要重新登录")
+        );
+        client.logout();
     }
 
     #[test]

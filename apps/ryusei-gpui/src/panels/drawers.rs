@@ -802,15 +802,6 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                                         .label("登录")
                                         .disabled(shell.ogs_login_in_progress)
                                         .on_click(cx.listener(|shell, _, _, cx| shell.ogs_login(cx))),
-                                )
-                                .child(
-                                    Button::new("ogs-login-browser")
-                                        .small()
-                                        .ghost()
-                                        .label("改用浏览器打开")
-                                        .on_click(cx.listener(|shell, _, _, cx| {
-                                            shell.open_ogs_login_page(cx);
-                                        })),
                                 ),
                         ),
                 )
@@ -849,6 +840,14 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                         .text_xs()
                         .text_color(rgb(shell.palette.danger_text))
                         .child("未检测到可用的系统钥匙串，登录会话不会在重启后保留。"),
+                )
+            })
+            .when(credential_ok && snapshot.last_error.is_some(), |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.danger_text))
+                        .child(snapshot.last_error.clone().unwrap_or_default()),
                 )
             })
             .child(
@@ -1826,7 +1825,6 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                         .selected(shell.ogs_auth_state == ryusei_host::OgsAuthState::Authenticated)
                         .label(match shell.ogs_auth_state {
                             ryusei_host::OgsAuthState::SignedOut => "OGS 账户",
-                            ryusei_host::OgsAuthState::BrowserLoginOnly => "OGS 浏览器已打开",
                             ryusei_host::OgsAuthState::Authenticated => "OGS 已登录",
                         })
                         .on_click(cx.listener(|shell, _, _, cx| shell.open_ogs_account(cx))),

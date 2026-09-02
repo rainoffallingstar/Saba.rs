@@ -7533,17 +7533,6 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::OgsAccount, "OGS 账户已打开", cx);
     }
 
-    fn open_ogs_login_page(&mut self, cx: &mut Context<Self>) {
-        match ryusei_host::open_ogs_login_page() {
-            Ok(()) => {
-                self.ogs_auth_state = ryusei_host::OgsAuthState::BrowserLoginOnly;
-                self.status = "已打开 OGS 登录页；浏览器登录不会自动授权 Ryusei".into();
-            }
-            Err(error) => self.show_toast(format!("无法打开 OGS 登录页：{error}"), cx),
-        }
-        cx.notify();
-    }
-
     /// Mirrors the OGS client snapshot into `ogs_auth_state` so the toolbar
     /// label stays correct without the shell owning a second source of truth.
     fn refresh_ogs_account_state(&mut self, cx: &mut Context<Self>) {
@@ -8018,7 +8007,12 @@ impl ShellApp {
                                     .get("username")
                                     .and_then(serde_json::Value::as_str)
                                     .unwrap_or("OGS user");
-                                shell.status = format!("OGS 已登录：{name}").into();
+                                let persistence_warning = shell.ogs_client.snapshot().last_error;
+                                shell.status = match persistence_warning {
+                                    Some(warning) => format!("OGS 已登录：{name}。{warning}"),
+                                    None => format!("OGS 已登录：{name}"),
+                                }
+                                .into();
                                 shell.show_toast(shell.status.clone(), cx);
                             }
                             Err(error) => {
