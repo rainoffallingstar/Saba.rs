@@ -14,7 +14,7 @@
       },
       {
         "id": "org.ryusei.katago-setup-hub.download_balanced",
-        "title": "Download 10B Balanced Model (94MB)"
+        "title": "Download Latest Official Weight"
       },
       {
         "id": "org.ryusei.katago-setup-hub.download_lightweight",
@@ -56,7 +56,7 @@
           {
             "type": "button",
             "id": "org.ryusei.katago-setup-hub.download_balanced",
-            "title": "⭐ 10B 均衡推荐网络 (94MB)"
+            "title": "⭐ 下载最新官方权重"
           },
           {
             "type": "button",

@@ -757,6 +757,12 @@ impl ShellApp {
         if settings.get_bool("board.show_analysis").is_none() {
             let _ = settings.set("board.show_analysis", serde_json::json!(true));
         }
+        // HumanSL is the default style for AI-vs-human play. It only becomes
+        // active once a HumanSL network is installed, so existing installations
+        // without that optional asset remain fully usable.
+        if settings.get_bool("katago.human_sl_enabled").is_none() {
+            let _ = settings.set("katago.human_sl_enabled", serde_json::json!(true));
+        }
         // Board coordinates default on: reviewers expect the A–T / 1–19 frame
         // labels without hunting for the player-bar toggle.
         if settings.get_bool("view.show_coordinates").is_none() {
@@ -4095,7 +4101,12 @@ impl ShellApp {
                     let result = cx
                         .background_executor()
                         .spawn(async move {
-                            ryusei_host::install_katago_model(&base_dir_for_thread, tier)
+                            if tier == ryusei_host::KataGoModelTier::Balanced {
+                                ryusei_host::install_latest_katago_weight(&base_dir_for_thread)
+                            } else {
+                                ryusei_host::install_katago_model(&base_dir_for_thread, tier)
+                                    .map_err(|error| error.to_string())
+                            }
                         })
                         .await;
                     weak.update(&mut cx, |shell, cx| match result {
@@ -4212,9 +4223,11 @@ impl ShellApp {
                             let local = ryusei_host::inspect_katago_local(&base)
                                 .map_err(|error| error.to_string())?;
                             let mut release = ryusei_host::fetch_katago_latest_release()?;
-                            release
-                                .assets
-                                .extend(ryusei_host::fetch_katago_official_weights()?);
+                            let official_weights = ryusei_host::fetch_katago_official_weights()?;
+                            // KataGo Training publishes newest first. Put this
+                            // catalog before GitHub release assets so the first
+                            // five model choices really are the newest weights.
+                            release.assets.splice(0..0, official_weights);
                             // The main catalog remains useful even when the
                             // optional special-model catalog is temporarily unavailable.
                             if let Ok(human_sl_assets) =
@@ -4222,8 +4235,11 @@ impl ShellApp {
                             {
                                 release.assets.extend(human_sl_assets);
                             }
-                            let weights =
-                                ryusei_host::merge_katago_weight_catalog(&local, &release);
+                            let weights = ryusei_host::merge_katago_weight_catalog_with_limit(
+                                &local,
+                                &release,
+                                ryusei_host::KATAGO_LATEST_WEIGHT_DISPLAY_LIMIT,
+                            );
                             Ok::<_, String>((local, release, weights))
                         })
                         .await;
@@ -4273,6 +4289,49 @@ impl ShellApp {
             format!("HumanSL 档位已选择为 {profile}；重新启用 HumanSL 权重后生效").into();
         self.show_toast(self.katago_panel_status.clone(), cx);
         cx.notify();
+    }
+
+    /// Installs the available HumanSL model as the White-side engine when the
+    /// default is enabled. Existing White assignments are respected.
+    fn enable_default_human_sl(
+        &mut self,
+        base: &Path,
+        normal_model: &Path,
+    ) -> Result<Option<String>, String> {
+        if !self
+            .settings
+            .get_bool("katago.human_sl_enabled")
+            .unwrap_or(true)
+        {
+            return Ok(None);
+        }
+        let Some(human_model) = ryusei_host::find_installed_human_sl_model(base) else {
+            return Ok(None);
+        };
+        let profile = self
+            .settings
+            .get_str("katago.human_sl_profile")
+            .unwrap_or("rank_5k")
+            .to_owned();
+        let record = ryusei_host::prepare_katago_human_sl_engine(
+            base,
+            normal_model,
+            &human_model,
+            &profile,
+        )?;
+        let engine_name = record.name.clone();
+        self.engine_store.upsert(record);
+        let replace_default_white = self.engine_roles.get(EngineRole::White).is_none_or(|name| {
+            let name = name.to_ascii_lowercase();
+            name.contains("katago") && !name.contains("humansl")
+        });
+        if replace_default_white {
+            self.engine_roles.assign(EngineRole::White, &engine_name);
+        }
+        let _ = self.engine_store.save(&mut self.settings);
+        let _ = self.persist_engine_roles();
+        let _ = ryusei_host::persist_settings_store(&self.settings, &mut self.settings_persistence);
+        Ok(Some(engine_name))
     }
 
     fn activate_katago_weight(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -4385,8 +4444,27 @@ impl ShellApp {
                             .await;
                     let _ = weak.update(&mut cx, |shell, cx| {
                         match result {
-                            Ok(_) => {
+                            Ok(path) => {
+                                let human_sl = ryusei_host::is_human_sl_weight_name(&name);
+                                if !human_sl {
+                                    // A newly downloaded official network becomes
+                                    // the default immediately through the stable link.
+                                    let _ = ryusei_host::set_active_katago_model(&base, &path);
+                                }
                                 shell.katago_local = ryusei_host::inspect_katago_local(&base).ok();
+                                if !human_sl {
+                                    if let Some(normal_model) =
+                                        ryusei_host::find_latest_installed_normal_katago_model(
+                                            &base,
+                                        )
+                                    {
+                                        let _ = shell.enable_default_human_sl(&base, &normal_model);
+                                    }
+                                } else if let Some(normal_model) =
+                                    ryusei_host::find_latest_installed_normal_katago_model(&base)
+                                {
+                                    let _ = shell.enable_default_human_sl(&base, &normal_model);
+                                }
                                 shell.katago_weights = shell
                                     .katago_local
                                     .as_ref()
@@ -4395,8 +4473,10 @@ impl ShellApp {
                                             .katago_release
                                             .as_ref()
                                             .map(|release| {
-                                                ryusei_host::merge_katago_weight_catalog(
-                                                    local, release,
+                                                ryusei_host::merge_katago_weight_catalog_with_limit(
+                                                    local,
+                                                    release,
+                                                    ryusei_host::KATAGO_LATEST_WEIGHT_DISPLAY_LIMIT,
                                                 )
                                             })
                                             .unwrap_or_else(|| local.weights.clone())
@@ -4495,14 +4575,27 @@ impl ShellApp {
                     self.update_katago_binary_from_panel(cx);
                 }
                 ryusei_host::BuiltinPluginCommand::KataGoSetup => {
+                    let latest_model =
+                        ryusei_host::find_latest_installed_normal_katago_model(&base_dir);
                     match ryusei_host::ensure_katago_environment(
                         &base_dir,
                         ryusei_host::KataGoModelTier::Balanced,
-                        None,
+                        latest_model.as_deref(),
                     ) {
                         Ok(env) => {
                             let engine_name = env.engine_record.name.clone();
                             self.engine_store.upsert(env.engine_record.clone());
+                            if self
+                                .settings
+                                .get_bool("katago.human_sl_enabled")
+                                .unwrap_or(true)
+                                && let Some(normal_model) =
+                                    ryusei_host::find_latest_installed_normal_katago_model(
+                                        &base_dir,
+                                    )
+                            {
+                                let _ = self.enable_default_human_sl(&base_dir, &normal_model);
+                            }
                             if self.engine_roles.get(EngineRole::Analysis).is_none() {
                                 self.engine_roles.assign(EngineRole::Analysis, &engine_name);
                             }
@@ -4524,7 +4617,7 @@ impl ShellApp {
                                 )
                             } else if env.executable_exists {
                                 format!(
-                                    "⚡ KataGo 已配置 ({})！尚未下载模型，请点击【⭐ 下载 10B 推荐模型】即可开始分析",
+                                    "⚡ KataGo 已配置 ({})！尚未下载模型，请点击【⭐ 下载最新官方权重】即可开始分析",
                                     backend.label()
                                 )
                             } else {

@@ -108,6 +108,7 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "view.show_siblings"
         | "view.show_winrategraph"
         | "view.winrategraph_invert"
+        | "katago.human_sl_enabled"
         | "window.maximized"
         | "review.analyze_during_game"
         | "library.redistribution_allowed" => Some(SettingKind::Boolean),
@@ -460,6 +461,8 @@ mod tests {
         );
         assert!(validate_setting_value("katago.human_sl_profile", &json!("rank_9d")).is_ok());
         assert!(validate_setting_value("katago.human_sl_profile", &json!("rank_21k")).is_err());
+        assert!(validate_setting_value("katago.human_sl_enabled", &json!(true)).is_ok());
+        assert!(validate_setting_value("katago.human_sl_enabled", &json!("yes")).is_err());
         assert!(validate_setting_value("sound.enable", &json!("yes")).is_err());
         assert!(validate_setting_value("theme.current", &json!(null)).is_ok());
         assert!(validate_setting_value("theme.current", &json!("mist")).is_ok());

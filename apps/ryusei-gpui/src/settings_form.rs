@@ -39,6 +39,7 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "game.opening_convention",
     "game.default_ruleset",
     "katago.human_sl_profile",
+    "katago.human_sl_enabled",
     "engines.analyze_commands",
 ];
 
@@ -188,6 +189,7 @@ pub fn setting_label(key: &str) -> &'static str {
         "game.opening_convention" => "开局约定",
         "game.default_ruleset" => "默认规则（Chinese/Japanese/Ancient...）",
         "katago.human_sl_profile" => "KataGo HumanSL 风格",
+        "katago.human_sl_enabled" => "默认启用 KataGo HumanSL",
         "engines.analyze_commands" => "分析命令",
         _ => "Setting",
     }

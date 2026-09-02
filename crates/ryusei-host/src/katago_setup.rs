@@ -30,6 +30,8 @@ pub const KATAGO_OFFICIAL_WEIGHTS_PAGE: &str = "https://katagotraining.org/netwo
 pub const KATAGO_OFFICIAL_EXTRA_WEIGHTS_PAGE: &str = "https://katagotraining.org/extra_networks/";
 pub const KATAGO_UNIFIED_MODEL_NAME: &str = "active-model.bin.gz";
 pub const KATAGO_HUMAN_SL_CONFIG_NAME: &str = "human_sl_gtp.cfg";
+/// Number of ordinary network weights shown in the download panel.
+pub const KATAGO_LATEST_WEIGHT_DISPLAY_LIMIT: usize = 5;
 
 pub const MODEL_LIGHTWEIGHT_NAME: &str = "b10c384h6nbttflrs.bin.gz";
 pub const MODEL_LIGHTWEIGHT_URL: &str =
@@ -429,8 +431,36 @@ pub fn parse_katago_weight_html(html: &str) -> Vec<KataGoReleaseAsset> {
             }
         }
     }
-    assets.sort_by(|left, right| left.name.cmp(&right.name));
+    // The training site publishes newest networks first. Preserve that order:
+    // filename sorting is not chronological and would make "latest" arbitrary.
     assets
+}
+
+/// Returns the newest ordinary (non-HumanSL) networks in the order published by
+/// KataGo Training. The caller can use the names to filter a merged local/remote
+/// catalog without losing the download URLs.
+pub fn latest_katago_weight_names(release: &KataGoReleaseInfo, limit: usize) -> Vec<String> {
+    release
+        .assets
+        .iter()
+        .filter(|asset| is_model_asset_name(&asset.name) && !is_human_sl_weight_name(&asset.name))
+        .take(limit)
+        .map(|asset| asset.name.clone())
+        .collect()
+}
+
+fn latest_human_sl_weight_names(release: &KataGoReleaseInfo, limit: usize) -> Vec<String> {
+    release
+        .assets
+        .iter()
+        .filter(|asset| is_model_asset_name(&asset.name) && is_human_sl_weight_name(&asset.name))
+        .take(limit)
+        .map(|asset| asset.name.clone())
+        .collect()
+}
+
+fn is_model_asset_name(name: &str) -> bool {
+    name.ends_with(".bin.gz") || name.ends_with(".txt.gz") || name.ends_with(".onnx")
 }
 
 /// HumanSL file naming is part of the published distribution contract. Keep
@@ -527,30 +557,49 @@ fn probe_katago_version(executable: &Path) -> Result<String, String> {
         .ok_or_else(|| "KataGo version output was not recognized".to_owned())
 }
 
+/// Merges local models with the complete release catalog. This is retained for
+/// callers that need to inspect every available asset (for example, downloads by
+/// an exact name).
 pub fn merge_katago_weight_catalog(
     local: &KataGoLocalInfo,
     release: &KataGoReleaseInfo,
 ) -> Vec<KataGoWeightInfo> {
-    let mut weights = local.weights.clone();
-    for asset in &release.assets {
-        if !(asset.name.ends_with(".bin.gz")
-            || asset.name.ends_with(".txt.gz")
-            || asset.name.ends_with(".onnx"))
-        {
+    merge_katago_weight_catalog_with_limit(local, release, usize::MAX)
+}
+
+/// Merges local models with only the newest ordinary network assets. Local
+/// models are always retained so an existing active model cannot disappear from
+/// the UI; the limit applies only to remote download choices.
+pub fn merge_katago_weight_catalog_with_limit(
+    local: &KataGoLocalInfo,
+    release: &KataGoReleaseInfo,
+    limit: usize,
+) -> Vec<KataGoWeightInfo> {
+    let latest_names = latest_katago_weight_names(release, limit);
+    let latest_human_names = latest_human_sl_weight_names(release, limit);
+    let mut weights =
+        Vec::with_capacity(local.weights.len() + latest_names.len() + latest_human_names.len());
+
+    for asset in release.assets.iter().filter(|asset| {
+        latest_names.iter().any(|name| name == &asset.name)
+            || latest_human_names.iter().any(|name| name == &asset.name)
+    }) {
+        if !is_model_asset_name(&asset.name) {
             continue;
         }
-        if let Some(existing) = weights.iter_mut().find(|weight| weight.name == asset.name) {
-            existing.download_url = Some(asset.download_url.clone());
-            existing.size = Some(asset.size);
+        if let Some(existing) = local
+            .weights
+            .iter()
+            .find(|weight| weight.name == asset.name)
+        {
+            let mut merged = existing.clone();
+            merged.download_url = Some(asset.download_url.clone());
+            merged.size = Some(asset.size);
+            weights.push(merged);
         } else {
             weights.push(KataGoWeightInfo {
                 name: asset.name.clone(),
-                path: local
-                    .weights
-                    .iter()
-                    .find(|weight| weight.name == asset.name)
-                    .map(|weight| weight.path.clone())
-                    .unwrap_or_else(|| local.unified_model.with_file_name(&asset.name)),
+                path: local.unified_model.with_file_name(&asset.name),
                 download_url: Some(asset.download_url.clone()),
                 installed: false,
                 active: false,
@@ -558,7 +607,14 @@ pub fn merge_katago_weight_catalog(
             });
         }
     }
-    weights.sort_by(|left, right| left.name.cmp(&right.name));
+
+    // Keep locally installed models that are not in the visible remote slice.
+    // They remain activatable, while no old remote download entries are added.
+    for weight in &local.weights {
+        if !weights.iter().any(|item| item.name == weight.name) {
+            weights.push(weight.clone());
+        }
+    }
     weights
 }
 
@@ -618,6 +674,17 @@ impl KataGoModelDownloadAdapter for CurlKataGoModelDownloadAdapter {
             Err(format!("curl exited with status {status}"))
         }
     }
+}
+
+/// Downloads the first ordinary network from the official newest-first
+/// catalog. This is the default download path; fixed model tiers remain
+/// available as explicit alternatives.
+pub fn install_latest_katago_weight(base: &Path) -> Result<PathBuf, String> {
+    let asset = fetch_katago_official_weights()?
+        .into_iter()
+        .find(|asset| !is_human_sl_weight_name(&asset.name))
+        .ok_or_else(|| "official KataGo catalog contained no ordinary network".to_owned())?;
+    download_katago_weight(base, &asset)
 }
 
 pub fn download_katago_weight(base: &Path, asset: &KataGoReleaseAsset) -> Result<PathBuf, String> {
@@ -927,13 +994,20 @@ pub fn ensure_katago_environment(
 
     let (model, model_exists) = if let Some(custom) = custom_model_path {
         (custom.to_path_buf(), custom.exists())
-    } else if models_dir.join(KATAGO_UNIFIED_MODEL_NAME).is_file() {
+    } else if models_dir.join(KATAGO_UNIFIED_MODEL_NAME).is_file()
+        && std::fs::read_link(models_dir.join(KATAGO_UNIFIED_MODEL_NAME))
+            .ok()
+            .and_then(|target| target.file_name().map(|name| name.to_owned()))
+            .and_then(|name| name.to_str().map(str::to_owned))
+            .is_none_or(|name| !is_human_sl_weight_name(&name))
+    {
         // The stable link is the single model path used by engine records.
         // Switching weights only changes this link, never the engine config.
         (models_dir.join(KATAGO_UNIFIED_MODEL_NAME), true)
     } else {
-        // A requested tier is an explicit user choice and therefore always
-        // wins over arbitrary directory iteration order.
+        // An explicit tier remains authoritative when no active link exists.
+        // The default/latest workflow passes its selected model through
+        // `ensure_katago_latest_environment` below.
         let tier_model = models_dir.join(tier.file_name());
         if tier_model.is_file() {
             (tier_model, true)
@@ -1027,6 +1101,71 @@ pub fn build_katago_human_sl_engine_record(
 /// Finds an installed regular KataGo model suitable as the `-model` half of
 /// HumanSL. The active symlink is deliberately skipped because an older Ryusei
 /// version may have pointed it at the HumanSL file itself.
+pub fn find_installed_human_sl_model(base: &Path) -> Option<PathBuf> {
+    let models_dir = katago_storage_dir(base).join("models");
+    let mut candidates = std::fs::read_dir(models_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            path.is_file()
+                && name != KATAGO_UNIFIED_MODEL_NAME
+                && is_model_asset_name(name)
+                && is_human_sl_weight_name(name)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        let left_time = std::fs::metadata(left)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let right_time = std::fs::metadata(right)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        right_time
+            .cmp(&left_time)
+            .then_with(|| left.file_name().cmp(&right.file_name()))
+    });
+    candidates.into_iter().next()
+}
+
+/// Returns the most recently modified installed ordinary network. The official
+/// catalog is newest-first, but local files do not carry that catalog position;
+/// modification time is the only reliable signal after a download.
+pub fn find_latest_installed_normal_katago_model(base: &Path) -> Option<PathBuf> {
+    let models_dir = katago_storage_dir(base).join("models");
+    let mut candidates = std::fs::read_dir(models_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            path.is_file()
+                && name != KATAGO_UNIFIED_MODEL_NAME
+                && is_model_asset_name(name)
+                && !is_human_sl_weight_name(name)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        let left_time = std::fs::metadata(left)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let right_time = std::fs::metadata(right)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        right_time
+            .cmp(&left_time)
+            .then_with(|| left.file_name().cmp(&right.file_name()))
+    });
+    candidates.into_iter().next()
+}
+
 pub fn find_installed_normal_katago_model(base: &Path) -> Option<PathBuf> {
     let models_dir = katago_storage_dir(base).join("models");
     let mut candidates = std::fs::read_dir(models_dir)
@@ -1513,6 +1652,32 @@ mod tests {
         let config_contents = std::fs::read_to_string(config).expect("HumanSL config writes");
         assert!(config_contents.contains("humanSLProfile = rank_5k"));
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn latest_weight_names_follow_catalog_order_and_limit_remote_choices() {
+        let release = KataGoReleaseInfo {
+            version: "latest".to_owned(),
+            url: String::new(),
+            assets: (0..7)
+                .map(|index| KataGoReleaseAsset {
+                    name: format!("newest-{index}.bin.gz"),
+                    download_url: format!("https://example.invalid/{index}"),
+                    size: index,
+                })
+                .chain([KataGoReleaseAsset {
+                    name: "b18c384nbt-humanv0.bin.gz".to_owned(),
+                    download_url: "https://example.invalid/human".to_owned(),
+                    size: 1,
+                }])
+                .collect(),
+        };
+        assert_eq!(
+            latest_katago_weight_names(&release, 5),
+            (0..5)
+                .map(|index| format!("newest-{index}.bin.gz"))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
