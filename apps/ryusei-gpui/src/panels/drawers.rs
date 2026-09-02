@@ -912,7 +912,11 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                                 .outline()
                                 .label("开始自动匹配")
                                 .on_click(cx.listener(|shell, _, _, cx| {
-                                    shell.ogs_start_automatch(cx);
+                                    // Route through the guarded remote-match entry:
+                                    // it locks fair-play analysis before starting
+                                    // matchmaking, so an analysis engine connected
+                                    // earlier can never stream onto the OGS board.
+                                    shell.enter_ogs_remote_match(cx);
                                 }))
                         }),
                 )

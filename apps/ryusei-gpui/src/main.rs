@@ -3159,6 +3159,14 @@ impl ShellApp {
         if !run.is_current() {
             return;
         }
+        // A leftover interactive stream must never paint the board once a
+        // remote competition is fair-play locked; only the opted-in per-move
+        // background review may populate analysis during the game.
+        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff
+            && !self.background_review
+        {
+            return;
+        }
         self.analysis = merge_analysis_entries(&self.analysis, entries);
         self.set_analysis(self.analysis.clone(), cx);
     }
@@ -6667,6 +6675,22 @@ impl ShellApp {
         }
     }
 
+    /// Stops any running analysis and locks it off for a fair-play remote
+    /// competition. Called both when entering OGS matchmaking and when the
+    /// server confirms a new remote game, so an engine connected before the
+    /// game started can never stream onto the OGS board.
+    fn stop_analysis_for_fair_play(&mut self) {
+        self.analysis_enabled = false;
+        self.restart_analysis_after_position_change = false;
+        self.restart_analysis_after_stop = false;
+        self.pending_analysis_request = None;
+        if self.analysis_task.is_some() {
+            self.analysis_run.request_stop();
+        }
+        self.analysis.clear();
+        self.analysis_best_move = None;
+    }
+
     fn enter_ogs_remote_match(&mut self, cx: &mut Context<Self>) {
         // 未登录时先引导登录，不切换远程模式，避免残留 RemoteCompetition
         // 状态导致"新建对局"被误判为"已经在远程对局"。
@@ -6692,13 +6716,7 @@ impl ShellApp {
         self.session_policy =
             SessionPolicy::new(SessionMode::Match, SessionSource::RemoteCompetition)
                 .lock_fair_play(true);
-        self.analysis_enabled = false;
-        self.restart_analysis_after_position_change = false;
-        if self.analysis_task.is_some() {
-            self.analysis_run.request_stop();
-        }
-        self.analysis.clear();
-        self.analysis_best_move = None;
+        self.stop_analysis_for_fair_play();
         self.status = "OGS 远程对局模式：公平竞赛锁定，正在寻找对手…".into();
         self.synchronize_recovery();
         // 发起 OGS 自动匹配（寻找对手并连接）。
@@ -7666,6 +7684,10 @@ impl ShellApp {
                     self.session_policy =
                         SessionPolicy::new(SessionMode::Match, SessionSource::RemoteCompetition)
                             .lock_fair_play(true);
+                    // Defense in depth: even when matchmaking started through a
+                    // path that skipped the guarded entry, a live analysis
+                    // stream must not survive onto the remote board.
+                    self.stop_analysis_for_fair_play();
                     self.mode = GameMode::Play;
                     self.active_tool = MarkupTool::Play;
                     let move_desc = if game.move_number == 0 {
@@ -10528,6 +10550,72 @@ mod headless_smoke {
                 shell.session_policy.analysis,
                 ryusei_domain_core::AnalysisPolicy::Manual
             );
+        });
+    }
+
+    #[test]
+    fn remote_competition_stops_inherited_analysis_stream() {
+        with_headless_shell_cx("remote-analysis-stop", |shell, cx| {
+            // An analysis engine connected before the OGS game must not keep
+            // streaming onto the remote board.
+            shell.ogs_auth_state = ryusei_host::OgsAuthState::Authenticated;
+            shell.analysis_enabled = true;
+            shell.analysis = vec![ryusei_host::AnalysisEntry {
+                id: Some(1),
+                vertex: Some("D4".to_owned()),
+                visits: 100,
+                winrate: 0.55,
+                score_lead: None,
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            }];
+            shell.analysis_best_move = Some(Vertex { column: 3, row: 3 });
+
+            shell.enter_ogs_remote_match(cx);
+            assert_eq!(
+                shell.session_policy.analysis,
+                ryusei_domain_core::AnalysisPolicy::FairPlayLockedOff
+            );
+            assert!(!shell.analysis_enabled);
+            assert!(shell.analysis.is_empty());
+            assert_eq!(shell.analysis_best_move, None);
+        });
+    }
+
+    #[test]
+    fn remote_competition_drops_streamed_analysis_batches() {
+        with_headless_shell_cx("remote-analysis-batches", |shell, cx| {
+            shell.session_policy = ryusei_domain_core::SessionPolicy::new(
+                ryusei_domain_core::SessionMode::Match,
+                ryusei_domain_core::SessionSource::RemoteCompetition,
+            )
+            .lock_fair_play(true);
+            let node_id = shell.host.snapshot().current_node_id.clone();
+            let run = shell
+                .analysis_run
+                .begin(node_id, ryusei_domain_core::Color::Black);
+            let entry = ryusei_host::AnalysisEntry {
+                id: Some(1),
+                vertex: Some("D4".to_owned()),
+                visits: 100,
+                winrate: 0.55,
+                score_lead: None,
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            };
+
+            // A leftover interactive stream must be dropped, never displayed.
+            shell.push_analysis_batch(&run, vec![entry.clone()], cx);
+            assert!(shell.analysis.is_empty());
+
+            // The opted-in per-move background review is still allowed.
+            shell.background_review = true;
+            shell.push_analysis_batch(&run, vec![entry], cx);
+            assert_eq!(shell.analysis.len(), 1);
         });
     }
 
