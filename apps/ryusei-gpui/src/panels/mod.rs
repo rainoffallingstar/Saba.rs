@@ -1035,7 +1035,12 @@ fn winrate_hover_tooltip(
         WinrateGraphMetric::ScoreLead => format!("目差 {:+.1}", (y * 100.0) - 50.0),
     };
     let quality = if point.is_blunder { " · 失误" } else { "" };
-    let text = format!("第 {} 手 · {}{}", point.move_number, value_label, quality);
+    let move_text = if point.move_number == 0 {
+        "开局".to_owned()
+    } else {
+        format!("第 {} 手", point.move_number)
+    };
+    let text = format!("{} · {}{}", move_text, value_label, quality);
     Some(
         div()
             .id("winrate-tooltip")

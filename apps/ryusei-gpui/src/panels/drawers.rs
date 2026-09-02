@@ -668,12 +668,17 @@ pub fn render_live_capture_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                     .text_xs()
                     .text_color(rgb(shell.palette.muted))
                     .child(if let Some(state) = shell.live_ogs_state.as_ref() {
+                        let move_desc = if state.move_number == 0 {
+                            "开局".to_owned()
+                        } else {
+                            format!("第 {} 手", state.move_number)
+                        };
                         format!(
-                            "OGS #{} · {} vs {} · 第 {} 手 · {}",
+                            "OGS #{} · {} vs {} · {} · {}",
                             state.game_id,
                             state.black_name,
                             state.white_name,
-                            state.move_number,
+                            move_desc,
                             state.phase,
                         )
                     } else {
@@ -931,11 +936,15 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                             .text_xs()
                             .text_color(rgb(shell.palette.muted))
                             .child(format!(
-                                "已连接 OGS #{} · {} vs {} · 第 {} 手 · 行棋方 {}",
+                                "已连接 OGS #{} · {} vs {} · {} · 行棋方 {}",
                                 game.game_id,
                                 game.black_name,
                                 game.white_name,
-                                game.move_number,
+                                if game.move_number == 0 {
+                                    "开局".to_owned()
+                                } else {
+                                    format!("第 {} 手", game.move_number)
+                                },
                                 match game.next_player {
                                     Some(ryusei_domain_core::Color::Black) => "黑",
                                     Some(ryusei_domain_core::Color::White) => "白",

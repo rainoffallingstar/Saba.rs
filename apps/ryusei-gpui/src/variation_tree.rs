@@ -434,9 +434,10 @@ where
         let move_label = match node.kind {
             GameGraphNodeKind::Bookmark => "★".to_owned(),
             GameGraphNodeKind::Square => "P".to_owned(),
+            GameGraphNodeKind::Diamond => "".to_owned(),
             _ => {
                 if node.move_number == 0 {
-                    "0".to_owned()
+                    "".to_owned()
                 } else {
                     node.move_number.to_string()
                 }

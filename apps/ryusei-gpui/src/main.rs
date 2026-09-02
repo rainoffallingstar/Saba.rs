@@ -4589,9 +4589,13 @@ impl ShellApp {
                 .flat_map(|row| row.iter())
                 .filter(|&&s| s == -1)
                 .count();
+            let move_desc = if snap.moves.is_empty() {
+                "开局".to_owned()
+            } else {
+                format!("第 {} 手", snap.moves.len())
+            };
             let msg = format!(
-                "📊 局面检查完成: 黑子 {black_stones} 颗, 白子 {white_stones} 颗, 当前手序: 第 {} 手",
-                snap.moves.len()
+                "📊 局面检查完成: 黑子 {black_stones} 颗, 白子 {white_stones} 颗, 当前手序: {move_desc}"
             );
             self.status = msg.clone().into();
             self.show_toast(msg, cx);
@@ -7556,9 +7560,14 @@ impl ShellApp {
                             .lock_fair_play(true);
                     self.mode = GameMode::Play;
                     self.active_tool = MarkupTool::Play;
+                    let move_desc = if game.move_number == 0 {
+                        "开局".to_owned()
+                    } else {
+                        format!("第 {} 手", game.move_number)
+                    };
                     self.status = format!(
-                        "OGS 对局已开始：{} vs {}（第 {} 手）",
-                        game.black_name, game.white_name, game.move_number
+                        "OGS 对局已开始：{} vs {}（{move_desc}）",
+                        game.black_name, game.white_name
                     )
                     .into();
                     self.show_toast(self.status.to_string(), cx);
