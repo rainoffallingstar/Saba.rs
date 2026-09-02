@@ -9,7 +9,7 @@ use gpui::{
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Disableable, Selectable, Sizable};
+use gpui_component::{Selectable, Sizable};
 
 use ryusei_domain_core::GameSnapshot;
 
@@ -512,6 +512,7 @@ pub(crate) fn render_gtp_terminal_body(shell: &ShellApp, cx: &Context<ShellApp>)
                 )
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_stat_row(
     label: &'static str,
     black: usize,
@@ -549,29 +550,43 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         snapshot.board.width,
     );
     let evaluations = ryusei_host::compute_game_move_evaluations(&snapshot);
-    let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+    let _summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
 
-    // Current node move evaluation (if any)
-    let current_eval = evaluations
-        .iter()
-        .find(|e| e.node_id == snapshot.current_node_id);
+    // Player metadata & Clocks
+    let property = |key: &str| {
+        snapshot
+            .root_properties
+            .get(key)
+            .and_then(|values| values.first())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let black_name = if property("PB").is_empty() {
+        "Black".to_owned()
+    } else {
+        property("PB")
+    };
+    let black_rank = property("BR");
+    let white_name = if property("PW").is_empty() {
+        "White".to_owned()
+    } else {
+        property("PW")
+    };
+    let white_rank = property("WR");
+    let is_black_turn = snapshot.board.next_player == ryusei_domain_core::Color::Black;
 
-    // Candidates sorted by visits descending
-    let mut candidates = shell.analysis.clone();
-    candidates.sort_by_key(|e| std::cmp::Reverse(e.visits));
+    let clock_state = shell.clock.state();
+    let black_clock = crate::ui_format::format_clock(clock_state.black);
+    let white_clock = crate::ui_format::format_clock(clock_state.white);
+    let clocks_visible = !matches!(clock_state.control, ryusei_domain_core::TimeControl::None);
 
     let live_winrate = if !shell.analysis.is_empty() {
         best_analysis_winrate(&shell.analysis, snapshot.board.next_player)
     } else {
         0.50
     };
-
-    let best_score_lead = candidates.first().and_then(|e| e.score_lead);
-    let total_visits: u64 = candidates.iter().map(|e| e.visits).sum();
-
-    // The winrate graph renders only in the bottom deck (design §4.2); the
-    // left sidebar no longer duplicates it, so its history/plot pipeline and
-    // node-click handler are not built here.
+    let best_score_lead = shell.analysis.first().and_then(|e| e.score_lead);
+    let left_tab = shell.left_sidebar_tab;
 
     div()
         .id("engine-sidebar")
@@ -585,10 +600,58 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .p_3()
         .bg(rgb(shell.palette.input))
         .text_xs()
-        // Card 1: AI 局面评估与好坏棋统计 (整合规则与贴目信息，移除 sgf2gif 字样)
+        // Top Switcher: [AI 局面评估] | [棋谱库]
         .child(
             div()
-                .p_2p5()
+                .flex()
+                .items_center()
+                .p_0p5()
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .child(
+                    Button::new("left-tab-ai")
+                        .small()
+                        .ghost()
+                        .selected(left_tab == crate::LeftSidebarTab::AiEvaluation)
+                        .child(icon_label(
+                            ShellIcon::Sparkles,
+                            "AI 局面评估",
+                            if left_tab == crate::LeftSidebarTab::AiEvaluation {
+                                shell.palette.accent
+                            } else {
+                                shell.palette.muted
+                            },
+                        ))
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.set_left_sidebar_tab(crate::LeftSidebarTab::AiEvaluation, cx);
+                        })),
+                )
+                .child(
+                    Button::new("left-tab-library")
+                        .small()
+                        .ghost()
+                        .selected(left_tab == crate::LeftSidebarTab::Library)
+                        .child(icon_label(
+                            ShellIcon::Library,
+                            "棋谱库",
+                            if left_tab == crate::LeftSidebarTab::Library {
+                                shell.palette.accent
+                            } else {
+                                shell.palette.muted
+                            },
+                        ))
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.set_left_sidebar_tab(crate::LeftSidebarTab::Library, cx);
+                        })),
+                ),
+        )
+        .children(match left_tab {
+            crate::LeftSidebarTab::AiEvaluation => vec![
+                // Card 1: 双方棋手、时钟与 AI 局面评估
+                div()
+                    .p_2p5()
                 .rounded_md()
                 .bg(rgb(shell.palette.panel))
                 .border_1()
@@ -625,71 +688,201 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                     ),
                                 )),
                         )
+                        .child(Badge::new().small().child(
+                            if shell.analysis_task.is_some() {
+                                "● 分析中"
+                            } else if shell.analysis_enabled {
+                                "○ 自动分析"
+                            } else {
+                                "○ 已暂停"
+                            },
+                        )),
+                )
+                // Both Players & Active Clocks Display
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(shell.palette.input))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        // Black Player
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
-                                .items_center()
-                                .gap_1p5()
+                                .flex_col()
+                                .gap_1()
+                                .p_1p5()
+                                .rounded_sm()
+                                .bg(if is_black_turn {
+                                    rgb(shell.palette.button_active)
+                                } else {
+                                    rgb(shell.palette.panel)
+                                })
+                                .border_1()
+                                .border_color(if is_black_turn {
+                                    rgb(shell.palette.accent)
+                                } else {
+                                    rgb(shell.palette.border)
+                                })
                                 .child(
-                                    if shell
-                                        .batch_review_progress
-                                        .is_some_and(|progress| progress.is_running)
-                                    {
-                                        Button::new("whole-game-review-stop")
-                                            .xsmall()
-                                            .outline()
-                                            .child(icon_label(
-                                                ShellIcon::Stop,
-                                                "停止复盘",
-                                                shell.palette.muted,
-                                            ))
-                                            .on_click(cx.listener(|shell, _, _, cx| {
-                                                shell.stop_whole_game_review(cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .children(
-                                                ryusei_domain_core::ReviewProfile::ALL
-                                                    .into_iter()
-                                                    .enumerate()
-                                                    .map(|(index, profile)| {
-                                                        Button::new((
-                                                            "whole-game-review-profile",
-                                                            index,
-                                                        ))
-                                                        .xsmall()
-                                                        .outline()
-                                                        .label(format!("{}v", profile.visits()))
-                                                        .tooltip(format!(
-                                                            "{} 全盘复盘（{} visits）",
-                                                            profile.label(),
-                                                            profile.visits()
-                                                        ))
-                                                        .on_click(cx.listener(
-                                                            move |shell, _, _, cx| {
-                                                                shell.start_review_profile_action(
-                                                                    profile, cx,
-                                                                );
-                                                            },
-                                                        ))
-                                                    }),
-                                            )
-                                            .into_any_element()
-                                    },
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .min_w_0()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(if is_black_turn {
+                                                            rgb(shell.palette.accent)
+                                                        } else {
+                                                            rgb(shell.palette.text)
+                                                        })
+                                                        .child("●"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .truncate()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.text))
+                                                        .child(black_name),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.subtle))
+                                                .child(format!("{}提", snapshot.black_captures)),
+                                        ),
                                 )
-                                .child(Badge::new().small().child(
-                                    if shell.analysis_task.is_some() {
-                                        "● 分析中"
-                                    } else if shell.analysis_enabled {
-                                        "○ 自动分析"
-                                    } else {
-                                        "○ 已暂停"
-                                    },
-                                )),
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.muted))
+                                                .child(if black_rank.is_empty() { "黑方".to_owned() } else { black_rank }),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(rgb(shell.palette.input))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_xs()
+                                                .text_color(rgb(if is_black_turn {
+                                                    shell.palette.warn
+                                                } else {
+                                                    shell.palette.muted
+                                                }))
+                                                .child(if clocks_visible { black_clock } else { "--:--".to_owned() }),
+                                        ),
+                                ),
+                        )
+                        // White Player
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .p_1p5()
+                                .rounded_sm()
+                                .bg(if !is_black_turn {
+                                    rgb(shell.palette.button_active)
+                                } else {
+                                    rgb(shell.palette.panel)
+                                })
+                                .border_1()
+                                .border_color(if !is_black_turn {
+                                    rgb(shell.palette.accent)
+                                } else {
+                                    rgb(shell.palette.border)
+                                })
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .min_w_0()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(if !is_black_turn {
+                                                            rgb(shell.palette.accent)
+                                                        } else {
+                                                            rgb(shell.palette.text)
+                                                        })
+                                                        .child("○"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .truncate()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.text))
+                                                        .child(white_name),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.subtle))
+                                                .child(format!("{}提", snapshot.white_captures)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.muted))
+                                                .child(if white_rank.is_empty() { "白方".to_owned() } else { white_rank }),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(rgb(shell.palette.input))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_xs()
+                                                .text_color(rgb(if !is_black_turn {
+                                                    shell.palette.warn
+                                                } else {
+                                                    shell.palette.muted
+                                                }))
+                                                .child(if clocks_visible { white_clock } else { "--:--".to_owned() }),
+                                        ),
+                                ),
                         ),
                 )
                 // Real-time Winrate & Score Lead
@@ -752,180 +945,98 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 ),
                         )
                         .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
-                )
-                // Current Move Quality evaluation (if any)
-                .children(current_eval.map(|ev| {
-                    div()
-                        .p_1p5()
-                        .rounded_md()
-                        .bg(rgb(shell.palette.input))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(ev.quality.color_u32()))
-                                .child(format!("{} {}", ev.quality.badge(), ev.quality.label())),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(shell.palette.muted))
-                                .child(format!("损失 {:.1}目", ev.points_lost)),
-                        )
-                }))
-                // KaTrain Move Quality Classification Table
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .pt_1()
-                        .border_t_1()
-                        .border_color(rgb(shell.palette.border))
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(shell.palette.muted))
-                                .child("好坏棋评级")
-                                .child("黑棋")
-                                .child("白棋"),
-                        )
-                        .child(render_stat_row(
-                            "🌟 最佳 (Best)",
-                            summary.black_best_count,
-                            summary.white_best_count,
-                            0x10b981,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟢 好手 (Good)",
-                            summary.black_good_count,
-                            summary.white_good_count,
-                            0x0ea5e9,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟡 疑问 (Inaccuracy)",
-                            summary.black_inaccuracy_count,
-                            summary.white_inaccuracy_count,
-                            0xf59e0b,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🟠 错着 (Mistake)",
-                            summary.black_mistake_count,
-                            summary.white_mistake_count,
-                            0xf97316,
-                            shell,
-                        ))
-                        .child(render_stat_row(
-                            "🔴 恶手 (Blunder)",
-                            summary.black_blunder_count,
-                            summary.white_blunder_count,
-                            0xef4444,
-                            shell,
-                        ))
-                        .when(summary.total_moves > 0, |this| {
-                            this.child(
-                                div()
-                                    .pt_1()
-                                    .text_xs()
-                                    .text_color(rgb(shell.palette.subtle))
-                                    .child(summary.verdict()),
-                            )
-                            .child(
-                                Button::new("review-write-sgf-comments")
-                                    .xsmall()
-                                    .outline()
-                                    .label("写入 SGF 复盘评论")
-                                    .disabled(summary.top_blunders.is_empty())
-                                    .tooltip("保留现有评论，并追加总评和前五个严重问题手")
-                                    .on_click(cx.listener(|shell, _, _, cx| {
-                                        shell.write_review_comments(cx);
-                                    })),
-                            )
-                        }),
                 ),
-        )
-        // Card 2: actionable top mistakes from the persisted per-move review.
-        .child({
-            let weak_blunder_shell = cx.entity().downgrade();
-            let rows = summary.top_blunders.iter().map(|eval| {
-                let node_id = eval.node_id.clone();
-                let played = eval.played_vertex.as_deref().unwrap_or("pass");
-                let recommendation = eval
-                    .ai_recommended_vertex
-                    .as_deref()
-                    .map(|move_| format!("推荐 {move_}"))
-                    .unwrap_or_else(|| "暂无推荐点".to_owned());
-                let pv = if eval.ai_pv.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " · PV {}",
-                        eval.ai_pv
-                            .iter()
-                            .take(4)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                };
-                let weak = weak_blunder_shell.clone();
-                Button::new(gpui::SharedString::from(format!(
-                    "blunder-report-{}",
-                    eval.node_id
-                )))
-                .small()
-                .ghost()
-                .label(format!(
-                    "第{}手 {} {} · 损失 {:.1}目 · {}{}",
-                    eval.move_number,
-                    match eval.player {
-                        ryusei_domain_core::Color::Black => "黑",
-                        ryusei_domain_core::Color::White => "白",
-                    },
-                    played,
-                    eval.points_lost,
-                    recommendation,
-                    pv,
-                ))
-                .tooltip("跳转到该手并查看上下文")
-                .on_click(move |_, _, cx| {
-                    weak.update(cx, |shell, cx| shell.navigate_to_node(node_id.clone(), cx))
-                        .ok();
-                })
-                .into_any_element()
-            });
-            div()
-                .p_2p5()
-                .rounded_md()
-                .bg(rgb(shell.palette.panel))
-                .border_1()
-                .border_color(rgb(shell.palette.border))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.subtle))
-                        .child(format!("问题手与推荐 · {}", summary.top_blunders.len())),
-                )
-                .children(rows)
+                // Section 2: 引擎与工具
+                render_engine_config_section(shell, cx),
+            ],
+            crate::LeftSidebarTab::Library => vec![
+                render_left_sidebar_library_panel(shell, cx),
+            ],
         })
-        // Card 3: AI 候选点推荐卡片 (不显示长串 PV 文本，点击即预览)。胜率走势
-        // 图只在底部甲板渲染（设计 §4.2），不在左侧栏重复。
+}
+
+/// Renders the integrated 棋谱库 (Library & Kifu browser) panel inside the left sidebar.
+pub(crate) fn render_left_sidebar_library_panel(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    let palette = shell.palette;
+    let recent_files = shell.recent_files.list();
+    let library_entries = &shell.library_entries;
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_2p5()
+        // Quick Import Actions
         .child(
             div()
                 .p_2p5()
                 .rounded_md()
-                .bg(rgb(shell.palette.panel))
+                .bg(rgb(palette.panel))
                 .border_1()
-                .border_color(rgb(shell.palette.border))
+                .border_color(rgb(palette.border))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(palette.text))
+                        .child("棋谱导入与同步"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1p5()
+                        .child(
+                            Button::new("lib-btn-open-file")
+                                .small()
+                                .primary()
+                                .child(icon_label(ShellIcon::Upload, "打开本地 SGF", 0xffffff))
+                                .tooltip("选择本地 SGF/NGF/GIB/UGF 棋谱文件 (Cmd+O)")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.open(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("lib-btn-fox-sync")
+                                .small()
+                                .ghost()
+                                .child(icon_label(ShellIcon::Globe, "野狐对局导入", palette.muted))
+                                .tooltip("搜索并同步野狐对局棋谱")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.open_engine_config_panel(crate::EngineConfigPanel::FoxSync, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("lib-btn-live-capture")
+                                .small()
+                                .ghost()
+                                .child(icon_label(ShellIcon::Radio, "网络直播/链接", palette.muted))
+                                .tooltip("从 Starriver/弈客/OGS 网址抓取棋谱")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.open_live_capture(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("lib-btn-cloud-repo")
+                                .small()
+                                .ghost()
+                                .child(icon_label(ShellIcon::Library, "GitHub 棋谱库", palette.muted))
+                                .tooltip("管理与同步 GitHub 开源 SGF 仓库")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.open_library(cx);
+                                })),
+                        ),
+                ),
+        )
+        // Recent local games (最近打开)
+        .child(
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(palette.panel))
+                .border_1()
+                .border_color(rgb(palette.border))
                 .flex()
                 .flex_col()
                 .gap_1p5()
@@ -937,54 +1048,28 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                         .child(
                             div()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(shell.palette.subtle))
-                                .child(format!("AI 候选点 · {}", candidates.len())),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(shell.palette.muted))
-                                .child(format!("{} visits", total_visits)),
+                                .text_color(rgb(palette.text))
+                                .child(format!("最近对局 · {}", recent_files.len())),
                         ),
                 )
-                .child(if candidates.is_empty() {
+                .child(if recent_files.is_empty() {
                     div()
                         .p_2()
                         .text_color(rgb(shell.palette.subtle))
-                        .child("自动分析开启后，候选点和变化会在这里实时更新。")
+                        .child("暂无最近打开的棋谱文件。")
                 } else {
                     div().flex().flex_col().gap_1().children(
-                        candidates.iter().take(6).enumerate().map(|(idx, entry)| {
-                            let vtx = entry.vertex.as_deref().unwrap_or("pass");
-                            let is_best = idx == 0;
-                            let hover_vertex = entry.vertex.clone();
-                            let wr_pct = entry.winrate * 100.0;
-                            let score_str = entry
-                                .score_lead
-                                .map(|s| format!("{:+.1}目", s))
-                                .unwrap_or_default();
-
-                            let is_active_preview = shell.hovered_candidate_vertex.as_deref()
-                                == hover_vertex.as_deref();
-                            let click_vertex = hover_vertex.clone();
-
+                        recent_files.into_iter().enumerate().map(|(idx, file)| {
+                            let filename = file.display_name.clone();
+                            let file_id = file.id.clone();
                             div()
                                 .p_2()
                                 .rounded_md()
                                 .cursor_pointer()
+                                .bg(rgb(palette.input))
                                 .border_1()
-                                .border_color(if is_active_preview || is_best {
-                                    rgb(shell.palette.accent)
-                                } else {
-                                    rgb(shell.palette.border)
-                                })
-                                .bg(if is_active_preview {
-                                    rgb(shell.palette.button_active)
-                                } else if is_best {
-                                    rgb(shell.palette.input)
-                                } else {
-                                    rgb(shell.palette.panel)
-                                })
-                                .hover(|style| style.bg(rgb(shell.palette.button_active)))
+                                .border_color(rgb(palette.border))
+                                .hover(|style| style.bg(rgb(palette.button_active)).border_color(rgb(palette.accent)))
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -993,59 +1078,75 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                         .flex()
                                         .items_center()
                                         .gap_1p5()
+                                        .min_w_0()
+                                        .child(icons::icon(ShellIcon::BookOpen, 13.0, palette.muted))
                                         .child(
                                             div()
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(if is_active_preview || is_best {
-                                                    rgb(shell.palette.accent)
-                                                } else {
-                                                    rgb(shell.palette.text)
-                                                })
-                                                .child(format!("#{} {}", idx + 1, vtx)),
-                                        )
-                                        .children(
-                                            is_active_preview
-                                                .then(|| Badge::new().small().child("预览中")),
+                                                .truncate()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_xs()
+                                                .text_color(rgb(palette.text))
+                                                .child(filename),
                                         ),
                                 )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(rgb(shell.palette.subtle))
-                                        .child(format!(
-                                            "{:.1}% · {} · {}v",
-                                            wr_pct, score_str, entry.visits
-                                        )),
-                                )
-                                .id(("candidate-row", idx))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |shell, _, _, cx| {
-                                        if shell.hovered_candidate_vertex.as_deref()
-                                            == click_vertex.as_deref()
-                                        {
-                                            shell.set_hovered_candidate(None, cx);
-                                        } else {
-                                            shell.set_hovered_candidate(click_vertex.clone(), cx);
-                                        }
-                                    }),
-                                )
-                                .on_hover(cx.listener(
-                                    move |shell, is_hovering: &bool, _window, cx| {
-                                        if *is_hovering {
-                                            shell.set_hovered_candidate(hover_vertex.clone(), cx);
-                                        }
-                                    },
-                                ))
-                        }),
+                                .id(("recent-file-item", idx))
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                    shell.open_recent_file(&file_id, cx);
+                                }))
+                        })
                     )
                 }),
         )
-        // Engine & tools section: hosts KataGo setup, the engine manager, fox
-        // sync and position-to-SGF after the bottom deck was slimmed to the
-        // three analysis tabs (design §4.2/§4.3 keep engine UI on the left).
-        .child(render_engine_config_section(shell, cx))
+        // Library entries (已同步棋谱)
+        .children((!library_entries.is_empty()).then(|| {
+            div()
+                .p_2p5()
+                .rounded_md()
+                .bg(rgb(palette.panel))
+                .border_1()
+                .border_color(rgb(palette.border))
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(palette.text))
+                        .child(format!("棋谱库项目 · {}", library_entries.len())),
+                )
+                .child(
+                    div().flex().flex_col().gap_1().children(
+                        library_entries.iter().take(15).enumerate().map(|(idx, entry)| {
+                            let entry_path = entry.path.clone();
+                            let title = entry.relative_path.clone();
+                            div()
+                                .p_1p5()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .bg(rgb(palette.input))
+                                .hover(|style| style.bg(rgb(palette.button_active)))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(rgb(palette.text))
+                                        .child(title),
+                                )
+                                .child(
+                                    div().text_xs().text_color(rgb(palette.subtle)).child(entry.source_id.clone()),
+                                )
+                                .id(("lib-entry-item", idx))
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |shell, _, _, cx| {
+                                    shell.open_library_entry(entry_path.clone(), cx);
+                                }))
+                        })
+                    )
+                )
+        }))
 }
 
 /// Renders the "引擎与工具" section pinned to the bottom of the left engine
@@ -1780,10 +1881,16 @@ pub fn render_analysis_preview_panel(
                                             .child(vertex_str.clone()),
                                     )
                                     .child(
-                                        Badge::new().small().child(
-                                            crate::ui_format::candidate_tier(rank, entry.winrate)
-                                                .label(),
-                                        ),
+                                        div()
+                                            .size(px(7.0))
+                                            .rounded_full()
+                                            .bg(rgb(if is_top {
+                                                shell.palette.success
+                                            } else if rank <= 3 {
+                                                shell.palette.info
+                                            } else {
+                                                shell.palette.muted
+                                            })),
                                     ),
                             )
                             .child(

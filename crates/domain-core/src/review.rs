@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewProfile {
+    /// Ultra-fast per-move background review (80 visits) for live matches.
+    Quick80,
     Quick,
     #[default]
     Preliminary,
@@ -14,7 +16,8 @@ pub enum ReviewProfile {
 }
 
 impl ReviewProfile {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
+        Self::Quick80,
         Self::Quick,
         Self::Preliminary,
         Self::Intermediate,
@@ -23,6 +26,7 @@ impl ReviewProfile {
 
     pub const fn visits(self) -> u64 {
         match self {
+            Self::Quick80 => 80,
             Self::Quick => 50,
             Self::Preliminary => 800,
             Self::Intermediate => 2_500,
@@ -32,6 +36,7 @@ impl ReviewProfile {
 
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Quick80 => "逐手快速复盘",
             Self::Quick => "快速复盘",
             Self::Preliminary => "初步复盘",
             Self::Intermediate => "中级复盘",
@@ -41,6 +46,7 @@ impl ReviewProfile {
 
     pub const fn english_label(self) -> &'static str {
         match self {
+            Self::Quick80 => "Quick80",
             Self::Quick => "Quick",
             Self::Preliminary => "Preliminary",
             Self::Intermediate => "Intermediate",
@@ -50,6 +56,7 @@ impl ReviewProfile {
 
     pub const fn from_visits(visits: u64) -> Option<Self> {
         match visits {
+            80 => Some(Self::Quick80),
             50 => Some(Self::Quick),
             800 => Some(Self::Preliminary),
             2_500 => Some(Self::Intermediate),
@@ -67,12 +74,13 @@ mod tests {
     fn exposes_the_four_product_review_budgets() {
         assert_eq!(
             ReviewProfile::ALL.map(ReviewProfile::visits),
-            [50, 800, 2_500, 10_000]
+            [80, 50, 800, 2_500, 10_000]
         );
         assert_eq!(
             ReviewProfile::from_visits(2_500),
             Some(ReviewProfile::Intermediate)
         );
+        assert_eq!(ReviewProfile::from_visits(80), Some(ReviewProfile::Quick80));
         assert_eq!(ReviewProfile::from_visits(500), None);
     }
 }

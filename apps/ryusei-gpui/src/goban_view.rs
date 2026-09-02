@@ -138,44 +138,42 @@ pub fn move_numbers_for_snapshot(
     let lineage = current_node_lineage(snapshot);
     let total_lineage = lineage.len();
     let start_index = match move_numbers_type {
-        "last_1" => Some(total_lineage.saturating_sub(1)),
-        "last_3" => Some(total_lineage.saturating_sub(3)),
-        "last_5" => Some(total_lineage.saturating_sub(5)),
-        "last_10" => Some(total_lineage.saturating_sub(10)),
-        "last_20" => Some(total_lineage.saturating_sub(20)),
+        "last_1" => total_lineage.saturating_sub(1),
+        "last_3" => total_lineage.saturating_sub(3),
+        "last_5" => total_lineage.saturating_sub(5),
+        "last_10" => total_lineage.saturating_sub(10),
+        "last_20" => total_lineage.saturating_sub(20),
         "variation" => {
-            let is_main_line = lineage
-                .windows(2)
-                .all(|nodes| nodes[0].child_ids.first() == Some(&nodes[1].id));
-            if is_main_line {
-                None
-            } else {
-                lineage
-                    .iter()
-                    .rposition(|node| node.child_ids.len() > 1)
-                    .map(|index| index + 1)
-            }
+            lineage
+                .iter()
+                .rposition(|node| node.child_ids.len() > 1)
+                .map(|index| index + 1)
+                .unwrap_or(0)
         }
         "hotspot" => lineage
             .iter()
             .rposition(|node| node.properties.contains_key("HO"))
-            .map(|index| index + 1),
-        _ => Some(0),
-    };
-    let Some(start_index) = start_index else {
-        return BTreeMap::new();
+            .map(|index| index + 1)
+            .unwrap_or(0),
+        _ => 0,
     };
 
     let mut move_number = 0usize;
-    lineage
-        .into_iter()
-        .skip(start_index)
-        .filter_map(|node| {
-            let vertex = node_move_vertex(&node)?;
+    let mut numbers = BTreeMap::new();
+    for node in lineage.into_iter().skip(start_index) {
+        if let Some(vertex) = node_move_vertex(&node) {
             move_number += 1;
-            Some((vertex, move_number))
-        })
-        .collect()
+            numbers.insert(vertex, move_number);
+        }
+    }
+    if numbers.is_empty() && !snapshot.moves.is_empty() {
+        for (idx, m) in snapshot.moves.iter().enumerate() {
+            if let Some(vertex) = m.vertex {
+                numbers.insert(vertex, idx + 1);
+            }
+        }
+    }
+    numbers
 }
 
 pub fn board_spacing(board: &BoardSnapshot, board_pixel_size: f32) -> f32 {

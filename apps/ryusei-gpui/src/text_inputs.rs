@@ -120,4 +120,27 @@ impl TextInputs {
             None => None,
         }
     }
+
+    /// Resolves the active input to its immutable text buffer.
+    pub fn active(&self, active: Option<ActiveTextInput>) -> Option<&NativeTextInput> {
+        match active {
+            Some(ActiveTextInput::Comment) => Some(&self.comment_input),
+            Some(ActiveTextInput::NodeTitle) => Some(&self.node_title_input),
+            Some(ActiveTextInput::FoxQuery) => Some(&self.fox_query_input),
+            Some(ActiveTextInput::LiveUrl) => Some(&self.live_url_input),
+            Some(ActiveTextInput::LibraryId) => Some(&self.library_id_input),
+            Some(ActiveTextInput::LibraryName) => Some(&self.library_name_input),
+            Some(ActiveTextInput::LibraryGithubUrl) => Some(&self.library_github_url_input),
+            Some(ActiveTextInput::LibraryReference) => Some(&self.library_reference_input),
+            Some(ActiveTextInput::LibraryLicenseName) => Some(&self.library_license_name_input),
+            Some(ActiveTextInput::LibraryLicenseUrl) => Some(&self.library_license_url_input),
+            Some(ActiveTextInput::GtpInput) => Some(&self.gtp_input),
+            Some(ActiveTextInput::EngineSpec) => Some(&self.engine_spec_input),
+            Some(ActiveTextInput::OgsUsername) => Some(&self.ogs_username_input),
+            Some(ActiveTextInput::OgsPassword) => Some(&self.ogs_password_input),
+            Some(ActiveTextInput::OgsGameId) => Some(&self.ogs_game_id_input),
+            Some(ActiveTextInput::OgsChat) => Some(&self.ogs_chat_input),
+            None => None,
+        }
+    }
 }

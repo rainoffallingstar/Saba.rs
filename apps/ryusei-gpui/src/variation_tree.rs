@@ -336,7 +336,32 @@ fn connector(from: (f32, f32), to: (f32, f32), color: u32) -> Vec<Div> {
 
 /// Renders the KaTrain-style horizontal variation tree graph.
 /// Each node shows its move number (手数) and KaTrain AI move quality colored border/ring.
+#[allow(dead_code)]
 pub fn render_variation_tree<F, G>(
+    layout: &VariationTreeLayout,
+    grid_size: f32,
+    node_size: f32,
+    palette: UiPalette,
+    on_node_clicked: F,
+    on_node_context_requested: G,
+) -> Div
+where
+    F: Fn(&NodeId, &mut Window, &mut App) + 'static,
+    G: Fn(&NodeId, &mut Window, &mut App) + 'static,
+{
+    render_variation_tree_with_prefix(
+        "game-graph",
+        layout,
+        grid_size,
+        node_size,
+        palette,
+        on_node_clicked,
+        on_node_context_requested,
+    )
+}
+
+pub fn render_variation_tree_with_prefix<F, G>(
+    prefix: &'static str,
     layout: &VariationTreeLayout,
     grid_size: f32,
     _node_size: f32,
@@ -373,7 +398,7 @@ where
                 color,
             );
             for (seg_idx, segment) in segments.into_iter().enumerate() {
-                children.push(segment.id(("game-graph-edge", edge_index * 10 + seg_idx)));
+                children.push(segment.id(gpui::SharedString::from(format!("{prefix}-edge-{edge_index}-{seg_idx}"))));
             }
         }
     }
@@ -425,7 +450,7 @@ where
 
         children.push(
             div()
-                .id(("game-graph-node", node_index))
+                .id(gpui::SharedString::from(format!("{prefix}-node-{node_index}")))
                 .debug_selector(move || format!("game-graph-node-{node_index}"))
                 .absolute()
                 .left(px(x - hitbox_size / 2.0))

@@ -28,6 +28,11 @@ pub struct NativeTextInput {
     selection: Range<usize>,
     undo: Vec<InputSnapshot>,
     redo: Vec<InputSnapshot>,
+    /// Character-index range of the current IME composition (marked text).
+    /// The marked text is present in `text`; this range lets a later
+    /// `set_marked_text`/`insert_text` call replace it instead of appending,
+    /// which is what previously duplicated every composed keystroke.
+    marked_range: Option<Range<usize>>,
 }
 
 impl NativeTextInput {
@@ -39,6 +44,7 @@ impl NativeTextInput {
             selection: end..end,
             undo: Vec::new(),
             redo: Vec::new(),
+            marked_range: None,
         }
     }
 
@@ -52,6 +58,7 @@ impl NativeTextInput {
         self.selection = end..end;
         self.undo.clear();
         self.redo.clear();
+        self.marked_range = None;
     }
 
     pub fn select_all(&mut self) {
@@ -168,6 +175,7 @@ impl NativeTextInput {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn replace_utf16_range(&mut self, range: Option<Range<usize>>, text: &str) {
         let range = range
             .map(|range| {
@@ -181,6 +189,61 @@ impl NativeTextInput {
         } else {
             self.insert_text(text);
         }
+    }
+
+    /// Replaces any existing composition with `text`, marking it for the next
+    /// `set_marked_text` / `insert_text` update. `range` is UTF-16, as the
+    /// platform bridge supplies.
+    pub fn replace_marked_text(&mut self, range: Option<Range<usize>>, text: &str) {
+        // Drop the previous composition first so repeated `set_marked_text`
+        // calls replace it instead of appending a duplicate.
+        if let Some(marked) = self.marked_range.take() {
+            let start = self.byte_index(marked.start);
+            let end = self.byte_index(marked.end);
+            self.text.replace_range(start..end, "");
+            self.selection = marked.start..marked.start;
+        }
+        let char_range = range
+            .map(|range| {
+                self.character_index_for_utf16(range.start)
+                    ..self.character_index_for_utf16(range.end)
+            })
+            .unwrap_or_else(|| self.selection.clone());
+        self.push_undo();
+        let start = self.byte_index(char_range.start);
+        let end = self.byte_index(char_range.end);
+        self.text.replace_range(start..end, text);
+        let cursor = char_range.start + text.chars().count();
+        self.selection = cursor..cursor;
+        self.marked_range = Some(char_range.start..cursor);
+    }
+
+    /// Commits the composition as real text (macOS `insertText:`).
+    pub fn commit_marked_text(&mut self, range: Option<Range<usize>>, text: &str) {
+        let marked = self.marked_range.take();
+        let char_range = range
+            .map(|range| {
+                self.character_index_for_utf16(range.start)
+                    ..self.character_index_for_utf16(range.end)
+            })
+            .or(marked.clone())
+            .unwrap_or_else(|| self.selection.clone());
+        self.push_undo();
+        let start = self.byte_index(char_range.start);
+        let end = self.byte_index(char_range.end);
+        self.text.replace_range(start..end, text);
+        let cursor = char_range.start + text.chars().count();
+        self.selection = cursor..cursor;
+    }
+
+    pub fn unmark_text(&mut self) {
+        self.marked_range = None;
+    }
+
+    pub fn marked_text_utf16_range(&self) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.utf16_index(range.start)..self.utf16_index(range.end))
     }
 
     fn replace_selection(&mut self, text: &str) -> bool {
@@ -287,7 +350,13 @@ impl<V: gpui::EntityInputHandler> gpui::Element for NativeInputBinding<V> {
         window: &mut gpui::Window,
         cx: &mut gpui::App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        (window.request_layout(gpui::Style::default(), [], cx), ())
+        // Fill the surrounding input box so `bounds_for_range` reports the real
+        // caret rectangle instead of a zero-sized one (which hid the cursor).
+        let style = gpui::Style {
+            size: gpui::Size::full(),
+            ..Default::default()
+        };
+        (window.request_layout(style, [], cx), ())
     }
 
     fn prepaint(

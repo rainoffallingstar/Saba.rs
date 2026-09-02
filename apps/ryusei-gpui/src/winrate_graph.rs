@@ -88,6 +88,65 @@ pub fn analysis_sgf_properties(
     properties
 }
 
+/// The SGF node property carrying the persisted candidate list for a reviewed
+/// move. Its value is SGF-safe (no `]` or `\`): `vertex,winrate,visits,lead`
+/// records joined by `;`, with an empty `lead` for a missing score lead.
+pub const CANDIDATES_PROPERTY: &str = "RYK";
+
+/// Serializes completed candidates into the SGF-safe `RYK` value format.
+pub fn serialize_analysis_candidates(entries: &[ryusei_host::AnalysisEntry]) -> String {
+    entries
+        .iter()
+        .filter(|entry| !entry.is_during_search)
+        .filter_map(|entry| {
+            let vertex = entry.vertex.as_deref()?;
+            Some(format!(
+                "{vertex},{},{},{}",
+                entry.winrate,
+                entry.visits,
+                entry
+                    .score_lead
+                    .map(|lead| lead.to_string())
+                    .unwrap_or_default()
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// Rebuilds candidates from a persisted `RYK` value. Missing/malformed records
+/// are skipped so a hand-edited SGF can never break navigation.
+pub fn deserialize_analysis_candidates(value: &str) -> Vec<ryusei_host::AnalysisEntry> {
+    value
+        .split(';')
+        .filter_map(|record| {
+            let mut fields = record.split(',');
+            let vertex = fields.next()?.trim().to_owned();
+            if vertex.is_empty() {
+                return None;
+            }
+            let winrate = fields.next()?.trim().parse::<f64>().ok()?;
+            let visits = fields.next()?.trim().parse::<u64>().ok()?;
+            let score_lead = fields
+                .next()
+                .map(str::trim)
+                .filter(|lead| !lead.is_empty())
+                .and_then(|lead| lead.parse::<f64>().ok());
+            Some(ryusei_host::AnalysisEntry {
+                id: None,
+                vertex: Some(vertex),
+                visits,
+                winrate,
+                score_lead,
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            })
+        })
+        .collect()
+}
+
 pub fn graph_plot_points(
     points: &[WinratePoint],
     metric: WinrateGraphMetric,
@@ -213,8 +272,8 @@ pub fn winrate_history(
 #[cfg(test)]
 mod tests {
     use super::{
-        WinrateGraphMetric, analysis_sgf_properties, graph_index_from_x, graph_plot_points,
-        winrate_history,
+        WinrateGraphMetric, analysis_sgf_properties, deserialize_analysis_candidates,
+        graph_index_from_x, graph_plot_points, serialize_analysis_candidates, winrate_history,
     };
     use ryusei_domain_core::{Color, GameDocument};
 
@@ -306,5 +365,60 @@ mod tests {
         let points = winrate_history(&snapshot, None, None, Color::Black);
         assert_eq!(points[1].black_winrate, None);
         assert_eq!(points[2].black_winrate, Some(1.0));
+    }
+
+    #[test]
+    fn candidates_round_trip_and_skip_malformed_records() {
+        let entries = vec![
+            ryusei_host::AnalysisEntry {
+                id: None,
+                vertex: Some("D4".to_owned()),
+                visits: 320,
+                winrate: 0.55,
+                score_lead: Some(2.5),
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            },
+            ryusei_host::AnalysisEntry {
+                id: None,
+                vertex: Some("Q16".to_owned()),
+                visits: 100,
+                winrate: 0.45,
+                score_lead: None,
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            },
+            // During-search entries must be dropped from persistence.
+            ryusei_host::AnalysisEntry {
+                id: None,
+                vertex: Some("C3".to_owned()),
+                visits: 10,
+                winrate: 0.30,
+                score_lead: None,
+                pv: Vec::new(),
+                is_during_search: true,
+                ownership: None,
+                prior: None,
+            },
+        ];
+        let encoded = serialize_analysis_candidates(&entries);
+        assert!(!encoded.contains(']'));
+        assert!(!encoded.contains('\\'));
+        let decoded = deserialize_analysis_candidates(&encoded);
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].vertex.as_deref(), Some("D4"));
+        assert_eq!(decoded[0].winrate, 0.55);
+        assert_eq!(decoded[0].visits, 320);
+        assert_eq!(decoded[0].score_lead, Some(2.5));
+        assert_eq!(decoded[1].vertex.as_deref(), Some("Q16"));
+        assert_eq!(decoded[1].score_lead, None);
+
+        // Hand-edited garbage must never break navigation.
+        assert!(deserialize_analysis_candidates("junk,no,good;D4,0.55,320,2.5").len() == 1);
+        assert!(deserialize_analysis_candidates("").is_empty());
     }
 }

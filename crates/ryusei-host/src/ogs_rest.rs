@@ -192,6 +192,17 @@ pub fn normalize_cookie_header(set_cookies: &[String]) -> Option<String> {
     )
 }
 
+/// Extracts a single cookie value from raw `Set-Cookie` lines. Django CSRF
+/// validation compares the `csrftoken` cookie against the `X-CSRFToken`
+/// header, so the header must come from the cookie, not the config body.
+pub fn extract_cookie_value(set_cookies: &[String], name: &str) -> Option<String> {
+    set_cookies.iter().rev().find_map(|line| {
+        let pair = line.split(';').next()?.trim();
+        let (cookie_name, value) = pair.split_once('=')?;
+        (cookie_name == name && !value.is_empty()).then(|| value.to_owned())
+    })
+}
+
 /// Result of a successful OGS login.
 #[derive(Clone, Debug)]
 pub struct OgsLoginResult {
@@ -239,15 +250,22 @@ pub fn login_via_rest(
     if !(200..300).contains(&config.status) {
         return Err("OGS config request failed.".to_owned());
     }
-    let csrf_token = extract_csrf_token(&config.body)?;
     let cookie_header = normalize_cookie_header(&config.set_cookie);
+    // Django CSRF: the `X-CSRFToken` header must equal the `csrftoken` cookie.
+    // The config body's `csrf_token` field is a fallback when no cookie is set.
+    let csrf_token = extract_cookie_value(&config.set_cookie, "csrftoken")
+        .or_else(|| extract_csrf_token(&config.body).ok())
+        .unwrap_or_default();
 
     let cookie = cookie_header.clone().unwrap_or_default();
     let mut headers = vec![
         ("User-Agent", OGS_USER_AGENT),
         ("Content-Type", "application/json"),
-        ("X-CSRFToken", csrf_token.as_str()),
+        ("Referer", "https://online-go.com/"),
     ];
+    if !csrf_token.is_empty() {
+        headers.push(("X-CSRFToken", csrf_token.as_str()));
+    }
     if !cookie.is_empty() {
         headers.push(("Cookie", cookie.as_str()));
     }
@@ -283,6 +301,7 @@ mod tests {
         login_body: String,
         login_username: Option<String>,
         login_password: Option<String>,
+        login_csrf_header: Option<String>,
     }
 
     impl OgsRestFetch for FakeRestFetch {
@@ -309,7 +328,7 @@ mod tests {
         fn post_json(
             &mut self,
             _url: &str,
-            _headers: &[(&str, &str)],
+            headers: &[(&str, &str)],
             body: &str,
         ) -> Result<OgsHttpResponse, String> {
             let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
@@ -321,6 +340,10 @@ mod tests {
                 .get("password")
                 .and_then(serde_json::Value::as_str)
                 .map(ToOwned::to_owned);
+            self.login_csrf_header = headers
+                .iter()
+                .find(|(name, _)| *name == "X-CSRFToken")
+                .map(|(_, value)| value.to_string());
             Ok(OgsHttpResponse {
                 status: self.login_status,
                 body: self.login_body.clone(),
@@ -375,6 +398,22 @@ mod tests {
         };
         let error = login_via_rest(&mut fetch, "player", "wrong").expect_err("login fails");
         assert!(error.contains("Invalid OGS username or password"));
+    }
+
+    #[test]
+    fn login_uses_cookie_csrftoken_over_config_body_field() {
+        // The cookie carries `csrftoken=abc123` while the body declares a
+        // different value; Django CSRF must use the cookie, not the body.
+        let mut fetch = FakeRestFetch {
+            config_status: 200,
+            config_body: r#"{"csrf_token":"body-token"}"#.to_owned(),
+            login_status: 200,
+            login_body: r#"{"user_jwt":"jwt-token","user":{"id":7,"username":"player"}}"#
+                .to_owned(),
+            ..Default::default()
+        };
+        let _ = login_via_rest(&mut fetch, "player", "secret").expect("login succeeds");
+        assert_eq!(fetch.login_csrf_header.as_deref(), Some("abc123"));
     }
 
     #[test]

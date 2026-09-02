@@ -31,7 +31,7 @@ use gpui::{
 };
 
 use ryusei_domain_core::{
-    AnalysisPolicy, GameMode, GameSnapshot, MatchParticipants, PlayerKind, SessionMode, TimeControl,
+    AnalysisPolicy, GameMode, GameSnapshot, SessionMode,
 };
 
 use crate::icons::{self, ShellIcon};
@@ -76,7 +76,7 @@ use crate::goban_view::{pv_preview_points, render_goban, render_goban_click_laye
 use crate::layout::SplitPane;
 use crate::settings::ThemeChoice;
 use crate::theme::UiPalette;
-use crate::variation_tree::{VariationTreeLayout, render_variation_tree};
+use crate::variation_tree::VariationTreeLayout;
 use crate::winrate_graph::{GraphPlotPoint, WinrateGraphMetric};
 
 /// Renders a native macOS sidebar toggle icon (matching SF Symbol `sidebar.left` / `sidebar.right`).
@@ -123,6 +123,7 @@ pub fn render_titlebar(
     show_right_sidebar: bool,
     snapshot: &GameSnapshot,
     window_width: f32,
+    is_fullscreen: bool,
     shell: &ShellApp,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
@@ -185,13 +186,26 @@ pub fn render_titlebar(
         .border_b_1()
         .border_color(rgb(palette.border))
         .bg(rgb(palette.panel))
+        // The in-app bar sits inside the native transparent titlebar area:
+        // double-click behaves like the native chrome (zoom), per macOS HIG.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, event: &MouseDownEvent, window, _| {
+                if event.click_count == 2 {
+                    window.zoom_window();
+                }
+            }),
+        )
         // Left: traffic lights spacer + sidebar toggles + history arrows
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(div().w(px(72.0)))
+                // In native fullscreen the traffic lights only slide in on
+                // hover over the menu-bar reveal area; keeping the spacer
+                // would let the controls overlap them once they appear.
+                .children((!is_fullscreen).then(|| div().w(px(72.0))))
                 .child(
                     Button::new("left-sidebar-toggle")
                         .small()
@@ -513,44 +527,28 @@ pub fn render_titlebar(
 /// in the match-setup drawer opened from the player VS pill.
 pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let policy = shell.session_policy;
-    let clock = shell.clock.state();
-    let tab = shell.workspace_tabs.active_tab();
-    let mode_button = |id: &'static str, label: &'static str, selected: bool, mode: SessionMode| {
-        Button::new(id)
-            .small()
-            .ghost()
-            .selected(selected)
-            .label(label)
-            .on_click(cx.listener(move |shell, _, _, cx| shell.set_session_mode(mode, cx)))
-    };
-    let participant_button =
-        |id: &'static str, label: &'static str, selected: bool, participants: MatchParticipants| {
-            Button::new(id)
-                .small()
-                .ghost()
-                .selected(selected)
-                .label(label)
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    shell.set_match_participants(participants, cx)
-                }))
-        };
-    let time_button =
-        |id: &'static str, label: &'static str, selected: bool, control: TimeControl| {
-            Button::new(id)
-                .small()
-                .ghost()
-                .selected(selected)
-                .label(label)
-                .on_click(cx.listener(move |shell, _, _, cx| shell.set_time_control(control, cx)))
-        };
-    let board_button = |id: &'static str, label: &'static str, selected: bool, mode: GameMode| {
-        Button::new(id)
-            .small()
-            .ghost()
-            .selected(selected)
-            .label(label)
-            .on_click(cx.listener(move |shell, _, _, cx| shell.set_mode(mode, cx)))
-    };
+    let mode = shell.mode;
+    let active_tool = shell.active_tool;
+    let show_numbers = shell
+        .settings
+        .get_bool("view.show_move_numbers")
+        .unwrap_or(false);
+    let show_analysis = shell
+        .settings
+        .get_bool("board.show_analysis")
+        .unwrap_or(true);
+    let snapshot = shell.host.snapshot();
+    let has_markups = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.id == snapshot.current_node_id)
+        .map(|node| {
+            ["CR", "SQ", "TR", "MA", "LB", "LN", "AR"]
+                .iter()
+                .any(|property| node.properties.contains_key(*property))
+        })
+        .unwrap_or(false);
+
     let analysis_running = shell.analysis_task.is_some();
     let analysis_button = if analysis_running {
         Button::new("session-stop-analysis")
@@ -566,32 +564,6 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
             .disabled(policy.analysis == AnalysisPolicy::FairPlayLockedOff)
             .on_click(cx.listener(|shell, _, _, cx| shell.start_analysis(cx)))
     };
-    let live_button = Button::new("session-live-capture")
-        .small()
-        .ghost()
-        .label("导入直播")
-        .on_click(cx.listener(|shell, _, _, cx| shell.open_live_capture(cx)));
-    let remote_button = if policy.source == ryusei_domain_core::SessionSource::RemoteCompetition {
-        Button::new("session-leave-remote")
-            .small()
-            .warning()
-            .label("退出远程")
-            .on_click(cx.listener(|shell, _, _, cx| shell.leave_remote_match(cx)))
-    } else {
-        Button::new("session-enter-remote")
-            .small()
-            .ghost()
-            .label("OGS 远程")
-            .on_click(cx.listener(|shell, _, _, cx| shell.enter_ogs_remote_match(cx)))
-    };
-
-    let _ = tab;
-    let _ = clock;
-    let _ = time_button;
-    let _ = board_button;
-    let _ = mode_button;
-    let _ = remote_button;
-    let _ = live_button;
 
     let palette = shell.palette;
     div()
@@ -602,51 +574,138 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
         .flex()
         .items_center()
         .gap_1p5()
-        .px_2p5()
+        .px_3()
         .py_1()
-        // Floating capsule, same visual family as the markup/playback bars.
+        // Single unified floating capsule above the goban
         .rounded(px(crate::theme::radius::PILL))
         .border_1()
         .border_color(rgb(palette.border))
         .bg(rgb(palette.panel))
         .shadow_md()
-        // Participant segmented pill (双人/人机/机人/AI×AI).
-        .child(participant_button(
-            "session-players-human",
-            "双人",
-            policy.participants == MatchParticipants::human_vs_human(),
-            MatchParticipants::human_vs_human(),
-        ))
-        .child(participant_button(
-            "session-players-human-ai",
-            "人机",
-            policy.participants == MatchParticipants::human_vs_ai(),
-            MatchParticipants::human_vs_ai(),
-        ))
-        .child(participant_button(
-            "session-players-ai-human",
-            "机人",
-            policy.participants
-                == MatchParticipants {
-                    black: PlayerKind::Ai,
-                    white: PlayerKind::Human,
-                },
-            MatchParticipants {
-                black: PlayerKind::Ai,
-                white: PlayerKind::Human,
-            },
-        ))
-        .child(participant_button(
-            "session-players-ai-ai",
-            "AI×AI",
-            policy.participants == MatchParticipants::ai_vs_ai(),
-            MatchParticipants::ai_vs_ai(),
-        ))
+        // 1. New Game affordance
+        .child(
+            Button::new("session-new-game-btn")
+                .small()
+                .ghost()
+                .label("新建对局")
+                .tooltip("新建对局与参数配置 (Cmd+N)")
+                .on_click(cx.listener(|shell, _, _, cx| shell.open_match_setup(cx))),
+        )
         .child(div().w(px(1.0)).h(px(18.0)).bg(rgb(palette.border)))
-        // Analysis pill (开始/停止分析).
+        // 2. Board Markup & Interaction Tools
+        .child(
+            Button::new("tool-play")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Play && active_tool == crate::markup::MarkupTool::Play)
+                .label("落子")
+                .tooltip("落子对弈 (Play)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Play;
+                    shell.set_mode(GameMode::Play, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-triangle")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Triangle,
+                )
+                .label("▲")
+                .tooltip("标注三角 (▲)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Triangle;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-square")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Square,
+                )
+                .label("■")
+                .tooltip("标注方块 (■)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Square;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-circle")
+                .small()
+                .ghost()
+                .selected(
+                    mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Circle,
+                )
+                .label("●")
+                .tooltip("标注圆圈 (●)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Circle;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-cross")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Edit && active_tool == crate::markup::MarkupTool::Cross)
+                .label("✖")
+                .tooltip("标注叉号 (✖)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.active_tool = crate::markup::MarkupTool::Cross;
+                    shell.set_mode(GameMode::Edit, cx);
+                })),
+        )
+        .child(
+            Button::new("tool-estimate")
+                .small()
+                .ghost()
+                .selected(mode == GameMode::Estimator)
+                .label("估目")
+                .tooltip("形势判断与估目 (Territory)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.set_mode(GameMode::Estimator, cx);
+                })),
+        )
+        .children(has_markups.then(|| {
+            Button::new("tool-clear-markups")
+                .small()
+                .ghost()
+                .danger()
+                .label("清空标记")
+                .tooltip("清空当前节点全部标记与线条")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.clear_current_node_markups(cx);
+                }))
+        }))
+        .child(div().w(px(1.0)).h(px(18.0)).bg(rgb(palette.border)))
+        // 3. Analysis & View quick actions
         .child(analysis_button)
-        .child(div().w(px(1.0)).h(px(18.0)).bg(rgb(palette.border)))
-        // Entry to the match-setup drawer (参与方细节/时钟/OGS/复盘/直播).
+        .child(
+            Button::new("tool-toggle-ai")
+                .small()
+                .ghost()
+                .selected(show_analysis)
+                .label("AI选点")
+                .tooltip("显示/隐藏 KataGo 候选着法圆点")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.toggle_view_setting("board.show_analysis", "analysis overlay", cx);
+                })),
+        )
+        .child(
+            Button::new("tool-toggle-numbers")
+                .small()
+                .ghost()
+                .selected(show_numbers)
+                .label("手数")
+                .tooltip("显示/隐藏手数序号 (Cmd+Shift+M)")
+                .on_click(cx.listener(|shell, _, _, cx| {
+                    shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx);
+                })),
+        )
         .child(
             Button::new("session-match-setup")
                 .small()
@@ -715,7 +774,7 @@ pub fn render_player_bar(
     let show_coordinates = shell
         .settings
         .get_bool("view.show_coordinates")
-        .unwrap_or(false);
+        .unwrap_or(true);
     let show_move_numbers = shell
         .settings
         .get_bool("view.show_move_numbers")
@@ -865,21 +924,7 @@ pub fn render_player_bar(
                                 )
                         },
                     ),
-                )
-                .children(shell.autosave.info().is_available.then(|| {
-                    Button::new("player-bar-restore-recovery")
-                        .small()
-                        .warning()
-                        .child(icon_label(
-                            ShellIcon::Sparkles,
-                            "Restore",
-                            shell.palette.muted,
-                        ))
-                        .tooltip("恢复未保存的崩溃局面")
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.on_restore_recovery(&MouseDownEvent::default(), window, cx);
-                        }))
-                })),
+                ),
         )
         // Right: White player + rank + pinned plugin buttons + 🧩 plugin menu + hamburger menu
         .child(
@@ -1016,6 +1061,7 @@ pub fn render_winrate_graph_panel(
     metric: WinrateGraphMetric,
     height: f32,
     palette: UiPalette,
+    shell: &ShellApp,
     on_node_clicked: impl Fn(&ryusei_domain_core::NodeId, &mut Window, &mut App) + 'static,
     cx: &Context<ShellApp>,
 ) -> Stateful<Div> {
@@ -1427,7 +1473,7 @@ pub fn render_winrate_graph_panel(
                                         points,
                                         metric,
                                         palette,
-                                        cx.entity().read(cx).winrate_hover_index,
+                                        shell.winrate_hover_index,
                                     ) {
                                         tooltip
                                     } else {
@@ -1472,6 +1518,7 @@ pub fn render_winrate_graph_panel(
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_variation_tree_panel(
+    panel_id: &'static str,
     layout: &VariationTreeLayout,
     grid_size: f32,
     node_size: f32,
@@ -1482,8 +1529,8 @@ pub fn render_variation_tree_panel(
     on_node_context_requested: impl Fn(&ryusei_domain_core::NodeId, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     div()
-        .id("variation-tree-panel")
-        .debug_selector(|| "variation-tree-panel".to_owned())
+        .id(panel_id)
+        .debug_selector(move || panel_id.to_owned())
         .relative()
         .flex()
         .flex_col()
@@ -1508,7 +1555,8 @@ pub fn render_variation_tree_panel(
                         .child(format!("{} nodes", layout.nodes.len())),
                 ),
         )
-        .child(render_variation_tree(
+        .child(crate::variation_tree::render_variation_tree_with_prefix(
+            panel_id,
             layout,
             grid_size,
             node_size,
@@ -1518,9 +1566,9 @@ pub fn render_variation_tree_panel(
         ))
         .child(
             if let Some(node_id) = shell.game_graph_context_node.as_ref() {
-                render_game_graph_context_menu(node_id, shell, cx)
+                render_game_graph_context_menu(panel_id, node_id, shell, cx)
             } else {
-                div().id("game-graph-context-menu-hidden")
+                div().id(gpui::SharedString::from(format!("{panel_id}-context-menu-hidden")))
             },
         )
 }
@@ -1528,6 +1576,7 @@ pub fn render_variation_tree_panel(
 /// Renders a node-specific GameGraph context menu. It deliberately has a small
 /// command surface while native popup support remains outside GPUI 0.2.2.
 fn render_game_graph_context_menu(
+    prefix: &'static str,
     node_id: &ryusei_domain_core::NodeId,
     shell: &ShellApp,
     cx: &Context<ShellApp>,
@@ -1540,8 +1589,8 @@ fn render_game_graph_context_menu(
         .find(|node| &node.id == node_id)
         .is_some_and(|node| node.properties.contains_key("HO"));
     div()
-        .id("game-graph-context-menu")
-        .debug_selector(|| "game-graph-context-menu".to_owned())
+        .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-menu")))
+        .debug_selector(move || format!("{prefix}-game-graph-context-menu"))
         .absolute()
         .top(px(32.0))
         .left(px(8.0))
@@ -1558,8 +1607,8 @@ fn render_game_graph_context_menu(
         .child(node_id.clone())
         .child(
             div()
-                .id("game-graph-context-navigate")
-                .debug_selector(|| "game-graph-context-navigate".to_owned())
+                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-navigate")))
+                .debug_selector(move || format!("{prefix}-game-graph-context-navigate"))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -1573,8 +1622,8 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id("game-graph-context-hotspot")
-                .debug_selector(|| "game-graph-context-hotspot".to_owned())
+                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-hotspot")))
+                .debug_selector(move || format!("{prefix}-game-graph-context-hotspot"))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -1593,8 +1642,8 @@ fn render_game_graph_context_menu(
         // Variation structure actions (PRD §4.2: 设为主干 / 删除分支).
         .child(
             div()
-                .id("game-graph-context-promote")
-                .debug_selector(|| "game-graph-context-promote".to_owned())
+                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-promote")))
+                .debug_selector(move || format!("{prefix}-game-graph-context-promote"))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -1608,8 +1657,8 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id("game-graph-context-delete")
-                .debug_selector(|| "game-graph-context-delete".to_owned())
+                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-delete")))
+                .debug_selector(move || format!("{prefix}-game-graph-context-delete"))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -1624,7 +1673,7 @@ fn render_game_graph_context_menu(
         )
         .child(
             div()
-                .id("game-graph-context-close")
+                .id(gpui::SharedString::from(format!("{prefix}-game-graph-context-close")))
                 .px_2()
                 .py_1()
                 .rounded_sm()
@@ -1788,10 +1837,10 @@ pub fn render_bottom_deck_panel(
                 )
                 .child(
                     div()
-                        .id("plugin-menu-close")
-                        .debug_selector(|| "plugin-menu-close".to_owned())
+                        .id("bottom-deck-close-container")
+                        .debug_selector(|| "bottom-deck-close-container".to_owned())
                         .child(
-                            Button::new("plugin-menu-close-btn")
+                            Button::new("bottom-deck-close-btn")
                                 .small()
                                 .ghost()
                                 .child(icon_label(ShellIcon::Close, "收起", shell.palette.muted))
@@ -1865,6 +1914,7 @@ pub fn render_bottom_deck_panel(
                             winrate_metric,
                             230.0,
                             shell.palette,
+                            shell,
                             on_node_clicked,
                             cx,
                         ))
@@ -1895,6 +1945,7 @@ pub fn render_bottom_deck_panel(
                                     .ok();
                             };
                         div().child(render_variation_tree_panel(
+                            "deck-variation-tree",
                             &variation_layout,
                             26.0,
                             4.0,
@@ -2063,7 +2114,7 @@ pub fn render_goban_area(
         show_coordinates: shell
             .settings
             .get_bool("view.show_coordinates")
-            .unwrap_or(false),
+            .unwrap_or(true),
         coordinates_type: shell
             .settings
             .get_str("view.coordinates_type")
@@ -2207,6 +2258,7 @@ pub fn render_goban_area(
 }
 
 /// Floating markup toolbar on top of the goban.
+#[allow(dead_code)]
 pub fn render_floating_markup_bar(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let active_tool = shell.active_tool;
     let mode = shell.mode;

@@ -202,12 +202,25 @@ impl LiveOgsClient {
     }
 
     /// Restores a previously persisted session, if a secure store is available.
+    /// Sessions older than 30 days are cleared and must be re-established.
     pub fn restore_session(self: &Arc<Self>) -> Result<Value, String> {
         let Some(credentials) = self.store.load() else {
             return Err("No stored OGS session.".to_owned());
         };
         if credentials.jwt_token.is_empty() {
             return Err("Stored OGS session was empty.".to_owned());
+        }
+        const SESSION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if credentials
+            .created_at
+            .is_some_and(|created_at| now.saturating_sub(created_at) > SESSION_TTL_SECS)
+        {
+            self.store.clear();
+            return Err("Stored OGS session has expired.".to_owned());
         }
         let login = OgsLoginResult {
             jwt_token: credentials.jwt_token,
@@ -617,6 +630,14 @@ impl LiveOgsClient {
                     return;
                 }
             }
+            // A cancelled matchmaking round (either side declined / timed out)
+            // returns to Idle; otherwise the UI would stay "matching" forever.
+            "automatch/cancel" => {
+                let mut inner = self.inner.lock().unwrap();
+                inner.snapshot.matchmaking_status = OgsMatchmakingStatus::Idle;
+                inner.snapshot.automatch_uuid = None;
+                inner.snapshot.matched_game_id = None;
+            }
             "net/pong" | "user/state" | "active_game" | "notification" => {}
             other => {
                 // Per-game events arrive as `game/<id>/<type>`.
@@ -755,10 +776,12 @@ impl LiveOgsClient {
         let was_ours = game.pending_move;
         game.move_number = move_number.unwrap_or(game.move_number + 1);
         game.pending_move = false;
+        // The `move` field may be a string ("dd") or an array ([x, y]); reuse
+        // the same tolerant parser as gamedata so both forms project correctly.
         let move_string = payload
             .get("move")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+            .and_then(encode_ogs_move_item)
+            .or_else(|| payload.get("move").and_then(Value::as_str).map(ToOwned::to_owned));
         game.last_move = move_string.clone();
         game.last_move_was_ours = was_ours;
         if let Some(coord) =
@@ -950,6 +973,7 @@ fn reader_loop(
     generation: u64,
     transport: Arc<dyn OgsWebSocketTransport>,
 ) {
+    let mut last_ping = std::time::Instant::now();
     loop {
         if client.inner.lock().unwrap().generation != generation {
             return;
@@ -962,7 +986,14 @@ fn reader_loop(
                     client.handle_incoming(incoming);
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                // Send a heartbeat so OGS does not drop an otherwise idle
+                // socket (which surfaced as "the account signed itself out").
+                if last_ping.elapsed() >= Duration::from_secs(20) {
+                    let _ = transport.send_text(&encode_event("net/ping", &serde_json::json!({})));
+                    last_ping = std::time::Instant::now();
+                }
+            }
             Err(error) => {
                 client.set_connection_error(generation, format!("OGS socket read failed: {error}"));
                 return;
@@ -983,6 +1014,8 @@ fn player_to_move(payload: &Value, move_number: u32) -> Option<Color> {
         Some(id) if Some(id) == black_id => Some(Color::Black),
         Some(id) if Some(id) == white_id => Some(Color::White),
         _ => {
+            // `move_number` counts moves already played: after 0 moves Black is
+            // to move, after 1 move White is to move, after 2 Black again.
             if move_number.is_multiple_of(2) {
                 Some(Color::Black)
             } else {
@@ -1236,6 +1269,37 @@ mod tests {
     }
 
     #[test]
+    fn apply_move_accepts_array_and_string_coordinates() {
+        let client = LiveOgsClient::with_parts(
+            Box::new(MemoryOgsCredentialStore::available()),
+            Box::new(TestRestFetch),
+        );
+        // Establish an online game via gamedata (empty board, black to move).
+        let gamedata = serde_json::json!({
+            "width": 19,
+            "height": 19,
+            "phase": "play",
+            "move_number": 0,
+            "players": {
+                "black": {"id": 7, "username": "Black"},
+                "white": {"id": 8, "username": "White"}
+            },
+            "clock": {"current_player": 7, "black_player_id": 7, "white_player_id": 8}
+        });
+        client.apply_gamedata(1, &gamedata);
+        // The server confirms a move using the array coordinate form.
+        client.apply_move(1, &serde_json::json!({"move": [3, 3], "move_number": 1}));
+        let game = client.snapshot().online_game.unwrap();
+        assert_eq!(game.moves, vec!["dd"]);
+        assert_eq!(game.next_player, Some(Color::White));
+
+        // A string coordinate must project just as well.
+        client.apply_move(1, &serde_json::json!({"move": "pp", "move_number": 2}));
+        let game = client.snapshot().online_game.unwrap();
+        assert_eq!(game.moves, vec!["dd", "pp"]);
+    }
+
+    #[test]
     fn oversized_clock_values_degrade_to_zero_instead_of_panicking() {
         assert_eq!(seconds_to_duration(1e300), Duration::ZERO);
         assert_eq!(seconds_to_duration(f64::INFINITY), Duration::ZERO);
@@ -1275,6 +1339,33 @@ mod tests {
         assert_eq!(snapshot.socket_status, OgsSocketStatus::Disconnected);
         assert!(snapshot.online_game.is_none());
         assert!(client.competition_game_id().is_none());
+    }
+
+    #[test]
+    fn restore_session_rejects_credentials_older_than_thirty_days() {
+        let store = MemoryOgsCredentialStore::available();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // 31 days old: just past the 30-day retention window.
+        let stale_created_at = now - (31 * 24 * 60 * 60);
+        store
+            .save(&OgsCredentials {
+                server_url: "https://online-go.com".to_owned(),
+                jwt_token: "stale-jwt".to_owned(),
+                cookie_header: None,
+                user: Some(serde_json::json!({"id": 7})),
+                created_at: Some(stale_created_at),
+            })
+            .expect("save succeeds");
+        let client = Arc::new(LiveOgsClient::with_parts(
+            Box::new(store),
+            Box::new(TestRestFetch),
+        ));
+        let result = client.restore_session();
+        assert!(result.is_err(), "stale session must be rejected");
+        assert!(client.snapshot().user.is_none());
     }
 
     struct TestRestFetch;

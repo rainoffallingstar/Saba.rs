@@ -26,6 +26,7 @@ pub fn format_clock(clock: PlayerClock) -> String {
 /// This is the *candidate ordering* tier (Top1 = Best, then winrate bands), not
 /// the KaTrain five-tier *played-move* quality (`MoveQuality`) used on the board.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum CandidateTier {
     Best,
     Good,
@@ -34,6 +35,7 @@ pub enum CandidateTier {
 }
 
 impl CandidateTier {
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Best => "Best",
@@ -46,6 +48,7 @@ impl CandidateTier {
 
 /// Classifies a candidate card into its ranking tier from its rank (1-based)
 /// and engine winrate in `[0, 1]`.
+#[allow(dead_code)]
 pub fn candidate_tier(rank: usize, winrate: f64) -> CandidateTier {
     if rank == 1 {
         CandidateTier::Best

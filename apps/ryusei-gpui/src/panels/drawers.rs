@@ -59,7 +59,9 @@ pub(crate) fn render_readonly_drawer(
                 .border_l_1()
                 .border_color(rgb(shell.palette.border))
                 .bg(rgb(shell.palette.panel))
-                .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .child(
                     div()
                         .flex()
@@ -1528,21 +1530,24 @@ pub fn render_review_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
 /// used to crowd the full-width toolbar — time control, participant detail,
 /// OGS remote/account, quick review and live capture. High-frequency controls
 /// (participants pill + analysis) stay on the floating match capsule.
+/// Comprehensive New Game & Match Setup Drawer.
 pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let policy = shell.session_policy;
     let clock = shell.clock.state();
     let palette = shell.palette;
+    let snapshot = shell.host.snapshot();
+    let current_board_size = snapshot.board.width;
 
     let section = |title: &'static str, body: gpui::AnyElement| {
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_1p5()
             .child(
                 div()
                     .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(palette.muted))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(palette.text))
                     .child(title),
             )
             .child(body)
@@ -1557,17 +1562,53 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .label(label)
                 .on_click(cx.listener(move |shell, _, _, cx| shell.set_time_control(control, cx)))
         };
+
     let participant_button =
-        |id: &'static str, label: &'static str, selected: bool, participants: MatchParticipants| {
+        |id: &'static str, label: &'static str, selected: bool, participants: MatchParticipants, mode: ryusei_domain_core::SessionMode| {
             Button::new(id)
                 .small()
                 .ghost()
-                .selected(selected)
+                .selected(selected && policy.mode == mode)
                 .label(label)
                 .on_click(cx.listener(move |shell, _, _, cx| {
-                    shell.set_match_participants(participants, cx)
+                    shell.set_session_mode(mode, cx);
+                    shell.set_match_participants(participants, cx);
                 }))
         };
+
+    let size_button = |size: usize, label: &'static str| {
+        Button::new(gpui::SharedString::from(format!("setup-size-{size}")))
+            .small()
+            .ghost()
+            .selected(current_board_size == size)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.new_game_at(size, cx);
+            }))
+    };
+
+    let rules_button = |ruleset: &'static str, label: &'static str| {
+        let current_rule = snapshot
+            .root_properties
+            .get("RU")
+            .and_then(|v| v.first())
+            .map(|s| s.as_str())
+            .unwrap_or("Chinese");
+        let selected = current_rule.eq_ignore_ascii_case(ruleset);
+        Button::new(gpui::SharedString::from(format!("setup-rule-{ruleset}")))
+            .small()
+            .ghost()
+            .selected(selected)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.host.set_root_property("RU", vec![ruleset.to_owned()]);
+                shell.apply_settings_edit(crate::SettingEdit::Set {
+                    key: "game.default_ruleset".to_owned(),
+                    value: serde_json::Value::String(ruleset.to_owned()),
+                });
+                cx.notify();
+            }))
+    };
 
     let remote_button = if policy.source == ryusei_domain_core::SessionSource::RemoteCompetition {
         Button::new("setup-leave-remote")
@@ -1583,165 +1624,159 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
             .on_click(cx.listener(|shell, _, _, cx| shell.enter_ogs_remote_match(cx)))
     };
 
+    let visits_button = |visits: u64, label: &'static str| {
+        let current_visits = shell
+            .settings
+            .get("engines.analysis_max_visits")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(500);
+        Button::new(gpui::SharedString::from(format!("setup-visits-{visits}")))
+            .small()
+            .ghost()
+            .selected(current_visits == visits)
+            .label(label)
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.apply_analysis_visits(visits, cx);
+            }))
+    };
+
     let content = div()
         .flex()
         .flex_col()
-        .gap_4()
-        .child(div().text_xs().text_color(rgb(palette.muted)).child(
-            "高频控制（参与方胶囊与分析）已固定在棋盘上方；此处收纳时钟、远程与复盘等低频配置。",
-        ))
+        .gap_3p5()
         .child(section(
-            "参与方 (Black / White)",
+            "对弈与打谱模式",
             div()
                 .flex()
                 .flex_wrap()
                 .gap_1p5()
                 .child(participant_button(
-                    "setup-players-human",
-                    "双人",
-                    policy.participants == MatchParticipants::human_vs_human(),
+                    "setup-mode-study",
+                    "打谱研讨 (Record)",
+                    policy.mode == ryusei_domain_core::SessionMode::Record,
                     MatchParticipants::human_vs_human(),
+                    ryusei_domain_core::SessionMode::Record,
+                ))
+                .child(participant_button(
+                    "setup-players-human",
+                    "双人对弈",
+                    policy.participants == MatchParticipants::human_vs_human() && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    MatchParticipants::human_vs_human(),
+                    ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-human-ai",
-                    "人机",
-                    policy.participants == MatchParticipants::human_vs_ai(),
+                    "人机对弈 (执黑)",
+                    policy.participants == MatchParticipants::human_vs_ai() && policy.mode == ryusei_domain_core::SessionMode::Match,
                     MatchParticipants::human_vs_ai(),
+                    ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-ai-human",
-                    "机人",
-                    policy.participants
-                        == MatchParticipants {
-                            black: PlayerKind::Ai,
-                            white: PlayerKind::Human,
-                        },
-                    MatchParticipants {
-                        black: PlayerKind::Ai,
-                        white: PlayerKind::Human,
-                    },
+                    "机人对弈 (执白)",
+                    policy.participants == MatchParticipants { black: PlayerKind::Ai, white: PlayerKind::Human } && policy.mode == ryusei_domain_core::SessionMode::Match,
+                    MatchParticipants { black: PlayerKind::Ai, white: PlayerKind::Human },
+                    ryusei_domain_core::SessionMode::Match,
                 ))
                 .child(participant_button(
                     "setup-players-ai-ai",
-                    "AI×AI",
-                    policy.participants == MatchParticipants::ai_vs_ai(),
+                    "AI×AI (自弈)",
+                    policy.participants == MatchParticipants::ai_vs_ai() && policy.mode == ryusei_domain_core::SessionMode::Match,
                     MatchParticipants::ai_vs_ai(),
+                    ryusei_domain_core::SessionMode::Match,
                 ))
                 .into_any_element(),
         ))
         .child(section(
-            "时钟与读秒 (Time Control)",
+            "AI 棋力 / 算力档位",
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1p5()
+                .child(visits_button(100, "100v (初级快速)"))
+                .child(visits_button(500, "500v (业余中级)"))
+                .child(visits_button(1500, "1500v (业余强豪)"))
+                .child(visits_button(5000, "5000v (职业水平)"))
+                .child(visits_button(0, "无限算力 (最强)"))
+                .into_any_element(),
+        ))
+        .child(section(
+            "棋盘规格",
+            div()
+                .flex()
+                .gap_1p5()
+                .child(size_button(19, "19 路 (标准)"))
+                .child(size_button(13, "13 路 (中盘)"))
+                .child(size_button(9, "9 路 (死活)"))
+                .into_any_element(),
+        ))
+        .child(section(
+            "规则体系",
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1p5()
+                .child(rules_button("Chinese", "中国规则 (数子/贴3.75子)"))
+                .child(rules_button("Japanese", "日本规则 (数目/贴6.5目)"))
+                .child(rules_button("Ing", "应氏规则 (填满/贴8点)"))
+                .into_any_element(),
+        ))
+        .child(section(
+            "时钟与读秒",
             div()
                 .flex()
                 .flex_wrap()
                 .gap_1p5()
                 .child(time_button(
                     "setup-time-none",
-                    "无时钟",
+                    "无时钟 (自由)",
                     clock.control == TimeControl::None,
                     TimeControl::None,
                 ))
                 .child(time_button(
                     "setup-time-absolute",
                     "10 分钟包干",
-                    clock.control
-                        == TimeControl::Absolute {
-                            main_time_secs: 600,
-                        },
-                    TimeControl::Absolute {
-                        main_time_secs: 600,
-                    },
+                    clock.control == TimeControl::Absolute { main_time_secs: 600 },
+                    TimeControl::Absolute { main_time_secs: 600 },
                 ))
                 .child(time_button(
                     "setup-time-byo-yomi",
-                    "10m + 5×30s 读秒",
-                    clock.control
-                        == TimeControl::ByoYomi {
-                            main_time_secs: 600,
-                            period_time_secs: 30,
-                            periods: 5,
-                        },
-                    TimeControl::ByoYomi {
-                        main_time_secs: 600,
-                        period_time_secs: 30,
-                        periods: 5,
-                    },
+                    "20m + 3×30s 读秒",
+                    clock.control == TimeControl::ByoYomi { main_time_secs: 1200, period_time_secs: 30, periods: 3 },
+                    TimeControl::ByoYomi { main_time_secs: 1200, period_time_secs: 30, periods: 3 },
+                ))
+                .child(time_button(
+                    "setup-time-blitz",
+                    "1m + 5×10s 快棋",
+                    clock.control == TimeControl::ByoYomi { main_time_secs: 60, period_time_secs: 10, periods: 5 },
+                    TimeControl::ByoYomi { main_time_secs: 60, period_time_secs: 10, periods: 5 },
                 ))
                 .child(time_button(
                     "setup-time-fischer",
                     "10m + 10s 加秒",
-                    clock.control
-                        == TimeControl::Fischer {
-                            main_time_secs: 600,
-                            increment_secs: 10,
-                        },
-                    TimeControl::Fischer {
-                        main_time_secs: 600,
-                        increment_secs: 10,
-                    },
+                    clock.control == TimeControl::Fischer { main_time_secs: 600, increment_secs: 10 },
+                    TimeControl::Fischer { main_time_secs: 600, increment_secs: 10 },
                 ))
                 .into_any_element(),
         ))
         .child(section(
-            "在线对局 (OGS)",
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1p5()
-                        .child(remote_button)
-                        .child(
-                            Button::new("setup-ogs-account")
-                                .small()
-                                .ghost()
-                                .selected(
-                                    shell.ogs_auth_state
-                                        == ryusei_host::OgsAuthState::Authenticated,
-                                )
-                                .label(match shell.ogs_auth_state {
-                                    ryusei_host::OgsAuthState::SignedOut => "OGS 账户",
-                                    ryusei_host::OgsAuthState::BrowserLoginOnly => {
-                                        "OGS 浏览器已打开"
-                                    }
-                                    ryusei_host::OgsAuthState::Authenticated => "OGS 已登录",
-                                })
-                                .tooltip("打开 OGS 账户面板：应用内登录、对局连接与账户状态")
-                                .on_click(
-                                    cx.listener(|shell, _, _, cx| shell.open_ogs_account(cx)),
-                                ),
-                        )
-                        .into_any_element(),
-                )
-                .into_any_element(),
-        ))
-        .child(section(
-            "复盘与直播",
+            "远程网络对局",
             div()
                 .flex()
                 .flex_wrap()
                 .gap_1p5()
+                .child(remote_button)
                 .child(
-                    Button::new("setup-review-quick")
+                    Button::new("setup-ogs-account")
                         .small()
                         .ghost()
-                        .label("快速复盘 (50v)")
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            shell.start_review_profile_action(
-                                ryusei_domain_core::ReviewProfile::Quick,
-                                cx,
-                            )
-                        })),
-                )
-                .child(
-                    Button::new("setup-review-open")
-                        .small()
-                        .ghost()
-                        .label("全谱复盘档位…")
-                        .on_click(cx.listener(|shell, _, _, cx| shell.open_review(cx))),
+                        .selected(shell.ogs_auth_state == ryusei_host::OgsAuthState::Authenticated)
+                        .label(match shell.ogs_auth_state {
+                            ryusei_host::OgsAuthState::SignedOut => "OGS 账户",
+                            ryusei_host::OgsAuthState::BrowserLoginOnly => "OGS 浏览器已打开",
+                            ryusei_host::OgsAuthState::Authenticated => "OGS 已登录",
+                        })
+                        .on_click(cx.listener(|shell, _, _, cx| shell.open_ogs_account(cx))),
                 )
                 .child(
                     Button::new("setup-live-capture")
@@ -1751,9 +1786,36 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                         .on_click(cx.listener(|shell, _, _, cx| shell.open_live_capture(cx))),
                 )
                 .into_any_element(),
-        ));
+        ))
+        .child(
+            div()
+                .pt_2()
+                .border_t_1()
+                .border_color(rgb(palette.border))
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap_2()
+                .child(
+                    Button::new("setup-start-game-btn")
+                        .primary()
+                        .disabled(policy.source == ryusei_domain_core::SessionSource::RemoteCompetition)
+                        .label(
+                            if policy.source
+                                == ryusei_domain_core::SessionSource::RemoteCompetition
+                            {
+                                "远程对局由服务器自动开始"
+                            } else {
+                                "开始对局 ↵"
+                            },
+                        )
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.start_new_match_from_setup(&MouseDownEvent::default(), window, cx);
+                        })),
+                ),
+        );
 
-    render_readonly_drawer("match-setup", 11, "对局设置", content, shell, cx)
+    render_readonly_drawer("match-setup", 11, "新建对局 / 对局设置", content, shell, cx)
 }
 
 /// Drawer for unified export: SGF file/clipboard, position PNG and animated GIF.

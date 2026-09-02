@@ -89,9 +89,11 @@ use crate::text_inputs::TextInputs;
 use crate::theme::{ThemeTokens, UiPalette, ui_palette};
 use crate::variation_tree::build_variation_tree_layout;
 use crate::winrate_graph::{
-    WinrateGraphMetric, analysis_sgf_properties, graph_plot_points, winrate_history,
+    CANDIDATES_PROPERTY, WinrateGraphMetric, analysis_sgf_properties, deserialize_analysis_candidates,
+    graph_plot_points, serialize_analysis_candidates, winrate_history,
 };
 
+#[allow(dead_code)]
 const BOARD_PIXEL_SIZE: f32 = 420.0;
 const NAVIGATION_RAIL_WIDTH: f32 = 64.0;
 
@@ -137,6 +139,7 @@ actions!(
         StopAnalysis,
         GenerateEngineMove,
         ToggleGtpTerminal,
+        ToggleBottomDeck,
         StartWholeGameReview,
         ExportGif,
         ExportPositionPng,
@@ -178,6 +181,13 @@ pub enum BottomDeckTab {
     PluginManager,
     Engines,
     Generic(String),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LeftSidebarTab {
+    #[default]
+    AiEvaluation,
+    Library,
 }
 
 /// Engine-configuration surfaces hosted in the left engine sidebar after the
@@ -271,11 +281,16 @@ struct ShellApp {
     /// Binding it to a role generation and node prevents an old handshake from
     /// starting analysis after a disconnect, role change, or navigation.
     pending_analysis_request: Option<PendingAnalysisRequest>,
+    /// An immutable AI move intent waiting for a matching role connection.
+    pending_engine_move: Option<PendingEngineMove>,
     batch_review_progress: Option<ryusei_host::BatchReviewProgress>,
     batch_review_state: Option<BatchReviewState>,
     /// A batch review owns a fixed search budget for its entire run. This is
     /// intentionally independent from the interactive analysis preference.
     batch_review_profile: Option<ryusei_domain_core::ReviewProfile>,
+    /// Set while the optional per-move background review is analysing a move
+    /// during a live match. Skips the fair-play lock and uses the 80v budget.
+    background_review: bool,
     /// Candidate currently hovered in either the board overlay or candidate
     /// list. The vertex is stored instead of a copied PV so live engine updates
     /// immediately refresh the preview line.
@@ -301,6 +316,8 @@ struct ShellApp {
     /// their server-authoritative state through the same controller.
     clock: ClockController,
     clock_last_updated: Instant,
+    #[allow(dead_code)]
+    clock_tick_task: Option<Task<()>>,
     /// Last byo-yomi whole-second the countdown cue fired for, so the tick
     /// sounds at most once per second while the period runs low.
     last_byoyomi_tick_secs: Option<u64>,
@@ -328,6 +345,8 @@ struct ShellApp {
     ogs_state_task: Option<Task<()>>,
     ogs_login_in_progress: bool,
     ogs_projected_moves: u32,
+    ogs_projected_game_id: Option<u64>,
+    ogs_was_searching: bool,
     ogs_marking_dead: bool,
     ogs_removed_stones: BTreeSet<String>,
     ogs_last_pass_notified_move: u32,
@@ -341,6 +360,7 @@ struct ShellApp {
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
     palette: UiPalette,
+    left_sidebar_tab: LeftSidebarTab,
     left_sidebar_width: f32,
     right_sidebar_width: f32,
     peer_list_height: f32,
@@ -399,6 +419,22 @@ struct PendingAnalysisRequest {
 impl PendingAnalysisRequest {
     fn matches(&self, role: EngineRole, role_generation: u64, node_id: &str) -> bool {
         self.role == role && self.role_generation == role_generation && self.node_id == node_id
+    }
+}
+
+/// A queued AI move intent waiting for its engine role to finish connecting.
+/// Mirrors [`PendingAnalysisRequest`] so a human-vs-AI match never stalls
+/// waiting for an engine handshake that has not completed yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingEngineMove {
+    role: EngineRole,
+    role_generation: u64,
+    color: Color,
+}
+
+impl PendingEngineMove {
+    fn matches(&self, role: EngineRole, role_generation: u64, color: Color) -> bool {
+        self.role == role && self.role_generation == role_generation && self.color == color
     }
 }
 
@@ -720,6 +756,11 @@ impl ShellApp {
         if settings.get_bool("board.show_analysis").is_none() {
             let _ = settings.set("board.show_analysis", serde_json::json!(true));
         }
+        // Board coordinates default on: reviewers expect the A–T / 1–19 frame
+        // labels without hunting for the player-bar toggle.
+        if settings.get_bool("view.show_coordinates").is_none() {
+            let _ = settings.set("view.show_coordinates", serde_json::json!(true));
+        }
         if settings.get_bool("view.show_leftsidebar").is_none() {
             let _ = settings.set("view.show_leftsidebar", serde_json::json!(true));
         }
@@ -790,6 +831,26 @@ impl ShellApp {
             },
         ));
 
+        let clock_tick_task = Some(cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor().timer(Duration::from_millis(200)).await;
+                        let keep_going = weak.update(&mut cx, |shell, cx| {
+                            if shell.clock.state().running && !shell.clock.state().paused {
+                                shell.advance_clock(Instant::now(), cx);
+                                cx.notify();
+                            }
+                        }).is_ok();
+                        if !keep_going {
+                            break;
+                        }
+                    }
+                }
+            },
+        ));
+
         let mut shell = Self {
             host,
             workspace_tabs,
@@ -817,9 +878,11 @@ impl ShellApp {
             engine_generations: EngineRole::ALL.into_iter().map(|role| (role, 0)).collect(),
             engine_command_tasks: BTreeMap::new(),
             pending_analysis_request: None,
+            pending_engine_move: None,
             batch_review_progress: None,
             batch_review_state: None,
             batch_review_profile: None,
+            background_review: false,
             hovered_candidate_vertex: None,
             winrate_hover_index: None,
             trial_move: None,
@@ -832,6 +895,7 @@ impl ShellApp {
             session_policy,
             clock,
             clock_last_updated: Instant::now(),
+            clock_tick_task,
             last_byoyomi_tick_secs: None,
             restart_analysis_after_position_change: false,
             last_analysis_node: None,
@@ -849,6 +913,8 @@ impl ShellApp {
             ogs_state_task,
             ogs_login_in_progress: false,
             ogs_projected_moves: 0,
+            ogs_projected_game_id: None,
+            ogs_was_searching: false,
             ogs_marking_dead: false,
             ogs_removed_stones: BTreeSet::new(),
             ogs_last_pass_notified_move: 0,
@@ -862,6 +928,7 @@ impl ShellApp {
             theme_choice,
             theme,
             palette,
+            left_sidebar_tab: LeftSidebarTab::AiEvaluation,
             left_sidebar_width,
             right_sidebar_width,
             peer_list_height,
@@ -901,6 +968,31 @@ impl ShellApp {
                     .external_file
                     .track_file(std::path::PathBuf::from(path), &shell.host.to_sgf()),
             }
+        }
+        // 启动时尝试恢复持久化的 OGS 登录会话（30 天内有效）。
+        {
+            let client = Arc::clone(&shell.ogs_client);
+            let weak = cx.entity().downgrade();
+            cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move { client.restore_session() })
+                            .await;
+                        weak.update(&mut cx, |shell, cx| {
+                            shell.refresh_ogs_account_state(cx);
+                            if result.is_ok() {
+                                shell.status = "已恢复 OGS 登录会话".into();
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                    }
+                },
+            )
+            .detach();
         }
         shell
     }
@@ -1764,14 +1856,11 @@ impl ShellApp {
     }
 
     fn toggle_gtp_terminal(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.gtp_terminal_open {
-            self.gtp_terminal_open = false;
+        if self.is_bottom_deck_open() && self.active_bottom_tab() == BottomDeckTab::GtpTerminal {
+            self.close_bottom_deck(cx);
         } else {
-            self.gtp_terminal_open = true;
-            self.active_plugin_popover = None;
-            self.active_text_input = Some(ActiveTextInput::GtpInput);
+            self.switch_bottom_tab(BottomDeckTab::GtpTerminal, cx);
         }
-        cx.notify();
     }
 
     /// Records a console transcript entry only while the persisted
@@ -2167,6 +2256,34 @@ impl ShellApp {
                                                     }
                                                     shell.start_analysis(cx);
                                                 }
+
+                                                // Fulfil a queued AI move once the
+                                                // requested role finishes connecting.
+                                                let pending_move_matches = shell
+                                                    .pending_engine_move
+                                                    .as_ref()
+                                                    .is_some_and(|pending| {
+                                                        pending.matches(
+                                                            role,
+                                                            connection_generation,
+                                                            shell
+                                                                .host
+                                                                .snapshot()
+                                                                .board
+                                                                .next_player,
+                                                        )
+                                                    });
+                                                if pending_move_matches {
+                                                    let pending = shell
+                                                        .pending_engine_move
+                                                        .take()
+                                                        .expect("just matched a pending engine move");
+                                                    shell.trigger_engine_genmove(
+                                                        pending.role,
+                                                        pending.color,
+                                                        cx,
+                                                    );
+                                                }
                                             }
                                             Err(error) => {
                                                 shell.status =
@@ -2217,6 +2334,13 @@ impl ShellApp {
         {
             self.pending_analysis_request = None;
         }
+        if self
+            .pending_engine_move
+            .as_ref()
+            .is_some_and(|pending| pending.role == role)
+        {
+            self.pending_engine_move = None;
+        }
         if role == EngineRole::Analysis && self.analysis_task.is_some() {
             self.analysis_run.cancel_and_dispose();
         }
@@ -2261,7 +2385,7 @@ impl ShellApp {
     /// Requests analysis from the role-specific Analysis engine and marks the
     /// best candidate on the board.
     fn start_analysis(&mut self, cx: &mut Context<Self>) {
-        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff {
+        if self.session_policy.analysis == AnalysisPolicy::FairPlayLockedOff && !self.background_review {
             self.status = "AI analysis is locked for this remote competition".into();
             cx.notify();
             return;
@@ -2326,6 +2450,10 @@ impl ShellApp {
             .analysis_run
             .begin(analysis_snapshot.current_node_id.clone(), analysis_player);
         self.active_analysis_trial_move = trial_move.clone();
+        // Clear the previous node's candidates so a fresh analysis run never
+        // leaves stale markers on the board while the engine searches.
+        self.analysis.clear();
+        self.analysis_best_move = None;
         let analysis_board_size = analysis_snapshot.board.width;
         let mut analysis_moves = analysis_snapshot.moves.clone();
         if let Some(trial_move) = trial_move.clone() {
@@ -3057,6 +3185,25 @@ impl ShellApp {
                 return false;
             }
         }
+        // Persist the full candidate list so reviewing any move later can
+        // restore the on-board candidate markers and winrates without re-running
+        // the engine.
+        let candidates = serialize_analysis_candidates(&completed_entries);
+        if !candidates.is_empty()
+            && self
+                .host
+                .apply_transaction(
+                    crate::node_inspector::create_property_transaction(
+                        &snapshot.current_node_id,
+                        CANDIDATES_PROPERTY,
+                        vec![candidates],
+                    ),
+                    &mut events,
+                )
+                .is_err()
+        {
+            return false;
+        }
         self.synchronize_recovery();
         true
     }
@@ -3225,6 +3372,12 @@ impl ShellApp {
                 format!("analysis failed: {error}").into()
             }
         };
+        // A per-move background review finished: clear its budget override so
+        // the next interactive analysis uses the user's normal max-visits.
+        if self.background_review {
+            self.background_review = false;
+            self.batch_review_profile = None;
+        }
         cx.notify();
 
         // A maxVisits quick-switch landed while analysis was streaming; the
@@ -3526,7 +3679,7 @@ impl ShellApp {
                                     let mut events = RecordingSink;
                                     match shell.host.play_move(color, vertex, &mut events) {
                                         Ok(_) => {
-                                            if !shell.commit_clock_move(color) {
+                                            if !shell.commit_clock_move(color, cx) {
                                                 return;
                                             }
                                             shell.last_vertex = vertex;
@@ -3547,6 +3700,7 @@ impl ShellApp {
                                                 vertex,
                                                 cx,
                                             );
+                                            shell.maybe_background_review_current_position(cx);
                                             shell.request_configured_engine_turn(cx);
                                         }
                                         Err(error) => {
@@ -4682,6 +4836,42 @@ impl ShellApp {
         cx.notify();
     }
 
+    pub fn close_workspace_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+        if self.workspace_tabs.tabs().len() <= 1 {
+            self.new_game(cx);
+            return;
+        }
+        match self.workspace_tabs.close(tab_id) {
+            Ok(Some(next_tab)) => {
+                let mut events = RecordingSink;
+                if let Err(e) = self.host.restore_workspace_tab_with_state(
+                    &next_tab.sgf,
+                    next_tab.source_path.clone(),
+                    next_tab.source_encoding,
+                    next_tab.is_dirty,
+                    next_tab.current_node_id.as_deref(),
+                    &mut events,
+                ) {
+                    self.status = format!("error restoring tab: {e}").into();
+                } else {
+                    self.session_policy = next_tab.policy;
+                    self.mode = next_tab.mode;
+                    self.last_vertex = next_tab.last_vertex;
+                    self.analysis = next_tab.analysis;
+                    self.analysis_best_move = next_tab.analysis_best_move;
+                    self.analysis_enabled = next_tab.analysis_enabled;
+                    self.clock.apply_remote_clock(next_tab.clock);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.status = format!("close tab error: {e}").into();
+            }
+        }
+        let _ = self.persist_workspace_tabs();
+        cx.notify();
+    }
+
     /// Applies a settings edit through the validated store and persists it.
     /// A persistence failure rolls the store back so the UI never shows a
     /// value that is not on disk.
@@ -4877,6 +5067,7 @@ impl ShellApp {
         }
     }
 
+    #[allow(dead_code)]
     fn on_restore_recovery(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(candidate) = self.autosave.resolve_restore() else {
             self.status = "no recovery to restore".into();
@@ -4942,6 +5133,60 @@ impl ShellApp {
         cx.notify();
     }
 
+    pub fn start_new_match_from_setup(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // OGS remote matches start when the server finishes matchmaking; a
+        // manual "开始对局" must not create a local game on top of the search.
+        if self.session_policy.source == SessionSource::RemoteCompetition {
+            if self.ogs_client.snapshot().matchmaking_status
+                == ryusei_host::OgsMatchmakingStatus::Searching
+            {
+                self.show_toast("正在匹配 OGS 对手，匹配成功后对局自动开始".to_owned(), cx);
+            } else {
+                self.show_toast("OGS 远程对局由服务器自动开始，无需手动开始".to_owned(), cx);
+            }
+            self.close_drawer(event, window, cx);
+            cx.notify();
+            return;
+        }
+
+        // Preserve the match configuration the user chose in the setup drawer.
+        // `create_workspace_session` / `new_game_at` both reset the policy to
+        // defaults and the clock to `TimeControl::None`; restoring them here is
+        // what keeps the chosen participants and clock active after the reset.
+        let chosen_policy = self.session_policy;
+        let chosen_control = self.clock.state().control;
+
+        let has_moves = !self.host.snapshot().moves.is_empty();
+        if has_moves {
+            self.create_workspace_session(cx);
+        } else {
+            self.new_game_at(self.board_size, cx);
+        }
+
+        self.session_policy = chosen_policy;
+        self.clock = ClockController::new(chosen_control);
+        self.mode = GameMode::Play;
+        self.active_tool = MarkupTool::Play;
+        if !matches!(self.clock.state().control, TimeControl::None) {
+            self.clock.start(Color::Black);
+            self.clock_last_updated = Instant::now();
+        }
+        // Persist the restored policy/clock onto the new (or reused) workspace
+        // tab so switching sessions does not fall back to the defaults.
+        self.capture_active_workspace_tab();
+        let _ = self.persist_workspace_tabs();
+
+        self.request_configured_engine_turn(cx);
+        self.close_drawer(event, window, cx);
+        self.show_toast("对局已开始！".to_owned(), cx);
+        cx.notify();
+    }
+
     fn play_sound_if_enabled(&mut self, cue: SoundCue) {
         play_if_enabled(&self.settings, self.sound_sink.as_mut(), cue);
     }
@@ -4965,7 +5210,7 @@ impl ShellApp {
         let mut events = RecordingSink;
         match self.host.play_move(color, None, &mut events) {
             Ok(_) => {
-                if !self.commit_clock_move(color) {
+                if !self.commit_clock_move(color, cx) {
                     return;
                 }
                 self.last_vertex = None;
@@ -4981,6 +5226,17 @@ impl ShellApp {
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::Pass);
                 self.sync_engine_position(None, color, None, cx);
+                // 双方连续停一手即终局（虚着结束），进入自由分析模式。
+                let moves = self.host.snapshot().moves.clone();
+                let double_pass = moves.len() >= 2
+                    && moves[moves.len() - 1].vertex.is_none()
+                    && moves[moves.len() - 2].vertex.is_none();
+                if double_pass {
+                    self.host.set_root_property("RE", vec!["0".to_owned()]);
+                    self.finish_local_game("双方连续停一手", cx);
+                    return;
+                }
+                self.maybe_background_review_current_position(cx);
                 self.request_configured_engine_turn(cx);
             }
             Err(error) => self.status = format!("pass rejected: {error}").into(),
@@ -4988,13 +5244,67 @@ impl ShellApp {
         cx.notify();
     }
 
+    /// 对局结束后切换到「自由分析模式」：打谱（Record）会话、允许自由落子与
+    /// 手动 AI 分析，AI 不再自动应手，时钟停止。
+    fn finish_local_game(&mut self, result: &str, cx: &mut Context<Self>) {
+        self.session_policy = SessionPolicy::new(SessionMode::Record, SessionSource::Local);
+        self.clock.pause();
+        // Record 模式默认是手动分析，而非自动。
+        self.analysis_enabled = false;
+        self.restart_analysis_after_position_change = false;
+        self.mode = GameMode::Play;
+        self.active_tool = MarkupTool::Play;
+        self.status = format!("对局结束（{result}），已进入自由分析模式").into();
+        self.synchronize_recovery();
+        self.show_toast(self.status.to_string(), cx);
+        // 对局结束自动呈现胜率图（底部分析面板），方便查看复盘结果。
+        self.switch_bottom_tab(crate::BottomDeckTab::WinrateGraph, cx);
+        cx.notify();
+    }
+
+    /// 对局期间可选的后台逐手复盘：每手棋落下后自动用 80v 分析并持久化候选点
+    /// 与胜率（`review.analyze_during_game`）。分析期间不打断对局，结束后胜率图
+    /// 自动呈现。
+    fn maybe_background_review_current_position(&mut self, cx: &mut Context<Self>) {
+        if !self
+            .settings
+            .get_bool("review.analyze_during_game")
+            .unwrap_or(false)
+        {
+            return;
+        }
+        // 已有分析/复盘在跑时跳过，避免并发冲突。
+        if self.analysis_task.is_some() || self.background_review {
+            return;
+        }
+        self.background_review = true;
+        self.batch_review_profile = Some(ryusei_domain_core::ReviewProfile::Quick80);
+        self.start_analysis(cx);
+    }
+
     fn on_resign(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.session_policy.source == SessionSource::RemoteCompetition {
             self.ogs_resign(cx);
             return;
         }
-        self.status = "resign is not implemented yet".into();
-        cx.notify();
+        // Local resignation: the human concedes. In a human-vs-human game the
+        // side to move is the one resigning; against an AI the human resigns.
+        let snapshot = self.host.snapshot();
+        let resigning = if self.session_policy.participants == MatchParticipants::human_vs_human() {
+            snapshot.board.next_player
+        } else if self.session_policy.participants.black == PlayerKind::Human {
+            Color::Black
+        } else {
+            Color::White
+        };
+        let winner = resigning.opponent();
+        let winner_code = if winner == Color::Black { "B" } else { "W" };
+        self.host
+            .set_root_property("RE", vec![format!("{winner_code}+R")]);
+        let resigning_label = if resigning == Color::Black { "黑方" } else { "白方" };
+        let winner_label = if winner == Color::Black { "黑方" } else { "白方" };
+        self.synchronize_recovery();
+        self.finish_local_game(&format!("{resigning_label} 认输，{winner_label} 获胜"), cx);
     }
 
     /// Starts a splitter drag from a divider's mouse-down position.
@@ -5487,13 +5797,39 @@ impl ShellApp {
             Ok(_) => self.status = format!("moved to {target}").into(),
             Err(error) => self.status = format!("navigation failed: {error}").into(),
         }
+        // Restore persisted per-move analysis candidates when navigating to a
+        // reviewed node, so the board shows its candidate points and winrate.
+        self.restore_analysis_candidates_for_current_node();
         cx.notify();
     }
 
-    fn on_board_vertex_mouse_down(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
-        if self.gtp_terminal_open {
-            return;
+    /// Loads the persisted candidate list (`RYK`) for the current node back
+    /// into the board analysis markers, clearing them when the node has none.
+    fn restore_analysis_candidates_for_current_node(&mut self) {
+        let snapshot = self.host.snapshot();
+        let persisted = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == snapshot.current_node_id)
+            .and_then(|node| node.properties.get(CANDIDATES_PROPERTY))
+            .and_then(|values| values.first())
+            .cloned();
+        match persisted {
+            Some(value) if !value.is_empty() => {
+                let entries = deserialize_analysis_candidates(&value);
+                self.analysis = entries.clone();
+                let board_size = snapshot.board.width;
+                self.analysis_best_move = best_analysis_move(&entries, board_size)
+                    .map(|(column, row)| Vertex { column, row });
+            }
+            _ => {
+                self.analysis.clear();
+                self.analysis_best_move = None;
+            }
         }
+    }
+
+    fn on_board_vertex_mouse_down(&mut self, vertex: Vertex, cx: &mut Context<Self>) {
         if self.session_policy.mode == SessionMode::Live {
             self.status = "实时会话为只读观察模式".into();
             cx.notify();
@@ -5565,7 +5901,7 @@ impl ShellApp {
         let mut events = RecordingSink;
         match self.host.play_move(color, Some(vertex), &mut events) {
             Ok(_) => {
-                if !self.commit_clock_move(color) {
+                if !self.commit_clock_move(color, cx) {
                     return;
                 }
                 self.last_vertex = Some(vertex);
@@ -5573,6 +5909,7 @@ impl ShellApp {
                 self.synchronize_recovery();
                 self.play_sound_if_enabled(SoundCue::StonePlaced);
                 self.sync_engine_position(None, color, Some(vertex), cx);
+                self.maybe_background_review_current_position(cx);
 
                 self.request_configured_engine_turn(cx);
             }
@@ -5865,21 +6202,39 @@ impl ShellApp {
         let Some(role) = self.configured_engine_role(color) else {
             return;
         };
-        if self.engine_controller.is_attached(role) {
-            self.trigger_engine_genmove(role, color, cx);
+
+        // Prefer the dedicated black/white role. If it is not bound to its own
+        // engine process, fall back to the shared Analysis engine, which owns
+        // the KataGo session used for board feedback.
+        let target_role = if self.engine_controller.is_attached(role) {
+            role
+        } else if self.engine_controller.is_attached(EngineRole::Analysis) {
+            EngineRole::Analysis
+        } else if self.engine_roles.get(role).is_some() {
+            role
         } else {
-            self.status = format!(
-                "{} 轮到 AI；请先连接 {} 引擎",
-                if color == Color::Black {
-                    "黑方"
-                } else {
-                    "白方"
-                },
-                role.label()
-            )
-            .into();
-            cx.notify();
+            EngineRole::Analysis
+        };
+
+        if self.engine_controller.is_attached(target_role) {
+            self.trigger_engine_genmove(target_role, color, cx);
+            return;
         }
+
+        // The engine session is still connecting. Queue the move so the
+        // handshake completion callback plays it as soon as the role is ready.
+        let role_generation = self
+            .engine_generations
+            .get(&target_role)
+            .copied()
+            .unwrap_or_default()
+            .wrapping_add(1);
+        self.pending_engine_move = Some(PendingEngineMove {
+            role: target_role,
+            role_generation,
+            color,
+        });
+        self.on_engine_connect(target_role, cx);
     }
 
     fn set_opening_convention(&mut self, opening: OpeningConvention, cx: &mut Context<Self>) {
@@ -5896,6 +6251,7 @@ impl ShellApp {
 
     /// Adds the persisted review summary and its five largest mistakes to SGF
     /// comments. This is explicit because comments may be user-authored.
+    #[allow(dead_code)]
     pub fn write_review_comments(&mut self, cx: &mut Context<Self>) {
         if matches!(
             self.session_policy.source,
@@ -6030,9 +6386,8 @@ impl ShellApp {
         }
         self.clock = ClockController::new(control);
         self.clock_last_updated = Instant::now();
-        if !matches!(control, TimeControl::None) {
-            self.clock.start(self.host.snapshot().board.next_player);
-        }
+        // Do not start the clock here: the user is still configuring the match
+        // in the setup drawer. The clock only starts when "开始对局" is pressed.
         match control.to_sgf() {
             Some((main_time, overtime)) => {
                 self.host.set_root_property("TM", vec![main_time]);
@@ -6138,7 +6493,7 @@ impl ShellApp {
         );
     }
 
-    fn commit_clock_move(&mut self, color: Color) -> bool {
+    fn commit_clock_move(&mut self, color: Color, cx: &mut Context<Self>) -> bool {
         if let ClockEvent::Expired(loser) = self.clock.on_move_committed(color, Duration::ZERO) {
             let winner = match loser {
                 Color::Black => "W",
@@ -6146,20 +6501,21 @@ impl ShellApp {
             };
             self.host
                 .set_root_property("RE", vec![format!("{winner}+T")]);
-            self.status = format!(
-                "{} lost on time",
-                if loser == Color::Black {
-                    "black"
-                } else {
-                    "white"
-                }
-            )
-            .into();
+            let result = format!(
+                "{} 超时判负",
+                if loser == Color::Black { "黑方" } else { "白方" }
+            );
             self.synchronize_recovery();
+            self.finish_local_game(&result, cx);
             return false;
         }
         self.clock_last_updated = Instant::now();
         true
+    }
+
+    pub fn set_left_sidebar_tab(&mut self, tab: LeftSidebarTab, cx: &mut Context<Self>) {
+        self.left_sidebar_tab = tab;
+        cx.notify();
     }
 
     fn set_session_mode(&mut self, mode: SessionMode, cx: &mut Context<Self>) {
@@ -6196,6 +6552,27 @@ impl ShellApp {
     }
 
     fn enter_ogs_remote_match(&mut self, cx: &mut Context<Self>) {
+        // 未登录时先引导登录，不切换远程模式，避免残留 RemoteCompetition
+        // 状态导致"新建对局"被误判为"已经在远程对局"。
+        if self.ogs_auth_state != ryusei_host::OgsAuthState::Authenticated {
+            self.status = "请先在 OGS 账户面板登录后再开始远程匹配".into();
+            self.show_toast("请先登录 OGS 账户再发起自动匹配".to_owned(), cx);
+            self.open_ogs_account(cx);
+            cx.notify();
+            return;
+        }
+
+        // 已匹配或匹配中则不要重复发起。
+        if self.ogs_client.snapshot().matchmaking_status
+            == ryusei_host::OgsMatchmakingStatus::Searching
+        {
+            self.status = "OGS 自动匹配已在寻找对手中…".into();
+            self.show_toast("自动匹配已在寻找对手中，请稍候".to_owned(), cx);
+            cx.notify();
+            return;
+        }
+
+        // 切换到远程竞赛模式并锁定公平竞赛。
         self.session_policy =
             SessionPolicy::new(SessionMode::Match, SessionSource::RemoteCompetition)
                 .lock_fair_play(true);
@@ -6206,20 +6583,29 @@ impl ShellApp {
         }
         self.analysis.clear();
         self.analysis_best_move = None;
-        self.status = "OGS 远程对局模式：公平竞赛锁定，AI 分析已禁用".into();
+        self.status = "OGS 远程对局模式：公平竞赛锁定，正在寻找对手…".into();
         self.synchronize_recovery();
+        // 发起 OGS 自动匹配（寻找对手并连接）。
+        self.ogs_start_automatch(cx);
         self.show_toast(
-            "已进入 OGS 远程对局模式；等待生产 transport 接管服务器状态".to_owned(),
+            "已进入 OGS 远程对局模式，正在自动匹配对手…".to_owned(),
             cx,
         );
         cx.notify();
     }
 
     fn leave_remote_match(&mut self, cx: &mut Context<Self>) {
-        self.session_policy = SessionPolicy::new(SessionMode::Match, SessionSource::Local);
-        self.status = "已返回本地对弈模式".into();
-        self.synchronize_recovery();
-        cx.notify();
+        // 匹配中退出时，必须取消 OGS 自动匹配，避免对手继续等待/匹配上。
+        if self.ogs_client.snapshot().matchmaking_status
+            == ryusei_host::OgsMatchmakingStatus::Searching
+        {
+            self.ogs_cancel_automatch(cx);
+        }
+        // 清理投影状态，下次匹配新对局时能正确触发投影。
+        self.ogs_projected_moves = 0;
+        self.ogs_projected_game_id = None;
+        // 退出远程对局后进入自由分析模式（与对局结束一致）。
+        self.finish_local_game("退出 OGS 远程对局", cx);
     }
 
     fn set_mode(&mut self, mode: GameMode, cx: &mut Context<Self>) {
@@ -7147,9 +7533,40 @@ impl ShellApp {
         } else {
             ryusei_host::OgsAuthState::SignedOut
         };
+        // 对手取消 / 匹配超时：服务器把匹配状态重置为 Idle，且无进行中对局。
+        if self.ogs_was_searching
+            && snapshot.matchmaking_status == ryusei_host::OgsMatchmakingStatus::Idle
+            && snapshot.online_game.is_none()
+        {
+            self.ogs_was_searching = false;
+            self.finish_local_game("OGS 自动匹配已取消", cx);
+            return;
+        }
         if let Some(game) = snapshot.online_game.as_ref() {
-            if game.connected && game.moves.len() as u32 != self.ogs_projected_moves {
+            // Project whenever a new game becomes connected, even when its move
+            // list is still empty: matching a fresh opponent must switch the
+            // board to the new (empty) game instead of leaving the old board.
+            let new_game = self.ogs_projected_game_id != Some(game.game_id);
+            let new_moves = game.moves.len() as u32 != self.ogs_projected_moves;
+            if game.connected && (new_game || new_moves) {
                 self.project_ogs_server_moves(game);
+                if new_game {
+                    self.session_policy =
+                        SessionPolicy::new(SessionMode::Match, SessionSource::RemoteCompetition)
+                            .lock_fair_play(true);
+                    self.mode = GameMode::Play;
+                    self.active_tool = MarkupTool::Play;
+                    self.status = format!(
+                        "OGS 对局已开始：{} vs {}（第 {} 手）",
+                        game.black_name, game.white_name, game.move_number
+                    )
+                    .into();
+                    self.show_toast(self.status.to_string(), cx);
+                } else if new_moves {
+                    // 每手棋投影后，按选项做 80v 后台复盘（OGS 对局期间不上屏
+                    // 只持久化，对局结束后胜率图自动呈现）。
+                    self.maybe_background_review_current_position(cx);
+                }
             }
             if game.last_move.as_deref() == Some("..")
                 && !game.last_move_was_ours
@@ -7158,6 +7575,20 @@ impl ShellApp {
                 self.ogs_last_pass_notified_move = game.move_number;
                 self.status = format!("对手第 {} 手停一手（pass）", game.move_number).into();
                 self.show_toast(self.status.clone(), cx);
+            }
+            // OGS 对局结束（服务器把 phase 切到 finished）：投影最终局面并进入
+            // 自由分析模式，与本地对局结束行为一致。
+            if game.phase == "finished"
+                && self.session_policy.source == SessionSource::RemoteCompetition
+            {
+                self.project_ogs_server_moves(game);
+                self.finish_local_game(
+                    &format!(
+                        "OGS 对局结束：{} vs {}",
+                        game.black_name, game.white_name
+                    ),
+                    cx,
+                );
             }
         }
     }
@@ -7222,6 +7653,7 @@ impl ShellApp {
         let mut events = RecordingSink;
         if self.host.restore_from_sgf(&sgf, &mut events).is_ok() {
             self.ogs_projected_moves = game.moves.len() as u32;
+            self.ogs_projected_game_id = Some(game.game_id);
         }
     }
 
@@ -7452,6 +7884,7 @@ impl ShellApp {
     }
 
     fn ogs_start_automatch(&mut self, cx: &mut Context<Self>) {
+        self.ogs_was_searching = true;
         let client = Arc::clone(&self.ogs_client);
         let weak = cx.entity().downgrade();
         cx.spawn(
@@ -7487,6 +7920,7 @@ impl ShellApp {
     }
 
     fn ogs_cancel_automatch(&mut self, cx: &mut Context<Self>) {
+        self.ogs_was_searching = false;
         let client = Arc::clone(&self.ogs_client);
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
@@ -7641,6 +8075,7 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::Profile, "Profile 已打开", cx);
     }
 
+    #[allow(dead_code)]
     fn open_goals(&mut self, cx: &mut Context<Self>) {
         self.open_drawer(ActiveDrawer::Goals, "目标与计划已打开", cx);
     }
@@ -8176,10 +8611,17 @@ impl Render for ShellApp {
         } else {
             0.0
         };
-        let available_width = (window_width - side_panels - 16.0).max(240.0);
+        // Center-pane chrome the board must clear: the unified floating toolbar
+        // capsule, the floating playback capsule, and the column gaps between them.
+        let center_chrome_height = 34.0 + 34.0 + 16.0;
+        let available_width = (window_width - side_panels - 16.0).max(160.0);
         let available_height =
-            (window_height - 44.0 - 36.0 - bottom_panel_height - 16.0).max(240.0);
-        let board_pixel_size = available_width.min(available_height).max(BOARD_PIXEL_SIZE);
+            (window_height - 44.0 - 36.0 - bottom_panel_height - center_chrome_height - 16.0)
+                .max(160.0);
+        // Always fit the center pane: a too-small window shrinks the board
+        // instead of pushing it into a scroll container (which clipped the
+        // bottom rows off-screen until the user scrolled).
+        let board_pixel_size = available_width.min(available_height);
 
         div()
             .relative()
@@ -8198,6 +8640,7 @@ impl Render for ShellApp {
                 show_right_sidebar,
                 &snapshot,
                 window_width,
+                window.is_fullscreen(),
                 self,
                 cx,
             ))
@@ -8241,14 +8684,14 @@ impl Render for ShellApp {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .overflow_y_scroll()
+                            .min_h_0()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
                             .items_center()
                             .justify_center()
                             .gap_2()
                             .child(panels::render_session_toolbar(self, cx))
-                            .child(panels::render_floating_markup_bar(self, cx))
                             .child(panels::render_goban_area(
                                 &snapshot,
                                 &self.theme,
@@ -8278,6 +8721,7 @@ impl Render for ShellApp {
                             .border_l_1()
                             .border_color(rgb(palette.border))
                             .bg(rgb(palette.panel))
+                            .overflow_y_scroll()
                             .child(if show_analysis_preview {
                                 panels::render_analysis_preview_panel(
                                     &snapshot,
@@ -8299,6 +8743,7 @@ impl Render for ShellApp {
                                     .overflow_y_scroll()
                                     .child(if show_graph {
                                         panels::render_variation_tree_panel(
+                                            "variation-tree-panel",
                                             &variation_layout,
                                             self.settings
                                                 .get("graph.grid_size")
@@ -8464,6 +8909,10 @@ impl ShellApp {
     fn active_text_input_mut(&mut self) -> Option<&mut NativeTextInput> {
         self.text_inputs.active_mut(self.active_text_input)
     }
+
+    fn active_text_input(&self) -> Option<&NativeTextInput> {
+        self.text_inputs.active(self.active_text_input)
+    }
 }
 
 impl gpui::EntityInputHandler for ShellApp {
@@ -8496,10 +8945,16 @@ impl gpui::EntityInputHandler for ShellApp {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<std::ops::Range<usize>> {
-        None
+        self.active_text_input()
+            .and_then(|input| input.marked_text_utf16_range())
     }
 
-    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {}
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = self.active_text_input_mut() {
+            input.unmark_text();
+            cx.notify();
+        }
+    }
 
     fn replace_text_in_range(
         &mut self,
@@ -8509,7 +8964,9 @@ impl gpui::EntityInputHandler for ShellApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(input) = self.active_text_input_mut() {
-            input.replace_utf16_range(range, text);
+            // `insertText:` commits any pending IME composition, so replace
+            // the marked range rather than appending at the cursor.
+            input.commit_marked_text(range, text);
             cx.notify();
         }
     }
@@ -8519,10 +8976,13 @@ impl gpui::EntityInputHandler for ShellApp {
         range: Option<std::ops::Range<usize>>,
         new_text: &str,
         _: Option<std::ops::Range<usize>>,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.replace_text_in_range(range, new_text, window, cx);
+        if let Some(input) = self.active_text_input_mut() {
+            input.replace_marked_text(range, new_text);
+            cx.notify();
+        }
     }
 
     fn bounds_for_range(
@@ -8532,7 +8992,18 @@ impl gpui::EntityInputHandler for ShellApp {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<gpui::Pixels>> {
-        self.active_text_input.map(|_| element_bounds)
+        // The native text bridge needs a non-zero caret rectangle. If the
+        // binding element collapsed (e.g. inside a block layout), fall back to
+        // a minimum-height rect so the I-beam cursor remains visible.
+        if self.active_text_input.is_none() {
+            return None;
+        }
+        let height = element_bounds.size.height.max(gpui::px(14.0));
+        let width = element_bounds.size.width.max(gpui::px(1.0));
+        Some(Bounds {
+            origin: element_bounds.origin,
+            size: gpui::size(width, height),
+        })
     }
 
     fn character_index_for_point(
@@ -9301,11 +9772,17 @@ fn main() {
         let shell_gtp_terminal = shell.clone();
         cx.on_action(move |_: &ToggleGtpTerminal, cx| {
             shell_gtp_terminal.update(cx, |shell, cx| {
-                shell.gtp_terminal_open = !shell.gtp_terminal_open;
-                if shell.gtp_terminal_open {
-                    shell.active_text_input = Some(ActiveTextInput::GtpInput);
+                shell.toggle_bottom_deck_tab(BottomDeckTab::GtpTerminal, cx);
+            });
+        });
+        let shell_bottom_deck = shell.clone();
+        cx.on_action(move |_: &ToggleBottomDeck, cx| {
+            shell_bottom_deck.update(cx, |shell, cx| {
+                if shell.is_bottom_deck_open() {
+                    shell.close_bottom_deck(cx);
+                } else {
+                    shell.switch_bottom_tab(BottomDeckTab::WinrateGraph, cx);
                 }
-                cx.notify();
             });
         });
         let shell_review = shell.clone();
@@ -9359,6 +9836,7 @@ fn main() {
             KeyBinding::new("cmd-shift-c", ToggleCoordinates, None),
             KeyBinding::new("cmd-shift-m", ToggleMoveNumbers, None),
             KeyBinding::new("cmd-t", ToggleGtpTerminal, None),
+            KeyBinding::new("cmd-j", ToggleBottomDeck, None),
             KeyBinding::new("cmd-r", StartWholeGameReview, None),
             KeyBinding::new("cmd-e", ExportGif, None),
             KeyBinding::new("cmd-g", GenerateEngineMove, None),
@@ -9739,6 +10217,7 @@ mod headless_smoke {
     #[test]
     fn remote_competition_board_clicks_do_not_play_locally() {
         with_headless_shell_cx("remote-board-readonly", |shell, cx| {
+            shell.ogs_auth_state = ryusei_host::OgsAuthState::Authenticated;
             shell.enter_ogs_remote_match(cx);
             let before = shell.host.snapshot();
             shell.on_board_vertex_mouse_down(Vertex { column: 3, row: 3 }, cx);
@@ -9887,6 +10366,7 @@ mod headless_smoke {
     #[test]
     fn remote_match_exposes_fair_play_lock_and_can_return_local() {
         with_headless_shell_cx("remote-fair-play", |shell, cx| {
+            shell.ogs_auth_state = ryusei_host::OgsAuthState::Authenticated;
             shell.enter_ogs_remote_match(cx);
             assert_eq!(
                 shell.session_policy.mode,
@@ -9907,9 +10387,14 @@ mod headless_smoke {
                 shell.session_policy.source,
                 ryusei_domain_core::SessionSource::Local
             );
+            // Exiting a remote match now lands in free-analysis (Record) mode.
+            assert_eq!(
+                shell.session_policy.mode,
+                ryusei_domain_core::SessionMode::Record
+            );
             assert_eq!(
                 shell.session_policy.analysis,
-                ryusei_domain_core::AnalysisPolicy::Off
+                ryusei_domain_core::AnalysisPolicy::Manual
             );
         });
     }

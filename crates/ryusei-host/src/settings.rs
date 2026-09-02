@@ -109,6 +109,7 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "view.show_winrategraph"
         | "view.winrategraph_invert"
         | "window.maximized"
+        | "review.analyze_during_game"
         | "library.redistribution_allowed" => Some(SettingKind::Boolean),
         "app.hide_busy_delay"
         | "app.loadgame_delay"

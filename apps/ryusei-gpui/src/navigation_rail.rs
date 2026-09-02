@@ -33,29 +33,13 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
         .border_r_1()
         .border_color(rgb(shell.palette.border))
         .bg(rgb(shell.palette.panel))
-        // Top section: App Logo + Mode Switchers + Library + Workspace Sessions
+        // Top section: Mode Switchers + Library + Workspace Sessions
         .child(
             div()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap_2()
-                // App Logo Badge "星"
-                .child(
-                    div()
-                        .w(px(34.0))
-                        .h(px(34.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(8.0))
-                        .bg(rgb(shell.palette.accent))
-                        .text_color(rgb(0xffffff))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_sm()
-                        .shadow_sm()
-                        .child("星"),
-                )
                 // Mode Selectors
                 .child(
                     Button::new("nav-mode-record")
@@ -130,11 +114,30 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                                     shell.activate_workspace_tab(&tab_id, cx);
                                 },
                             ));
-                            if active {
+                            let button = if active {
                                 button.primary()
                             } else {
                                 button.ghost()
-                            }
+                            };
+
+                            let tab_id_for_close = tab.id.clone();
+                            let has_multiple = tabs.len() > 1;
+
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_0p5()
+                                .child(button)
+                                .children(has_multiple.then(|| {
+                                    Button::new(gpui::SharedString::from(format!("nav-close-{tab_id_for_close}")))
+                                        .xsmall()
+                                        .ghost()
+                                        .label("×")
+                                        .tooltip(format!("关闭会话 {tab_title}"))
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
+                                            shell.close_workspace_tab(&tab_id_for_close, cx);
+                                        }))
+                                }))
                         }))
                         .child(
                             Button::new("nav-new-session")
@@ -148,7 +151,7 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         ),
                 ),
         )
-        // Bottom section: Sound Feedback + Goals + Profile Avatar + Settings
+        // Bottom section: Sound Feedback + Profile Avatar + Settings
         .child(
             div()
                 .flex()
@@ -172,14 +175,6 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.toggle_view_setting("sound.enable", "sound effects", cx);
                         })),
-                )
-                .child(
-                    Button::new("nav-goals")
-                        .small()
-                        .ghost()
-                        .label("GOAL")
-                        .tooltip("目标与计划 (Goals)")
-                        .on_click(cx.listener(|shell, _, _, cx| shell.open_goals(cx))),
                 )
                 .child(
                     Button::new("nav-profile")

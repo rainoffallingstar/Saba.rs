@@ -7,7 +7,7 @@
 
 use std::process::Command;
 
-pub const OGS_LOGIN_URL: &str = "https://online-go.com/login";
+pub const OGS_LOGIN_URL: &str = "https://online-go.com/sign-in";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OgsAuthState {
@@ -61,6 +61,6 @@ mod tests {
         assert!(!OgsAuthState::SignedOut.can_submit_moves());
         assert!(!OgsAuthState::BrowserLoginOnly.can_submit_moves());
         assert!(OgsAuthState::Authenticated.can_submit_moves());
-        assert_eq!(OGS_LOGIN_URL, "https://online-go.com/login");
+        assert_eq!(OGS_LOGIN_URL, "https://online-go.com/sign-in");
     }
 }
