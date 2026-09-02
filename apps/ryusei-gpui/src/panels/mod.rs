@@ -533,10 +533,6 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
     let policy = shell.session_policy;
     let mode = shell.mode;
     let active_tool = shell.active_tool;
-    let show_numbers = shell
-        .settings
-        .get_bool("view.show_move_numbers")
-        .unwrap_or(false);
     let show_analysis = shell
         .settings
         .get_bool("board.show_analysis")
@@ -691,6 +687,8 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
         }))
         .child(div().w(px(1.0)).h(px(18.0)).bg(rgb(palette.border)))
         // 3. Analysis & View quick actions
+        // 手数 toggle lives only in the bottom player bar; keeping it here
+        // duplicates the control across two toolbars.
         .child(analysis_button)
         .child(
             Button::new("tool-toggle-ai")
@@ -701,17 +699,6 @@ pub fn render_session_toolbar(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                 .tooltip("显示/隐藏 KataGo 候选着法圆点")
                 .on_click(cx.listener(|shell, _, _, cx| {
                     shell.toggle_view_setting("board.show_analysis", "analysis overlay", cx);
-                })),
-        )
-        .child(
-            Button::new("tool-toggle-numbers")
-                .small()
-                .ghost()
-                .selected(show_numbers)
-                .label("手数")
-                .tooltip("显示/隐藏手数序号 (Cmd+Shift+M)")
-                .on_click(cx.listener(|shell, _, _, cx| {
-                    shell.toggle_view_setting("view.show_move_numbers", "move numbers", cx);
                 })),
         )
         .child(

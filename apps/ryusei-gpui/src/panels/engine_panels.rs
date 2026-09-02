@@ -1783,13 +1783,10 @@ pub fn render_analysis_preview_panel(
         .as_ref()
         .map(|(_, pv_preview)| pv_preview.clone())
         .unwrap_or_default();
-    let mut preview_board = snapshot.board.clone();
-    if preview.is_none() {
-        // An idle preview is deliberately an empty board, not a duplicate of
-        // the main goban. This makes the panel read as an analysis viewport.
-        preview_board.sign_map = vec![vec![0; preview_board.width]; preview_board.height];
-        preview_board.current_vertex = None;
-    }
+    // The preview board always mirrors the latest main-board position; the
+    // hovered candidate's PV ghost stones overlay it. An idle preview must
+    // not fall back to an empty board or it desynchronizes from the game.
+    let preview_board = snapshot.board.clone();
     let board = {
         let options = crate::goban_view::GobanRenderOptions {
             show_coordinates: false,
