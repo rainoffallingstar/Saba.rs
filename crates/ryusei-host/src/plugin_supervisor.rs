@@ -267,6 +267,12 @@ while True:
         }
     }
 
+    /// Generous upper bound for the python echo plugin tests. CI runners
+    /// (especially Windows) share the test binary with the `go build`
+    /// integration test, so an interpreter spawn + first frame can exceed the
+    /// production RPC timeout under load.
+    const TEST_RPC_TIMEOUT: Duration = Duration::from_secs(60);
+
     #[test]
     fn supervisor_round_trips_a_request_and_reports_running() {
         let Some(()) = python3() else {
@@ -277,8 +283,17 @@ while True:
         supervisor.process =
             Some(SupervisedNativePluginProcess::start(echo_spec(None)).expect("echo starts"));
 
+        let id = supervisor
+            .process
+            .as_mut()
+            .expect("process set")
+            .send_request("game.snapshot", serde_json::json!({"depth": 1}))
+            .expect("request sent");
         let result = supervisor
-            .request("game.snapshot", serde_json::json!({"depth": 1}))
+            .process
+            .as_mut()
+            .expect("process set")
+            .await_response(id, TEST_RPC_TIMEOUT)
             .expect("request succeeds");
         assert_eq!(result, serde_json::json!({"depth": 1}));
         assert!(supervisor.is_running());
@@ -311,7 +326,7 @@ while True:
                 .process
                 .as_mut()
                 .expect("process set")
-                .await_response(id, Duration::from_secs(5))
+                .await_response(id, TEST_RPC_TIMEOUT)
             {
                 Err(PluginError::ProcessExited { status }) => {
                     supervisor.record_crash(status);
