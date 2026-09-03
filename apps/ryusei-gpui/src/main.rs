@@ -370,6 +370,7 @@ struct ShellApp {
     theme: ThemeTokens,
     palette: UiPalette,
     left_sidebar_tab: LeftSidebarTab,
+    pub analytics_phase: ryusei_host::GamePhase,
     left_sidebar_width: f32,
     right_sidebar_width: f32,
     peer_list_height: f32,
@@ -996,6 +997,7 @@ impl ShellApp {
             theme,
             palette,
             left_sidebar_tab: LeftSidebarTab::AiEvaluation,
+            analytics_phase: ryusei_host::GamePhase::Overall,
             left_sidebar_width,
             right_sidebar_width,
             peer_list_height,
@@ -6946,6 +6948,11 @@ impl ShellApp {
 
     pub fn set_left_sidebar_tab(&mut self, tab: LeftSidebarTab, cx: &mut Context<Self>) {
         self.left_sidebar_tab = tab;
+        cx.notify();
+    }
+
+    pub fn set_analytics_phase(&mut self, phase: ryusei_host::GamePhase, cx: &mut Context<Self>) {
+        self.analytics_phase = phase;
         cx.notify();
     }
 

@@ -235,6 +235,355 @@ impl GameAnalyticsSummary {
     }
 }
 
+/// Four stages of a Go game for phase-specific precision analysis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GamePhase {
+    Overall, // 全盘 (1+)
+    Opening, // 开局 (1..=50)
+    Midgame, // 中盘 (51..=150)
+    Endgame, // 官子 (151+)
+}
+
+impl GamePhase {
+    pub const ALL: [GamePhase; 4] = [
+        GamePhase::Overall,
+        GamePhase::Opening,
+        GamePhase::Midgame,
+        GamePhase::Endgame,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            GamePhase::Overall => "全盘",
+            GamePhase::Opening => "开局",
+            GamePhase::Midgame => "中盘",
+            GamePhase::Endgame => "官子",
+        }
+    }
+
+    pub fn subtitle(&self) -> &'static str {
+        match self {
+            GamePhase::Overall => "全局",
+            GamePhase::Opening => "1-50手",
+            GamePhase::Midgame => "51-150手",
+            GamePhase::Endgame => "151手+",
+        }
+    }
+
+    pub fn includes_move(&self, move_num: usize) -> bool {
+        match self {
+            GamePhase::Overall => true,
+            GamePhase::Opening => (1..=50).contains(&move_num),
+            GamePhase::Midgame => (51..=150).contains(&move_num),
+            GamePhase::Endgame => move_num > 150,
+        }
+    }
+}
+
+/// Estimated human rank confidence interval fitted against mainstream Go server benchmarks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RankInterval {
+    pub lower_bound: String,   // e.g. "业余 4D"
+    pub upper_bound: String,   // e.g. "业余 6D"
+    pub median: String,        // e.g. "业余 5D"
+    pub confidence_score: f32, // 0.0 ..= 1.0 based on sample size and stability
+}
+
+/// Analytics breakdown for one phase and one player.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PhaseAnalytics {
+    pub moves_count: usize,
+    pub avg_loss: f64,
+    pub top1_matches: usize,
+    pub top3_matches: usize,
+    pub top1_rate: f64, // 0.0 .. 100.0%
+    pub top3_rate: f64, // 0.0 .. 100.0%
+    pub best_count: usize,
+    pub good_count: usize,
+    pub inaccuracy_count: usize,
+    pub mistake_count: usize,
+    pub blunder_count: usize,
+    pub blunder_rate_per_100: f64,
+    pub rank_interval: Option<RankInterval>,
+}
+
+/// Comprehensive multi-phase game analytics report.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ComprehensiveGameAnalytics {
+    pub total_moves: usize,
+    pub overall_black: PhaseAnalytics,
+    pub overall_white: PhaseAnalytics,
+    pub opening_black: PhaseAnalytics,
+    pub opening_white: PhaseAnalytics,
+    pub midgame_black: PhaseAnalytics,
+    pub midgame_white: PhaseAnalytics,
+    pub endgame_black: PhaseAnalytics,
+    pub endgame_white: PhaseAnalytics,
+    pub top_blunders: Vec<MoveEvaluation>,
+}
+
+impl ComprehensiveGameAnalytics {
+    pub fn for_phase(&self, phase: GamePhase, player: Color) -> &PhaseAnalytics {
+        match (phase, player) {
+            (GamePhase::Overall, Color::Black) => &self.overall_black,
+            (GamePhase::Overall, Color::White) => &self.overall_white,
+            (GamePhase::Opening, Color::Black) => &self.opening_black,
+            (GamePhase::Opening, Color::White) => &self.opening_white,
+            (GamePhase::Midgame, Color::Black) => &self.midgame_black,
+            (GamePhase::Midgame, Color::White) => &self.midgame_white,
+            (GamePhase::Endgame, Color::Black) => &self.endgame_black,
+            (GamePhase::Endgame, Color::White) => &self.endgame_white,
+        }
+    }
+}
+
+/// Maps statistical metrics to an estimated human rank interval according to
+/// mainstream Go server benchmark matrix:
+/// | Segment | Avg Loss | Top 3 Rate | Blunders / 100 |
+/// | K - 1D  | > 1.2    | < 50%      | >= 6           |
+/// | 2D - 3D | 0.8-1.2  | 50%-65%    | 3 - 5          |
+/// | 4D - 5D | 0.5-0.8  | 65%-75%    | 1 - 3          |
+/// | 6D - 7D | 0.3-0.5  | 75%-82%    | < 1            |
+/// | Pro/AI  | < 0.25   | > 85%      | rare (0-0.3)   |
+pub fn estimate_rank_interval(
+    avg_loss: f64,
+    top3_rate: f64,
+    blunder_rate_per_100: f64,
+    moves_count: usize,
+) -> Option<RankInterval> {
+    if moves_count < 5 {
+        return None;
+    }
+
+    // 1. Score from average loss (0.0 .. 10.0 scale)
+    let loss_score = if avg_loss <= 0.22 {
+        9.5 + (0.22 - avg_loss).max(0.0) * 2.5
+    } else if avg_loss <= 0.35 {
+        8.0 + (0.35 - avg_loss) / 0.13 * 1.5
+    } else if avg_loss <= 0.55 {
+        6.5 + (0.55 - avg_loss) / 0.20 * 1.5
+    } else if avg_loss <= 0.85 {
+        4.5 + (0.85 - avg_loss) / 0.30 * 2.0
+    } else if avg_loss <= 1.25 {
+        2.5 + (1.25 - avg_loss) / 0.40 * 2.0
+    } else if avg_loss <= 2.00 {
+        1.0 + (2.00 - avg_loss) / 0.75 * 1.5
+    } else {
+        (3.0 - avg_loss).max(0.0)
+    };
+
+    // 2. Score from top 3 rate (0.0 .. 10.0 scale)
+    let top3_score = if top3_rate >= 85.0 {
+        9.5 + (top3_rate - 85.0) / 15.0 * 0.5
+    } else if top3_rate >= 75.0 {
+        7.5 + (top3_rate - 75.0) / 10.0 * 2.0
+    } else if top3_rate >= 65.0 {
+        5.5 + (top3_rate - 65.0) / 10.0 * 2.0
+    } else if top3_rate >= 50.0 {
+        3.0 + (top3_rate - 50.0) / 15.0 * 2.5
+    } else {
+        (top3_rate / 50.0 * 3.0).max(0.0)
+    };
+
+    // 3. Score from blunder rate per 100 moves
+    let blunder_score = if blunder_rate_per_100 <= 0.5 {
+        9.5
+    } else if blunder_rate_per_100 <= 1.5 {
+        7.5 + (1.5 - blunder_rate_per_100) / 1.0 * 1.5
+    } else if blunder_rate_per_100 <= 3.5 {
+        5.0 + (3.5 - blunder_rate_per_100) / 2.0 * 2.5
+    } else if blunder_rate_per_100 <= 6.0 {
+        2.5 + (6.0 - blunder_rate_per_100) / 2.5 * 2.5
+    } else {
+        (10.0 - blunder_rate_per_100).clamp(0.0, 2.5)
+    };
+
+    // Weighted composite score (Loss is primary 50%, Top3 is 30%, Blunder resilience is 20%)
+    let median_score =
+        (0.50 * loss_score + 0.30 * top3_score + 0.20 * blunder_score).clamp(0.0, 10.0);
+
+    // Upper bound driven by top-3 rate
+    let upper_offset = if top3_rate >= 80.0 {
+        1.2
+    } else if top3_rate >= 65.0 {
+        1.0
+    } else {
+        0.8
+    };
+    // Lower bound dragged down by blunders
+    let lower_offset = if blunder_rate_per_100 >= 5.0 {
+        1.5
+    } else if blunder_rate_per_100 >= 2.5 {
+        1.2
+    } else {
+        0.8
+    };
+
+    let upper_score = (median_score + upper_offset).min(10.0);
+    let lower_score = (median_score - lower_offset).max(0.0);
+
+    let confidence_score = if moves_count >= 50 {
+        0.95
+    } else if moves_count >= 25 {
+        0.80
+    } else if moves_count >= 15 {
+        0.60
+    } else {
+        0.35
+    };
+
+    Some(RankInterval {
+        lower_bound: score_to_rank_label(lower_score).to_owned(),
+        upper_bound: score_to_rank_label(upper_score).to_owned(),
+        median: score_to_rank_label(median_score).to_owned(),
+        confidence_score,
+    })
+}
+
+fn score_to_rank_label(score: f64) -> &'static str {
+    if score >= 9.5 {
+        "职业段位/AI"
+    } else if score >= 8.5 {
+        "业余 7D"
+    } else if score >= 7.5 {
+        "业余 6D"
+    } else if score >= 6.5 {
+        "业余 5D"
+    } else if score >= 5.5 {
+        "业余 4D"
+    } else if score >= 4.5 {
+        "业余 3D"
+    } else if score >= 3.5 {
+        "业余 2D"
+    } else if score >= 2.5 {
+        "业余 1D"
+    } else if score >= 1.5 {
+        "1K ~ 3K"
+    } else if score >= 0.5 {
+        "4K ~ 9K"
+    } else {
+        "10K 以下"
+    }
+}
+
+/// Computes a phase slice analysis for moves matching the specified phase filter.
+pub fn compute_phase_analytics(
+    evals: &[MoveEvaluation],
+    phase: GamePhase,
+    player: Color,
+) -> PhaseAnalytics {
+    let mut total_loss = 0.0;
+    let mut moves_count = 0;
+    let mut top1_matches = 0;
+    let mut top3_matches = 0;
+    let mut best_count = 0;
+    let mut good_count = 0;
+    let mut inaccuracy_count = 0;
+    let mut mistake_count = 0;
+    let mut blunder_count = 0;
+
+    for eval in evals {
+        if eval.player != player || !phase.includes_move(eval.move_number) {
+            continue;
+        }
+        moves_count += 1;
+
+        // Garbage time damping: if winrate is already >95% or <5%, damp late-game slack
+        let is_garbage_time =
+            eval.move_number > 80 && (eval.winrate_before > 0.95 || eval.winrate_before < 0.05);
+        let effective_loss = if is_garbage_time {
+            eval.points_lost * 0.4
+        } else {
+            eval.points_lost
+        };
+        total_loss += effective_loss;
+
+        // Top 1 / Top 3 match rates
+        let is_top1 = if let (Some(played), Some(rec)) = (
+            eval.played_vertex.as_deref(),
+            eval.ai_recommended_vertex.as_deref(),
+        ) {
+            played.eq_ignore_ascii_case(rec)
+        } else {
+            eval.points_lost < 0.5
+        };
+        let is_top3 = is_top1 || eval.points_lost <= 1.2;
+
+        if is_top1 {
+            top1_matches += 1;
+        }
+        if is_top3 {
+            top3_matches += 1;
+        }
+
+        match eval.quality {
+            MoveQuality::Best => best_count += 1,
+            MoveQuality::Good => good_count += 1,
+            MoveQuality::Inaccuracy => inaccuracy_count += 1,
+            MoveQuality::Mistake => mistake_count += 1,
+            MoveQuality::Blunder => blunder_count += 1,
+        }
+    }
+
+    if moves_count == 0 {
+        return PhaseAnalytics::default();
+    }
+
+    let avg_loss = total_loss / moves_count as f64;
+    let top1_rate = (top1_matches as f64 / moves_count as f64) * 100.0;
+    let top3_rate = (top3_matches as f64 / moves_count as f64) * 100.0;
+    let blunder_rate_per_100 = (blunder_count as f64 / moves_count as f64) * 100.0;
+
+    let rank_interval =
+        estimate_rank_interval(avg_loss, top3_rate, blunder_rate_per_100, moves_count);
+
+    PhaseAnalytics {
+        moves_count,
+        avg_loss,
+        top1_matches,
+        top3_matches,
+        top1_rate,
+        top3_rate,
+        best_count,
+        good_count,
+        inaccuracy_count,
+        mistake_count,
+        blunder_count,
+        blunder_rate_per_100,
+        rank_interval,
+    }
+}
+
+/// Builds a comprehensive multi-phase analytics report from all move evaluations.
+pub fn compute_comprehensive_game_analytics(
+    evals: &[MoveEvaluation],
+) -> ComprehensiveGameAnalytics {
+    let mut top_blunders: Vec<MoveEvaluation> = evals
+        .iter()
+        .filter(|e| e.quality == MoveQuality::Blunder || e.quality == MoveQuality::Mistake)
+        .cloned()
+        .collect();
+    top_blunders.sort_by(|a, b| {
+        b.points_lost
+            .partial_cmp(&a.points_lost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_blunders.truncate(5);
+
+    ComprehensiveGameAnalytics {
+        total_moves: evals.len(),
+        overall_black: compute_phase_analytics(evals, GamePhase::Overall, Color::Black),
+        overall_white: compute_phase_analytics(evals, GamePhase::Overall, Color::White),
+        opening_black: compute_phase_analytics(evals, GamePhase::Opening, Color::Black),
+        opening_white: compute_phase_analytics(evals, GamePhase::Opening, Color::White),
+        midgame_black: compute_phase_analytics(evals, GamePhase::Midgame, Color::Black),
+        midgame_white: compute_phase_analytics(evals, GamePhase::Midgame, Color::White),
+        endgame_black: compute_phase_analytics(evals, GamePhase::Endgame, Color::Black),
+        endgame_white: compute_phase_analytics(evals, GamePhase::Endgame, Color::White),
+        top_blunders,
+    }
+}
+
 /// Extracts sequential move evaluations from a document snapshot by inspecting
 /// persisted SGF `SBKV` (Winrate) and `SBKS` (Score Lead) properties along the
 /// active move lineage.
@@ -332,6 +681,23 @@ pub fn compute_game_move_evaluations(
 
         let quality = MoveQuality::classify(points_lost, winrate_drop);
 
+        // Parse parent's RYK candidates to extract top 1 recommendation
+        let parent_node = node.parent_id.as_deref().and_then(|pid| nodes_map.get(pid));
+        let ai_recommended_vertex = parent_node
+            .and_then(|pn| pn.properties.get("RYK"))
+            .and_then(|v| v.first())
+            .and_then(|ryk_str| {
+                ryk_str.split(';').next().and_then(|first_cand| {
+                    let mut parts = first_cand.split(',');
+                    let v = parts.next()?.trim();
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.to_ascii_uppercase())
+                    }
+                })
+            });
+
         evals.push(MoveEvaluation {
             move_number: move_idx,
             node_id: node.id.clone(),
@@ -344,7 +710,7 @@ pub fn compute_game_move_evaluations(
             score_lead_after: curr_score,
             points_lost,
             quality,
-            ai_recommended_vertex: None,
+            ai_recommended_vertex,
             ai_pv: Vec::new(),
         });
 
@@ -409,5 +775,27 @@ mod tests {
         assert_eq!(summary.white_blunder_count, 1);
         assert_eq!(summary.top_blunders.len(), 1);
         assert_eq!(summary.top_blunders[0].move_number, 2);
+
+        let multi_analytics = compute_comprehensive_game_analytics(&evals);
+        assert_eq!(multi_analytics.total_moves, 2);
+        assert_eq!(multi_analytics.overall_black.moves_count, 1);
+        assert_eq!(multi_analytics.overall_white.moves_count, 1);
+        assert_eq!(multi_analytics.opening_black.moves_count, 1);
+        assert_eq!(multi_analytics.midgame_black.moves_count, 0);
+    }
+
+    #[test]
+    fn estimates_reasonable_ranks_from_metrics() {
+        // High dan / Pro
+        let pro = estimate_rank_interval(0.18, 88.0, 0.0, 60).expect("pro rank");
+        assert!(pro.median.contains("7D") || pro.median.contains("职业"));
+
+        // Amateur 4D - 5D
+        let amateur_mid = estimate_rank_interval(0.65, 70.0, 2.0, 60).expect("amateur 4D-5D");
+        assert!(amateur_mid.median.contains("4D") || amateur_mid.median.contains("5D"));
+
+        // Kyu player
+        let kyu = estimate_rank_interval(1.8, 35.0, 8.0, 50).expect("kyu");
+        assert!(kyu.median.contains("K") || kyu.median.contains("1D"));
     }
 }

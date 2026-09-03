@@ -95,7 +95,9 @@ pub use katago_setup::{
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use move_grading::{
-    GameAnalyticsSummary, MoveEvaluation, MoveQuality, compute_game_move_evaluations,
+    ComprehensiveGameAnalytics, GameAnalyticsSummary, GamePhase, MoveEvaluation, MoveQuality,
+    PhaseAnalytics, RankInterval, compute_comprehensive_game_analytics,
+    compute_game_move_evaluations, compute_phase_analytics, estimate_rank_interval,
 };
 pub use ogs::{
     CurlOgsPublicGameFetch, OGS_GAME_API_ROOT, OgsCompetitionSession, OgsError, OgsGameUpdate,

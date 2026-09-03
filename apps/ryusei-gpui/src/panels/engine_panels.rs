@@ -1007,7 +1007,7 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
                         ),
                     // Section 2: 整局失误统计 (design: below the AI evaluation card)
-                    render_game_analytics_card(shell),
+                    render_game_analytics_card(shell, cx),
                     // Section 3: 引擎与工具
                     render_engine_config_section(shell, cx),
                 ]
@@ -1599,9 +1599,15 @@ pub fn render_node_inspector_panel(
 /// The whole-game mistake & accuracy statistics card (PRD §4.3). Rendered in
 /// the left engine sidebar under the AI position evaluation card, so the
 /// per-player comparison is always visible next to the live winrate readout.
-pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
+/// Enhanced with four-phase slicing, benchmark rank interval estimation,
+/// and comprehensive accuracy & blunder distribution metrics.
+pub(crate) fn render_game_analytics_card(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     let evaluations = ryusei_host::compute_game_move_evaluations(&shell.host.snapshot());
-    let summary = ryusei_host::GameAnalyticsSummary::from_evaluations(&evaluations);
+    let multi_analytics = ryusei_host::compute_comprehensive_game_analytics(&evaluations);
+    let current_phase = shell.analytics_phase;
+
+    let b_phase = multi_analytics.for_phase(current_phase, ryusei_domain_core::Color::Black);
+    let w_phase = multi_analytics.for_phase(current_phase, ryusei_domain_core::Color::White);
 
     div()
         .p_2p5()
@@ -1611,18 +1617,53 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
         .border_color(rgb(shell.palette.border))
         .flex()
         .flex_col()
-        .gap_1p5()
+        .gap_2()
+        // Header
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(shell.palette.text))
-                .child(icon_label(
-                    ShellIcon::BarChart,
-                    "整局失误与精度统计",
-                    shell.palette.text,
-                )),
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(shell.palette.text))
+                        .child(icon_label(
+                            ShellIcon::BarChart,
+                            "整局失误与精度分析",
+                            shell.palette.text,
+                        )),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.muted))
+                        .child(format!("共 {} 手", multi_analytics.total_moves)),
+                ),
         )
+        // Sub-region 0: Phase Selector Buttons (全盘 / 开局 / 中盘 / 官子)
+        .child(
+            div()
+                .flex()
+                .gap_1()
+                .children(ryusei_host::GamePhase::ALL.into_iter().map(|phase| {
+                    let is_selected = phase == current_phase;
+                    Button::new(gpui::SharedString::from(format!(
+                        "phase-btn-{}",
+                        phase.label()
+                    )))
+                    .xsmall()
+                    .outline()
+                    .selected(is_selected)
+                    .label(phase.label())
+                    .tooltip(phase.subtitle())
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        shell.set_analytics_phase(phase, cx);
+                    }))
+                })),
+        )
+        // Sub-region 1: Benchmark Rank Interval Assessment
         .child(
             div()
                 .flex()
@@ -1640,25 +1681,37 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
                         .gap_0p5()
                         .child(
                             div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .child("● 黑棋 (Black)"),
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("● 黑棋估段"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.accent))
+                                        .child(
+                                            b_phase
+                                                .rank_interval
+                                                .as_ref()
+                                                .map(|r| r.median.clone())
+                                                .unwrap_or_else(|| "评估中".to_owned()),
+                                        ),
+                                ),
                         )
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.muted))
-                                .child(format!(
-                                    "恶手: {} · 失误: {}",
-                                    summary.black_blunder_count, summary.black_mistake_count
-                                )),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(shell.palette.success))
-                                .child(format!("均损: {:.2}目", summary.black_avg_loss)),
+                            div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                b_phase
+                                    .rank_interval
+                                    .as_ref()
+                                    .map(|r| format!("{} ~ {}", r.lower_bound, r.upper_bound))
+                                    .unwrap_or_else(|| "手数较少待充分采样".to_owned()),
+                            ),
                         ),
                 )
                 .child(
@@ -1674,30 +1727,179 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
                         .gap_0p5()
                         .child(
                             div()
-                                .text_xs()
-                                .font_weight(FontWeight::BOLD)
-                                .child("○ 白棋 (White)"),
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("○ 白棋估段"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.accent))
+                                        .child(
+                                            w_phase
+                                                .rank_interval
+                                                .as_ref()
+                                                .map(|r| r.median.clone())
+                                                .unwrap_or_else(|| "评估中".to_owned()),
+                                        ),
+                                ),
                         )
+                        .child(
+                            div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                w_phase
+                                    .rank_interval
+                                    .as_ref()
+                                    .map(|r| format!("{} ~ {}", r.lower_bound, r.upper_bound))
+                                    .unwrap_or_else(|| "手数较少待充分采样".to_owned()),
+                            ),
+                        ),
+                ),
+        )
+        // Sub-region 2: Precision & Match Rates
+        .child(
+            div()
+                .p_2()
+                .rounded(px(4.0))
+                .bg(rgb(shell.palette.panel))
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().text_xs().text_color(rgb(shell.palette.subtle)).child(
+                            format!(
+                                "阶段: {} (共 {} 手)",
+                                current_phase.label(),
+                                b_phase.moves_count + w_phase.moves_count
+                            ),
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.success))
+                                        .child("● 黑棋"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.danger_text))
+                                        .child("○ 白棋"),
+                                ),
+                        ),
+                )
+                // Row 1: Mean Score Loss
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(rgb(shell.palette.muted))
-                                .child(format!(
-                                    "恶手: {} · 失误: {}",
-                                    summary.white_blunder_count, summary.white_mistake_count
-                                )),
+                                .child("平均每手失目"),
                         )
                         .child(
                             div()
+                                .flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.success))
+                                        .child(format!("{:.2}目", b_phase.avg_loss)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.danger_text))
+                                        .child(format!("{:.2}目", w_phase.avg_loss)),
+                                ),
+                        ),
+                )
+                // Row 2: Top 1 Match Rate
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
                                 .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(shell.palette.danger_text))
-                                .child(format!("均损: {:.2}目", summary.white_avg_loss)),
+                                .text_color(rgb(shell.palette.muted))
+                                .child("AI 首选吻合度"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.success))
+                                        .child(format!("{:.1}%", b_phase.top1_rate)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.danger_text))
+                                        .child(format!("{:.1}%", w_phase.top1_rate)),
+                                ),
+                        ),
+                )
+                // Row 3: Top 3 Match Rate
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(shell.palette.muted))
+                                .child("前三选吻合度"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.success))
+                                        .child(format!("{:.1}%", b_phase.top3_rate)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.danger_text))
+                                        .child(format!("{:.1}%", w_phase.top3_rate)),
+                                ),
                         ),
                 ),
         )
-        // Per-player comparison bars (PRD §4.3: 双方恶手数/失误数对比条形图 +
-        // 均损对比). Widths are normalised to the larger value.
+        // Sub-region 3: Four-Tier Move Quality Distribution
         .child({
             let bar = |label: &'static str, value: f64, other: f64, color: u32, text: String| {
                 let ratio = crate::ui_format::loss_ratio(value, other);
@@ -1708,7 +1910,7 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
                     .child(
                         div()
                             .flex_none()
-                            .w(px(28.0))
+                            .w(px(24.0))
                             .text_xs()
                             .text_color(rgb(shell.palette.muted))
                             .child(label),
@@ -1716,13 +1918,13 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
                     .child(
                         div()
                             .flex_1()
-                            .h(px(8.0))
-                            .rounded(px(4.0))
+                            .h(px(6.0))
+                            .rounded(px(3.0))
                             .bg(rgb(shell.palette.track))
                             .child(
                                 div()
                                     .h_full()
-                                    .rounded(px(4.0))
+                                    .rounded(px(3.0))
                                     .bg(rgb(color))
                                     .w(gpui::relative(ratio)),
                             ),
@@ -1758,50 +1960,60 @@ pub(crate) fn render_game_analytics_card(shell: &ShellApp) -> Div {
                         text_white,
                     ))
             };
+
+            let best_good_b = b_phase.best_count + b_phase.good_count;
+            let best_good_w = w_phase.best_count + w_phase.good_count;
+
+            let good_cmp = compare(
+                best_good_b as f64,
+                best_good_w as f64,
+                format!("{best_good_b}手"),
+                format!("{best_good_w}手"),
+            );
+            let inaccuracy_cmp = compare(
+                b_phase.inaccuracy_count as f64,
+                w_phase.inaccuracy_count as f64,
+                format!("{}手", b_phase.inaccuracy_count),
+                format!("{}手", w_phase.inaccuracy_count),
+            );
             let blunder_cmp = compare(
-                summary.black_blunder_count as f64,
-                summary.white_blunder_count as f64,
-                format!("{}", summary.black_blunder_count),
-                format!("{}", summary.white_blunder_count),
+                b_phase.blunder_count as f64,
+                w_phase.blunder_count as f64,
+                format!("{}手", b_phase.blunder_count),
+                format!("{}手", w_phase.blunder_count),
             );
-            let mistake_cmp = compare(
-                summary.black_mistake_count as f64,
-                summary.white_mistake_count as f64,
-                format!("{}", summary.black_mistake_count),
-                format!("{}", summary.white_mistake_count),
-            );
-            let loss_cmp = compare(
-                summary.black_avg_loss,
-                summary.white_avg_loss,
-                format!("{:.2}", summary.black_avg_loss),
-                format!("{:.2}", summary.white_avg_loss),
-            );
+
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .pt_1()
+                .gap_1p5()
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("恶手数对比"),
+                    div().flex().items_center().justify_between().child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.subtle))
+                            .child("🌟 正着 / 好手 (< 1.5目)"),
+                    ),
+                )
+                .child(good_cmp)
+                .child(
+                    div().flex().items_center().justify_between().child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.subtle))
+                            .child("🟡 缓手 / 疑问手 (1.5 ~ 6目)"),
+                    ),
+                )
+                .child(inaccuracy_cmp)
+                .child(
+                    div().flex().items_center().justify_between().child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.subtle))
+                            .child("🔴 恶手 / 崩盘手 (> 6目)"),
+                    ),
                 )
                 .child(blunder_cmp)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("失误数对比"),
-                )
-                .child(mistake_cmp)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(shell.palette.subtle))
-                        .child("均损对比 (目)"),
-                )
-                .child(loss_cmp)
         })
 }
 
