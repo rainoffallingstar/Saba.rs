@@ -1568,13 +1568,12 @@ impl ShellApp {
 
     fn fetch_fox_query(&mut self, cx: &mut Context<Self>) {
         let query = self.text_inputs.fox_query_input.text().trim().to_owned();
-        if query.is_empty() {
-            self.status = "输入野狐用户名或 ID 后按 Enter 查询".into();
-            self.show_toast("请输入野狐用户名或 ID 后按 Enter 查询".to_owned(), cx);
-            cx.notify();
-            return;
-        }
-        self.show_toast(format!("🦊 正在查询野狐用户 {query} 的最新棋谱..."), cx);
+        let toast_msg = if query.is_empty() {
+            "🦊 正在同步野狐最新对局棋谱...".to_owned()
+        } else {
+            format!("🦊 正在查询野狐用户 {query} 的最新棋谱...")
+        };
+        self.show_toast(toast_msg, cx);
         let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
