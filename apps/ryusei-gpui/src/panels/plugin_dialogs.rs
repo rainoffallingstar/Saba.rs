@@ -199,8 +199,21 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                             Button::new("katago-update-binary-btn")
                                 .small()
                                 .outline()
-                                .label("更新引擎")
-                                .disabled(!(cfg!(target_os = "windows") || cfg!(target_os = "linux")))
+                                .label(if cfg!(target_os = "macos") {
+                                    "brew 升级"
+                                } else {
+                                    "更新引擎"
+                                })
+                                .tooltip(if cfg!(target_os = "macos") {
+                                    "执行 brew upgrade katago 升级本机引擎"
+                                } else {
+                                    "下载并安装官网最新发布版本"
+                                })
+                                .disabled(
+                                    !(cfg!(target_os = "macos")
+                                        || cfg!(target_os = "windows")
+                                        || cfg!(target_os = "linux")),
+                                )
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.update_katago_binary_from_panel(cx);
                                 })),

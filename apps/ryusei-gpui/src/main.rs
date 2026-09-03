@@ -4644,12 +4644,54 @@ impl ShellApp {
     }
 
     fn update_katago_binary_from_panel(&mut self, cx: &mut Context<Self>) {
+        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
+            return;
+        };
+
+        if cfg!(target_os = "macos") {
+            self.katago_panel_status = "正在执行 brew upgrade katago 升级…".into();
+            self.show_toast("正在通过 Homebrew 升级 KataGo…".to_owned(), cx);
+            let weak = cx.entity().downgrade();
+            cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move { ryusei_host::upgrade_katago_via_brew() })
+                            .await;
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            match result {
+                                Ok(version_output) => {
+                                    shell.katago_local =
+                                        ryusei_host::inspect_katago_local(&base).ok();
+                                    let ver_summary = version_output
+                                        .lines()
+                                        .find(|l| l.contains("KataGo v") || l.contains("katago"))
+                                        .unwrap_or(version_output.trim());
+                                    shell.katago_panel_status =
+                                        format!("Homebrew 升级完成: {ver_summary}").into();
+                                    shell.show_toast("✅ KataGo 升级完成".to_owned(), cx);
+                                }
+                                Err(error) => {
+                                    shell.katago_panel_status =
+                                        format!("Homebrew 升级失败: {error}").into();
+                                    shell.show_toast(format!("❌ Homebrew 升级失败: {error}"), cx);
+                                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                },
+            )
+            .detach();
+            cx.notify();
+            return;
+        }
+
         let Some(release) = self.katago_release.clone() else {
             self.katago_panel_status = "请先刷新官网版本信息".into();
             cx.notify();
-            return;
-        };
-        let Some(base) = crate::file_workflow::current_user_config_directory().ok() else {
             return;
         };
         self.katago_panel_status = "正在下载并安装官网最新 KataGo…".into();

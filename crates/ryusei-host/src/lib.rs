@@ -91,7 +91,7 @@ pub use katago_setup::{
     merge_katago_weight_catalog, merge_katago_weight_catalog_with_limit, parse_katago_release_json,
     parse_katago_weight_html, prepare_katago_human_sl_engine, repair_katago_engine_record,
     select_katago_binary_asset, set_active_katago_model, update_katago_binary,
-    validate_katago_engine_record,
+    upgrade_katago_via_brew, validate_katago_engine_record,
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
 pub use move_grading::{

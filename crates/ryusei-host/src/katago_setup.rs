@@ -798,6 +798,66 @@ pub fn update_katago_binary(base: &Path, release: &KataGoReleaseInfo) -> Result<
     Ok(destination)
 }
 
+/// Upgrades or installs KataGo on macOS using Homebrew.
+pub fn upgrade_katago_via_brew() -> Result<String, String> {
+    let brew_binary = [
+        PathBuf::from("/opt/homebrew/bin/brew"),
+        PathBuf::from("/usr/local/bin/brew"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .or_else(|| {
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths).find_map(|dir| {
+                let candidate = dir.join("brew");
+                candidate.is_file().then_some(candidate)
+            })
+        })
+    })
+    .ok_or_else(|| "未找到 Homebrew (brew) 命令，请确认系统已安装 Homebrew".to_owned())?;
+
+    let output = Command::new(&brew_binary)
+        .args(["upgrade", "katago"])
+        .output()
+        .map_err(|e| format!("执行 brew upgrade katago 失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        if stderr.contains("not installed") || stderr.contains("is not installed") {
+            let install_output = Command::new(&brew_binary)
+                .args(["install", "katago"])
+                .output()
+                .map_err(|e| format!("执行 brew install katago 失败: {e}"))?;
+            if !install_output.status.success() {
+                return Err(format!(
+                    "brew install katago 失败: {}",
+                    String::from_utf8_lossy(&install_output.stderr).trim()
+                ));
+            }
+        } else if !stderr.contains("already") && !stdout.contains("already") {
+            return Err(format!("brew 升级返回错误: {}", stderr.trim()));
+        }
+    }
+
+    let katago_bin = [
+        PathBuf::from("/opt/homebrew/bin/katago"),
+        PathBuf::from("/usr/local/bin/katago"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .unwrap_or_else(|| PathBuf::from("katago"));
+
+    let version_output = Command::new(&katago_bin)
+        .arg("version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "KataGo 升级完成".to_owned());
+
+    Ok(version_output)
+}
+
 fn find_file_recursive(root: &Path, file_name: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
     for entry in entries.flatten() {
