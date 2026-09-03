@@ -9046,6 +9046,7 @@ impl Render for ShellApp {
                                         self,
                                         cx,
                                     ))
+                                    .children(panels::render_review_progress_bar(self))
                                     .child(panels::render_floating_playback_bar(
                                         &snapshot, self, cx,
                                     )),

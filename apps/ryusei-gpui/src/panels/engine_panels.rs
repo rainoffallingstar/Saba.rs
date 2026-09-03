@@ -7,7 +7,7 @@ use std::time::Duration;
 use gpui::{
     Animation, AnimationExt as _, Context, Div, FontWeight, InteractiveElement, IntoElement as _,
     MouseButton, MouseDownEvent, Stateful, StatefulInteractiveElement, div, prelude::*,
-    pulsating_between, px, rgb,
+    pulsating_between, px, relative, rgb,
 };
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
@@ -57,10 +57,11 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
         .child(
             div()
                 .flex()
-                .gap_2()
+                .flex_col()
+                .gap_1p5()
                 .child(
                     div()
-                        .flex_1()
+                        .w_full()
                         .track_focus(&shell.text_inputs.engine_spec_focus_handle)
                         .tab_index(2)
                         .px_3()
@@ -87,26 +88,33 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
                         .on_key_down(cx.listener(ShellApp::on_engine_spec_key_down)),
                 )
                 .child(
-                    Button::new("engine-spec-choose-file")
-                        .small()
-                        .outline()
-                        .label("选择文件")
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            shell.choose_engine_executable(cx);
-                        })),
-                )
-                .child(
-                    Button::new("engine-spec-save")
-                        .small()
-                        .primary()
-                        .label(if editing.is_some() {
-                            "保存修改"
-                        } else {
-                            "添加引擎"
-                        })
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            shell.save_engine_spec(cx);
-                        })),
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("engine-spec-choose-file")
+                                .small()
+                                .outline()
+                                .label("选择文件")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.choose_engine_executable(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("engine-spec-save")
+                                .small()
+                                .primary()
+                                .label(if editing.is_some() {
+                                    "保存修改"
+                                } else {
+                                    "添加引擎"
+                                })
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.save_engine_spec(cx);
+                                })),
+                        ),
                 ),
         )
         .child(
@@ -657,335 +665,345 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                 ),
         )
         .children(match left_tab {
-            crate::LeftSidebarTab::AiEvaluation => vec![
-                // Card 1: 双方棋手、时钟与 AI 局面评估
-                div()
-                    .p_2p5()
-                    .rounded_md()
-                    .bg(rgb(shell.palette.panel))
-                    .border_1()
-                    .border_color(rgb(shell.palette.border))
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(rgb(shell.palette.text))
-                                            .child("AI 局面评估"),
-                                    )
-                                    .child(
-                                        div().text_xs().text_color(rgb(shell.palette.muted)).child(
-                                            format!(
-                                                "{} · 贴目 {:.1}目{}",
-                                                rule_config.ruleset.label(),
-                                                rule_config.komi,
-                                                if rule_config.handicap >= 2 {
-                                                    format!(" (让{}子)", rule_config.handicap)
-                                                } else {
-                                                    String::new()
-                                                }
-                                            ),
+            crate::LeftSidebarTab::AiEvaluation => {
+                vec![
+                    // Card 1: 双方棋手、时钟与 AI 局面评估
+                    div()
+                        .p_2p5()
+                        .rounded_md()
+                        .bg(rgb(shell.palette.panel))
+                        .border_1()
+                        .border_color(rgb(shell.palette.border))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(rgb(shell.palette.text))
+                                                .child("AI 局面评估"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.muted))
+                                                .child(format!(
+                                                    "{} · 贴目 {:.1}目{}",
+                                                    rule_config.ruleset.label(),
+                                                    rule_config.komi,
+                                                    if rule_config.handicap >= 2 {
+                                                        format!(" (让{}子)", rule_config.handicap)
+                                                    } else {
+                                                        String::new()
+                                                    }
+                                                )),
                                         ),
-                                    ),
-                            )
-                            .child(
-                                Badge::new()
-                                    .small()
-                                    .child(if shell.analysis_task.is_some() {
+                                )
+                                .child(Badge::new().small().child(
+                                    if shell.analysis_task.is_some() {
                                         "● 分析中"
                                     } else if shell.analysis_enabled {
                                         "○ 自动分析"
                                     } else {
                                         "○ 已暂停"
-                                    }),
-                            ),
-                    )
-                    // Both Players & Active Clocks Display
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .p_2()
-                            .rounded_md()
-                            .bg(rgb(shell.palette.input))
-                            .border_1()
-                            .border_color(rgb(shell.palette.border))
-                            // Black Player
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .p_1p5()
-                                    .rounded_sm()
-                                    .bg(if is_black_turn {
-                                        rgb(shell.palette.button_active)
-                                    } else {
-                                        rgb(shell.palette.panel)
-                                    })
-                                    .border_1()
-                                    .border_color(if is_black_turn {
-                                        rgb(shell.palette.accent)
-                                    } else {
-                                        rgb(shell.palette.border)
-                                    })
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .min_w_0()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .font_weight(FontWeight::BOLD)
-                                                            .text_color(if is_black_turn {
-                                                                rgb(shell.palette.accent)
-                                                            } else {
-                                                                rgb(shell.palette.text)
-                                                            })
-                                                            .child("●"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .truncate()
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_xs()
-                                                            .text_color(rgb(shell.palette.text))
-                                                            .child(black_name),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(shell.palette.subtle))
-                                                    .child(format!(
-                                                        "{}提",
-                                                        snapshot.black_captures
-                                                    )),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(shell.palette.muted))
-                                                    .child(if black_rank.is_empty() {
-                                                        "黑方".to_owned()
+                                    },
+                                )),
+                        )
+                        // Both Players & Active Clocks Display
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .p_2()
+                                .rounded_md()
+                                .bg(rgb(shell.palette.input))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                // Black Player
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .p_1p5()
+                                        .rounded_sm()
+                                        .bg(if is_black_turn {
+                                            rgb(shell.palette.button_active)
+                                        } else {
+                                            rgb(shell.palette.panel)
+                                        })
+                                        .border_1()
+                                        .border_color(if is_black_turn {
+                                            rgb(shell.palette.accent)
+                                        } else {
+                                            rgb(shell.palette.border)
+                                        })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .min_w_0()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(if is_black_turn {
+                                                                    rgb(shell.palette.accent)
+                                                                } else {
+                                                                    rgb(shell.palette.text)
+                                                                })
+                                                                .child("●"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .truncate()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .text_xs()
+                                                                .text_color(rgb(shell.palette.text))
+                                                                .child(black_name),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.subtle))
+                                                        .child(format!(
+                                                            "{}提",
+                                                            snapshot.black_captures
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.muted))
+                                                        .child(if black_rank.is_empty() {
+                                                            "黑方".to_owned()
+                                                        } else {
+                                                            black_rank
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(rgb(shell.palette.input))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_xs()
+                                                        .text_color(rgb(if is_black_turn {
+                                                            shell.palette.warn
+                                                        } else {
+                                                            shell.palette.muted
+                                                        }))
+                                                        .child(if clocks_visible {
+                                                            black_clock
+                                                        } else {
+                                                            "--:--".to_owned()
+                                                        }),
+                                                ),
+                                        ),
+                                )
+                                // White Player
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .p_1p5()
+                                        .rounded_sm()
+                                        .bg(if !is_black_turn {
+                                            rgb(shell.palette.button_active)
+                                        } else {
+                                            rgb(shell.palette.panel)
+                                        })
+                                        .border_1()
+                                        .border_color(if !is_black_turn {
+                                            rgb(shell.palette.accent)
+                                        } else {
+                                            rgb(shell.palette.border)
+                                        })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .min_w_0()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::BOLD)
+                                                                .text_color(if !is_black_turn {
+                                                                    rgb(shell.palette.accent)
+                                                                } else {
+                                                                    rgb(shell.palette.text)
+                                                                })
+                                                                .child("○"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .truncate()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .text_xs()
+                                                                .text_color(rgb(shell.palette.text))
+                                                                .child(white_name),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.subtle))
+                                                        .child(format!(
+                                                            "{}提",
+                                                            snapshot.white_captures
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.muted))
+                                                        .child(if white_rank.is_empty() {
+                                                            "白方".to_owned()
+                                                        } else {
+                                                            white_rank
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .px_1p5()
+                                                        .py_0p5()
+                                                        .rounded_sm()
+                                                        .bg(rgb(shell.palette.input))
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_xs()
+                                                        .text_color(rgb(if !is_black_turn {
+                                                            shell.palette.warn
+                                                        } else {
+                                                            shell.palette.muted
+                                                        }))
+                                                        .child(if clocks_visible {
+                                                            white_clock
+                                                        } else {
+                                                            "--:--".to_owned()
+                                                        }),
+                                                ),
+                                        ),
+                                ),
+                        )
+                        // Real-time Winrate & Score Lead
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.text))
+                                        .child(format!(
+                                            "胜率: 黑 {:.1}% · 白 {:.1}%",
+                                            live_winrate * 100.0,
+                                            (1.0 - live_winrate) * 100.0
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(if best_score_lead.unwrap_or(0.0) >= 0.0 {
+                                            shell.palette.accent
+                                        } else {
+                                            shell.palette.danger_text
+                                        }))
+                                        .child(
+                                            best_score_lead
+                                                .map(|s| {
+                                                    if s >= 0.0 {
+                                                        format!("黑领先 +{:.1} 目", s)
                                                     } else {
-                                                        black_rank
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .px_1p5()
-                                                    .py_0p5()
-                                                    .rounded_sm()
-                                                    .bg(rgb(shell.palette.input))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_xs()
-                                                    .text_color(rgb(if is_black_turn {
-                                                        shell.palette.warn
-                                                    } else {
-                                                        shell.palette.muted
-                                                    }))
-                                                    .child(if clocks_visible {
-                                                        black_clock
-                                                    } else {
-                                                        "--:--".to_owned()
-                                                    }),
-                                            ),
-                                    ),
-                            )
-                            // White Player
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .p_1p5()
-                                    .rounded_sm()
-                                    .bg(if !is_black_turn {
-                                        rgb(shell.palette.button_active)
-                                    } else {
-                                        rgb(shell.palette.panel)
-                                    })
-                                    .border_1()
-                                    .border_color(if !is_black_turn {
-                                        rgb(shell.palette.accent)
-                                    } else {
-                                        rgb(shell.palette.border)
-                                    })
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .min_w_0()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .font_weight(FontWeight::BOLD)
-                                                            .text_color(if !is_black_turn {
-                                                                rgb(shell.palette.accent)
-                                                            } else {
-                                                                rgb(shell.palette.text)
-                                                            })
-                                                            .child("○"),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .truncate()
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_xs()
-                                                            .text_color(rgb(shell.palette.text))
-                                                            .child(white_name),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(shell.palette.subtle))
-                                                    .child(format!(
-                                                        "{}提",
-                                                        snapshot.white_captures
-                                                    )),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(shell.palette.muted))
-                                                    .child(if white_rank.is_empty() {
-                                                        "白方".to_owned()
-                                                    } else {
-                                                        white_rank
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .px_1p5()
-                                                    .py_0p5()
-                                                    .rounded_sm()
-                                                    .bg(rgb(shell.palette.input))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_xs()
-                                                    .text_color(rgb(if !is_black_turn {
-                                                        shell.palette.warn
-                                                    } else {
-                                                        shell.palette.muted
-                                                    }))
-                                                    .child(if clocks_visible {
-                                                        white_clock
-                                                    } else {
-                                                        "--:--".to_owned()
-                                                    }),
-                                            ),
-                                    ),
-                            ),
-                    )
-                    // Real-time Winrate & Score Lead
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(shell.palette.text))
-                                    .child(format!(
-                                        "胜率: 黑 {:.1}% · 白 {:.1}%",
-                                        live_winrate * 100.0,
-                                        (1.0 - live_winrate) * 100.0
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(if best_score_lead.unwrap_or(0.0) >= 0.0 {
-                                        shell.palette.accent
-                                    } else {
-                                        shell.palette.danger_text
-                                    }))
-                                    .child(
-                                        best_score_lead
-                                            .map(|s| {
-                                                if s >= 0.0 {
-                                                    format!("黑领先 +{:.1} 目", s)
-                                                } else {
-                                                    format!("白领先 +{:.1} 目", -s)
-                                                }
-                                            })
-                                            .unwrap_or_else(|| "均势 0.0 目".to_owned()),
-                                    ),
-                            ),
-                    )
-                    // Dual Winrate Bar (Black vs White)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(div().text_color(rgb(shell.palette.subtle)).child("黑"))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(8.0))
-                                    .rounded(px(2.0))
-                                    .bg(rgb(shell.palette.text))
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(px((live_winrate as f32).clamp(0.0, 1.0) * 160.0))
-                                            .bg(rgb(shell.palette.text)),
-                                    ),
-                            )
-                            .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
-                    ),
-                // Section 2: 整局失误统计 (design: below the AI evaluation card)
-                render_game_analytics_card(shell),
-                // Section 3: 引擎与工具
-                render_engine_config_section(shell, cx),
-            ],
+                                                        format!("白领先 +{:.1} 目", -s)
+                                                    }
+                                                })
+                                                .unwrap_or_else(|| "均势 0.0 目".to_owned()),
+                                        ),
+                                ),
+                        )
+                        // Dual Winrate Bar (Black vs White)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(div().text_color(rgb(shell.palette.subtle)).child("黑"))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .h(px(8.0))
+                                        .rounded(px(2.0))
+                                        .overflow_hidden()
+                                        .flex()
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(relative(live_winrate.clamp(0.0, 1.0) as f32))
+                                                .bg(rgb(shell.theme.stone_black_color().rgb_u32())),
+                                        )
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(relative(
+                                                    (1.0 - live_winrate).clamp(0.0, 1.0) as f32
+                                                ))
+                                                .bg(rgb(shell.theme.stone_white_color().rgb_u32())),
+                                        ),
+                                )
+                                .child(div().text_color(rgb(shell.palette.subtle)).child("白")),
+                        ),
+                    // Section 2: 整局失误统计 (design: below the AI evaluation card)
+                    render_game_analytics_card(shell),
+                    // Section 3: 引擎与工具
+                    render_engine_config_section(shell, cx),
+                ]
+            }
             crate::LeftSidebarTab::Library => vec![render_left_sidebar_library_panel(shell, cx)],
         })
 }
@@ -1218,7 +1236,6 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
                id: &'static str,
                icon: ShellIcon,
                label: &'static str,
-               description: &'static str,
                shell: &ShellApp,
                cx: &Context<ShellApp>| {
         let is_open = active == Some(panel);
@@ -1265,26 +1282,14 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
                         div()
                             .min_w_0()
                             .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(if is_open {
-                                        palette.accent
-                                    } else {
-                                        palette.text
-                                    }))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(palette.muted))
-                                    .child(description),
-                            ),
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(if is_open {
+                                palette.accent
+                            } else {
+                                palette.text
+                            }))
+                            .child(label),
                     )
                     .child(icons::icon(
                         if is_open {
@@ -1361,7 +1366,6 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-katago",
             ShellIcon::Cpu,
             "KataGo 引擎配置",
-            "权重下载、配置生成与版本切换",
             shell,
             cx,
         ))
@@ -1370,7 +1374,6 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-engines",
             ShellIcon::Settings,
             "引擎管理",
-            "添加、编辑并分配 GTP 引擎角色",
             shell,
             cx,
         ))
@@ -1379,7 +1382,6 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-fox",
             ShellIcon::Globe,
             "野狐对局同步",
-            "抓取并导入野狐最新对局",
             shell,
             cx,
         ))
@@ -1388,7 +1390,6 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-sgf",
             ShellIcon::Upload,
             "局面转 SGF",
-            "把当前局面导出为标准 SGF",
             shell,
             cx,
         ))

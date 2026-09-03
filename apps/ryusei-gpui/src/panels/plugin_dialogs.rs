@@ -53,6 +53,30 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
     let analysis_connected = shell
         .engine_controller
         .is_attached(crate::engine_console::EngineRole::Analysis);
+    // HumanSL rank ladder, weakest → strongest (20k … 9d). The current profile
+    // maps to an index on this ladder so the compact stepper can move one step.
+    let human_sl_ranks: Vec<String> = ryusei_host::human_sl_profiles()
+        .into_iter()
+        .filter(|profile| profile.starts_with("rank_"))
+        .collect();
+    let human_sl_current = shell
+        .settings
+        .get_str("katago.human_sl_profile")
+        .unwrap_or("rank_5k")
+        .to_owned();
+    let human_sl_index = human_sl_ranks
+        .iter()
+        .position(|profile| *profile == human_sl_current)
+        .unwrap_or(14);
+    let human_sl_label = human_sl_ranks
+        .get(human_sl_index)
+        .and_then(|profile| profile.strip_prefix("rank_"))
+        .unwrap_or("5k")
+        .to_owned();
+    let human_sl_prev = human_sl_index
+        .checked_sub(1)
+        .and_then(|i| human_sl_ranks.get(i).cloned());
+    let human_sl_next = human_sl_ranks.get(human_sl_index + 1).cloned();
     div()
         .w_full()
         .flex()
@@ -209,11 +233,7 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                             Button::new("katago-update-binary-btn")
                                 .small()
                                 .outline()
-                                .label(if cfg!(target_os = "windows") || cfg!(target_os = "linux") {
-                                    "⬆ 更新引擎"
-                                } else {
-                                    "⬆ Windows/Linux 更新"
-                                })
+                                .label("更新引擎")
                                 .disabled(!(cfg!(target_os = "windows") || cfg!(target_os = "linux")))
                                 .on_click(cx.listener(|shell, _, _, cx| {
                                     shell.update_katago_binary_from_panel(cx);
@@ -267,30 +287,52 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                 .child(
                     div()
                         .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .children(
-                            ryusei_host::human_sl_profiles()
-                                .into_iter()
-                                .filter(|profile| profile.starts_with("rank_"))
-                                .map(|profile| {
-                                    let selected = shell
-                                        .settings
-                                        .get_str("katago.human_sl_profile")
-                                        == Some(profile.as_str());
-                                    let label = profile.strip_prefix("rank_").unwrap_or(&profile).to_owned();
-                                    Button::new(gpui::SharedString::from(format!(
-                                        "human-sl-profile-{profile}"
-                                    )))
-                                    .xsmall()
-                                    .outline()
-                                    .selected(selected)
-                                    .label(label)
-                                    .tooltip(format!("HumanSL {profile}"))
-                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            Button::new("human-sl-prev")
+                                .xsmall()
+                                .outline()
+                                .disabled(human_sl_prev.is_none())
+                                .label("更弱")
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    if let Some(profile) = human_sl_prev.clone() {
                                         shell.set_human_sl_profile(&profile, cx);
-                                    }))
-                                }),
+                                    }
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(shell.palette.muted))
+                                        .child("HumanSL 档位"),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb(shell.palette.accent))
+                                        .child(human_sl_label.clone()),
+                                ),
+                        )
+                        .child(
+                            Button::new("human-sl-next")
+                                .xsmall()
+                                .outline()
+                                .disabled(human_sl_next.is_none())
+                                .label("更强")
+                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                    if let Some(profile) = human_sl_next.clone() {
+                                        shell.set_human_sl_profile(&profile, cx);
+                                    }
+                                })),
                         ),
                 )
                 .children(shell.katago_weights.iter().enumerate().map(|(index, weight)| {
@@ -320,7 +362,7 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                                 .small()
                                 .ghost()
                                 .label(if human_sl {
-                                    "启用 HumanSL"
+                                    "启用"
                                 } else if active {
                                     "使用中"
                                 } else {
@@ -356,7 +398,7 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                     Button::new("katago-setup-action-btn")
                         .small()
                         .primary()
-                        .child(icon_label(ShellIcon::Sparkles, "一键配置 / 诊断环境与模型", shell.palette.muted))
+                        .child(icon_label(ShellIcon::Sparkles, "一键配置", shell.palette.muted))
                         .tooltip("自动检查环境、下载最新模型并配置引擎")
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.on_plugin_command(

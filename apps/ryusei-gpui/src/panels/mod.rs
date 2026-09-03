@@ -26,8 +26,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, PathBuilder,
-    Stateful, StatefulInteractiveElement, Window, canvas, div, hsla, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb,
+    Stateful, StatefulInteractiveElement, Window, canvas, deferred, div, hsla, linear_color_stop,
+    linear_gradient, point, prelude::*, px, relative, rgb,
 };
 
 use ryusei_domain_core::{AnalysisPolicy, GameMode, GameSnapshot, SessionMode};
@@ -445,68 +445,71 @@ pub fn render_titlebar(
                                 })),
                         )
                         .children(shell.review_menu_open.then(|| {
-                            div()
-                                .absolute()
-                                .top(px(30.0))
-                                .right(px(0.0))
-                                .w(px(220.0))
-                                .p_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(rgb(palette.border))
-                                .bg(rgb(palette.panel))
-                                .shadow_lg()
-                                .flex()
-                                .flex_col()
-                                .gap_0p5()
-                                .children(
-                                    ryusei_domain_core::ReviewProfile::ALL
-                                        .into_iter()
-                                        .filter(|profile| {
-                                            *profile != ryusei_domain_core::ReviewProfile::Quick80
-                                        })
-                                        .map(|profile| {
-                                            let selected =
-                                                shell.batch_review_profile == Some(profile);
-                                            Button::new(gpui::SharedString::from(format!(
-                                                "review-option-{}",
-                                                profile.english_label()
-                                            )))
-                                            .small()
-                                            .ghost()
-                                            .selected(selected)
-                                            .w_full()
-                                            .child(
-                                                div()
-                                                    .w_full()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(rgb(palette.text))
-                                                            .child(format!(
-                                                                "{} {}",
-                                                                profile.label(),
-                                                                profile.english_label()
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(rgb(palette.muted))
-                                                            .child(format!(
-                                                                "{} visits",
-                                                                profile.visits()
-                                                            )),
-                                                    ),
-                                            )
-                                            .on_click(cx.listener(move |shell, _, _, cx| {
-                                                shell.choose_review_profile(profile, cx);
-                                            }))
-                                        }),
-                                )
+                            deferred(
+                                div()
+                                    .absolute()
+                                    .top(px(30.0))
+                                    .right(px(0.0))
+                                    .w(px(220.0))
+                                    .p_1()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(palette.border))
+                                    .bg(rgb(palette.panel))
+                                    .shadow_lg()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .children(
+                                        ryusei_domain_core::ReviewProfile::ALL
+                                            .into_iter()
+                                            .filter(|profile| {
+                                                *profile
+                                                    != ryusei_domain_core::ReviewProfile::Quick80
+                                            })
+                                            .map(|profile| {
+                                                let selected =
+                                                    shell.batch_review_profile == Some(profile);
+                                                Button::new(gpui::SharedString::from(format!(
+                                                    "review-option-{}",
+                                                    profile.english_label()
+                                                )))
+                                                .small()
+                                                .ghost()
+                                                .selected(selected)
+                                                .w_full()
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(rgb(palette.text))
+                                                                .child(format!(
+                                                                    "{} {}",
+                                                                    profile.label(),
+                                                                    profile.english_label()
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(rgb(palette.muted))
+                                                                .child(format!(
+                                                                    "{} visits",
+                                                                    profile.visits()
+                                                                )),
+                                                        ),
+                                                )
+                                                .on_click(cx.listener(move |shell, _, _, cx| {
+                                                    shell.choose_review_profile(profile, cx);
+                                                }))
+                                            }),
+                                    ),
+                            )
                         })),
                 )
                 .child(
@@ -2696,4 +2699,66 @@ pub fn render_floating_playback_bar(
                     shell.on_pass(&MouseDownEvent::default(), window, cx);
                 })),
         )
+}
+
+/// Progress bar shown below the board while a whole-game review is running.
+pub fn render_review_progress_bar(shell: &ShellApp) -> Option<gpui::Stateful<Div>> {
+    let progress = shell.batch_review_progress.as_ref()?;
+    if !progress.is_running {
+        return None;
+    }
+    let percent = progress.percent().clamp(0.0, 100.0);
+    Some(
+        div()
+            .id("review-progress-bar")
+            .debug_selector(|| "review-progress-bar".to_owned())
+            .w(px(360.0))
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(shell.palette.panel))
+            .border_1()
+            .border_color(rgb(shell.palette.border))
+            .shadow_md()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(shell.palette.text))
+                            .child("全盘复盘计算中…"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(shell.palette.accent))
+                            .child(format!(
+                                "{}/{} 手 · {:.0}%",
+                                progress.current_move, progress.total_moves, percent
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(6.0))
+                    .rounded(px(3.0))
+                    .bg(rgb(shell.palette.track))
+                    .child(
+                        div()
+                            .h_full()
+                            .rounded(px(3.0))
+                            .bg(rgb(shell.palette.accent))
+                            .w(relative(percent / 100.0)),
+                    ),
+            ),
+    )
 }
