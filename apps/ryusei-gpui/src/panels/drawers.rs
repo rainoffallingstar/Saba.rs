@@ -1097,6 +1097,7 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
 }
 
 /// Shows the local profile identity used by the navigation rail.
+#[allow(dead_code)]
 pub fn render_profile_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<Div> {
     let name = shell
         .settings
@@ -1940,19 +1941,6 @@ pub fn render_export_drawer(
                     })),
             )
             .child(
-                Button::new("export-position-png")
-                    .small()
-                    .outline()
-                    .child(icon_label(
-                        ShellIcon::Image,
-                        "导出当前局面高清图 (PNG)",
-                        shell.palette.muted,
-                    ))
-                    .on_click(cx.listener(|shell, _, _, cx| {
-                        shell.export_current_position_png(cx);
-                    })),
-            )
-            .child(
                 Button::new("export-animated-gif")
                     .small()
                     .outline()
@@ -1963,6 +1951,19 @@ pub fn render_export_drawer(
                     ))
                     .on_click(cx.listener(|shell, _, window, cx| {
                         shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                    })),
+            )
+            .child(
+                Button::new("export-position-png")
+                    .small()
+                    .outline()
+                    .child(icon_label(
+                        ShellIcon::Image,
+                        "导出当前局面高清图 (PNG)",
+                        shell.palette.muted,
+                    ))
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.export_current_position_png(cx);
                     })),
             )
             .child(

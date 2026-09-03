@@ -290,6 +290,7 @@ struct ShellApp {
     pending_engine_move: Option<PendingEngineMove>,
     batch_review_progress: Option<ryusei_host::BatchReviewProgress>,
     batch_review_state: Option<BatchReviewState>,
+    batch_review_paused: bool,
     /// A batch review owns a fixed search budget for its entire run. This is
     /// intentionally independent from the interactive analysis preference.
     batch_review_profile: Option<ryusei_domain_core::ReviewProfile>,
@@ -945,6 +946,7 @@ impl ShellApp {
             pending_engine_move: None,
             batch_review_progress: None,
             batch_review_state: None,
+            batch_review_paused: false,
             batch_review_profile: None,
             background_review: false,
             hovered_candidate_vertex: None,
@@ -3398,6 +3400,16 @@ impl ShellApp {
         if self.batch_review_state.is_some()
             && matches!(outcome, ryusei_host::AnalysisRunOutcome::Completed)
         {
+            if self.batch_review_paused {
+                if let Some(progress) = self.batch_review_progress.as_mut() {
+                    progress.is_running = false;
+                }
+                self.status = "全盘复盘已暂停".into();
+                self.show_toast("⏸ 全盘复盘已暂停".to_owned(), cx);
+                cx.notify();
+                return;
+            }
+
             let next_target = self
                 .batch_review_state
                 .as_mut()
@@ -3598,6 +3610,7 @@ impl ShellApp {
         }
         let node_ids = ryusei_host::active_lineage_review_nodes(&snapshot);
         self.batch_review_profile = Some(profile);
+        self.batch_review_paused = false;
         self.batch_review_state = BatchReviewState::new(snapshot.current_node_id.clone(), node_ids);
         self.batch_review_progress = Some(ryusei_host::BatchReviewProgress {
             current_move: 1,
@@ -3662,12 +3675,50 @@ impl ShellApp {
         self.batch_review_state = None;
         self.batch_review_progress = None;
         self.batch_review_profile = None;
+        self.batch_review_paused = false;
         if let Some(Some(original_node)) = original_node
             && self.host.snapshot().current_node_id != original_node
         {
             self.navigate_to_node_with_batch_policy(original_node, false, cx);
         }
         self.show_toast("全盘复盘已停止".to_owned(), cx);
+        cx.notify();
+    }
+
+    pub fn pause_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        if self.batch_review_state.is_none() {
+            return;
+        }
+        self.batch_review_paused = true;
+        if let Some(progress) = self.batch_review_progress.as_mut() {
+            progress.is_running = false;
+        }
+        if self.analysis_task.is_some() {
+            self.stop_analysis(cx);
+        }
+        self.status = "全盘复盘已暂停".into();
+        self.show_toast("⏸ 全盘复盘已暂停".to_owned(), cx);
+        cx.notify();
+    }
+
+    pub fn resume_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        if self.batch_review_state.is_none() {
+            return;
+        }
+        self.batch_review_paused = false;
+        if let Some(progress) = self.batch_review_progress.as_mut() {
+            progress.is_running = true;
+        }
+        self.status = "全盘复盘继续推演".into();
+        self.show_toast("▶ 全盘复盘继续推演".to_owned(), cx);
+        self.start_analysis(cx);
+        cx.notify();
+    }
+
+    pub fn abort_whole_game_review(&mut self, cx: &mut Context<Self>) {
+        self.cancel_whole_game_review(false, cx);
+        self.status = "全盘复盘已中止".into();
+        self.show_toast("⏹ 全盘复盘已中止".to_owned(), cx);
         cx.notify();
     }
 
@@ -8443,6 +8494,7 @@ impl ShellApp {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn open_profile(&mut self, cx: &mut Context<Self>) {
         self.open_drawer(ActiveDrawer::Profile, "Profile 已打开", cx);
     }
@@ -9076,7 +9128,7 @@ impl Render for ShellApp {
                                         self,
                                         cx,
                                     ))
-                                    .children(panels::render_review_progress_bar(self))
+                                    .children(panels::render_review_progress_bar(self, cx))
                                     .child(panels::render_floating_playback_bar(
                                         &snapshot, self, cx,
                                     )),

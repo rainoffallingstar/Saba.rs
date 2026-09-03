@@ -39,25 +39,6 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child("GTP 引擎管理"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(shell.palette.muted))
-                        .child("保存配置不会启动进程。分配角色后，在 GTP 终端连接该角色。"),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
                 .gap_1p5()
                 .child(
                     div()

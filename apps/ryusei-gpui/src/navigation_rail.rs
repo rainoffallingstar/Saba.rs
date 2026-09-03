@@ -10,12 +10,6 @@ use crate::{NAVIGATION_RAIL_WIDTH, ShellApp};
 pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> Stateful<gpui::Div> {
     let tabs = shell.workspace_tabs.tabs().to_vec();
     let active_tab_id = shell.workspace_tabs.active_tab_id().to_owned();
-    let profile_name = shell
-        .settings
-        .get_str("profile.display_name")
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("Player");
-    let profile_initial = profile_name.chars().next().unwrap_or('P').to_string();
     let current_session_mode = shell.session_policy.mode;
 
     div()
@@ -177,14 +171,6 @@ pub fn render_navigation_rail(shell: &ShellApp, cx: &Context<ShellApp>) -> State
                         .on_click(cx.listener(|shell, _, _, cx| {
                             shell.toggle_view_setting("sound.enable", "sound effects", cx);
                         })),
-                )
-                .child(
-                    Button::new("nav-profile")
-                        .small()
-                        .outline()
-                        .label(profile_initial)
-                        .tooltip(format!("{} 的 Profile", profile_name))
-                        .on_click(cx.listener(|shell, _, _, cx| shell.open_profile(cx))),
                 )
                 .child(
                     Button::new("nav-settings")

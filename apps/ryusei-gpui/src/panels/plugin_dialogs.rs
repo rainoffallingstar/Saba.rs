@@ -84,40 +84,6 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
         .gap_2p5()
         .child(
             div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .pb_2()
-                .border_b_1()
-                .border_color(rgb(shell.palette.border))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child(icon_label(ShellIcon::Cpu, "KataGo AI 引擎与模型配置", shell.palette.text)),
-                )
-                .child(
-                    div()
-                        .id("plugin-menu-close")
-                        .debug_selector(|| "plugin-menu-close".to_owned())
-                        .child(
-                            Button::new("plugin-menu-close-btn")
-                                .small()
-                                .ghost()
-                                .child(icons::icon(ShellIcon::Close, 13.0, shell.palette.muted))
-                                .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.close_plugin_popover(
-                                        &MouseDownEvent::default(),
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
-        )
-        .child(
-            div()
                 .p_2p5()
                 .rounded_md()
                 .bg(rgb(shell.palette.panel))
@@ -466,44 +432,6 @@ pub(crate) fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -
         .gap_2p5()
         .child(
             div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .pb_2()
-                .border_b_1()
-                .border_color(rgb(shell.palette.border))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child(icon_label(
-                            ShellIcon::Globe,
-                            "野狐围棋对局同步与查询",
-                            shell.palette.text,
-                        )),
-                )
-                .child(
-                    div()
-                        .id("plugin-menu-close")
-                        .debug_selector(|| "plugin-menu-close".to_owned())
-                        .child(
-                            Button::new("plugin-menu-close-btn")
-                                .small()
-                                .ghost()
-                                .child(icons::icon(ShellIcon::Close, 13.0, shell.palette.muted))
-                                .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.close_plugin_popover(
-                                        &MouseDownEvent::default(),
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
-        )
-        .child(
-            div()
                 .p_2p5()
                 .rounded_md()
                 .bg(rgb(shell.palette.input))
@@ -607,44 +535,6 @@ pub(crate) fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<Shell
         .gap_2p5()
         .child(
             div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .pb_2()
-                .border_b_1()
-                .border_color(rgb(shell.palette.border))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(shell.palette.text))
-                        .child(icon_label(
-                            ShellIcon::Upload,
-                            "局面转 SGF / 剪贴板导出",
-                            shell.palette.text,
-                        )),
-                )
-                .child(
-                    div()
-                        .id("plugin-menu-close")
-                        .debug_selector(|| "plugin-menu-close".to_owned())
-                        .child(
-                            Button::new("plugin-menu-close-btn")
-                                .small()
-                                .ghost()
-                                .child(icons::icon(ShellIcon::Close, 13.0, shell.palette.muted))
-                                .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.close_plugin_popover(
-                                        &MouseDownEvent::default(),
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        ),
-                ),
-        )
-        .child(
-            div()
                 .p_2p5()
                 .rounded_md()
                 .bg(rgb(shell.palette.input))
@@ -721,6 +611,19 @@ pub(crate) fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<Shell
                         ))
                         .on_click(cx.listener(|shell, _, window, cx| {
                             shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("export-png-modal-btn")
+                        .small()
+                        .ghost()
+                        .child(icon_label(
+                            ShellIcon::Image,
+                            "导出当前局面高清图 (PNG)…",
+                            shell.palette.muted,
+                        ))
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.export_current_position_png(cx);
                         })),
                 ),
         )

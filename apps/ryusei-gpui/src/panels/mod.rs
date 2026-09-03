@@ -2685,18 +2685,19 @@ pub fn render_floating_playback_bar(
         }))
 }
 
-/// Progress bar shown below the board while a whole-game review is running.
-pub fn render_review_progress_bar(shell: &ShellApp) -> Option<gpui::Stateful<Div>> {
+/// Progress bar shown below the board while a whole-game review is running or paused.
+pub fn render_review_progress_bar(
+    shell: &ShellApp,
+    cx: &Context<ShellApp>,
+) -> Option<gpui::Stateful<Div>> {
     let progress = shell.batch_review_progress.as_ref()?;
-    if !progress.is_running {
-        return None;
-    }
+    let is_paused = shell.batch_review_paused;
     let percent = progress.percent().clamp(0.0, 100.0);
     Some(
         div()
             .id("review-progress-bar")
             .debug_selector(|| "review-progress-bar".to_owned())
-            .w(px(360.0))
+            .w(px(420.0))
             .px_3()
             .py_2()
             .rounded_md()
@@ -2716,18 +2717,71 @@ pub fn render_review_progress_bar(shell: &ShellApp) -> Option<gpui::Stateful<Div
                         div()
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(shell.palette.text))
-                            .child("全盘复盘计算中…"),
+                            .text_color(rgb(if is_paused {
+                                shell.palette.warn
+                            } else {
+                                shell.palette.text
+                            }))
+                            .child(if is_paused {
+                                "全盘复盘已暂停"
+                            } else {
+                                "全盘复盘计算中…"
+                            }),
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(shell.palette.accent))
-                            .child(format!(
-                                "{}/{} 手 · {:.0}%",
-                                progress.current_move, progress.total_moves, percent
-                            )),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(shell.palette.accent))
+                                    .child(format!(
+                                        "{}/{} 手 · {:.0}%",
+                                        progress.current_move, progress.total_moves, percent
+                                    )),
+                            )
+                            .child(if is_paused {
+                                Button::new("review-resume-btn")
+                                    .xsmall()
+                                    .ghost()
+                                    .child(icon_label(
+                                        ShellIcon::Play,
+                                        "继续",
+                                        shell.palette.accent,
+                                    ))
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.resume_whole_game_review(cx);
+                                    }))
+                            } else {
+                                Button::new("review-pause-btn")
+                                    .xsmall()
+                                    .ghost()
+                                    .child(icon_label(
+                                        ShellIcon::Pause,
+                                        "暂停",
+                                        shell.palette.muted,
+                                    ))
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.pause_whole_game_review(cx);
+                                    }))
+                            })
+                            .child(
+                                Button::new("review-abort-btn")
+                                    .xsmall()
+                                    .ghost()
+                                    .danger()
+                                    .child(icon_label(
+                                        ShellIcon::Stop,
+                                        "中止",
+                                        shell.palette.danger_text,
+                                    ))
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        shell.abort_whole_game_review(cx);
+                                    })),
+                            ),
                     ),
             )
             .child(
@@ -2740,7 +2794,11 @@ pub fn render_review_progress_bar(shell: &ShellApp) -> Option<gpui::Stateful<Div
                         div()
                             .h_full()
                             .rounded(px(3.0))
-                            .bg(rgb(shell.palette.accent))
+                            .bg(rgb(if is_paused {
+                                shell.palette.warn
+                            } else {
+                                shell.palette.accent
+                            }))
                             .w(relative(percent / 100.0)),
                     ),
             ),
