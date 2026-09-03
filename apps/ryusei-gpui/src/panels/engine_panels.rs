@@ -1218,51 +1218,83 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
                id: &'static str,
                icon: ShellIcon,
                label: &'static str,
+               description: &'static str,
                shell: &ShellApp,
                cx: &Context<ShellApp>| {
         let is_open = active == Some(panel);
+        let accent = if is_open {
+            palette.accent
+        } else {
+            palette.muted
+        };
         div()
             .flex()
             .flex_col()
-            .gap_1()
             .child(
                 div()
                     .id(id)
                     .flex()
                     .items_center()
-                    .gap_1p5()
+                    .gap_2()
                     .px_2()
                     .py_1p5()
                     .rounded_md()
                     .cursor_pointer()
-                    .border_1()
-                    .border_color(rgb(if is_open {
-                        palette.accent
-                    } else {
-                        palette.border
-                    }))
-                    .bg(rgb(if is_open {
-                        palette.button_active
-                    } else {
-                        palette.input
-                    }))
+                    .when(is_open, |this| this.bg(rgb(palette.button_active)))
                     .hover(|style| style.bg(rgb(palette.button_active)))
-                    .child(icons::icon(
-                        icon,
-                        14.0,
-                        if is_open {
-                            palette.accent
-                        } else {
-                            palette.muted
-                        },
-                    ))
                     .child(
                         div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(palette.text))
-                            .child(label),
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded_md()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(rgb(if is_open {
+                                palette.accent
+                            } else {
+                                palette.button
+                            }))
+                            .child(icons::icon(
+                                icon,
+                                13.0,
+                                if is_open { 0xffffff } else { accent },
+                            )),
                     )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(if is_open {
+                                        palette.accent
+                                    } else {
+                                        palette.text
+                                    }))
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(palette.muted))
+                                    .child(description),
+                            ),
+                    )
+                    .child(icons::icon(
+                        if is_open {
+                            ShellIcon::ChevronLeft
+                        } else {
+                            ShellIcon::ChevronRight
+                        },
+                        12.0,
+                        palette.muted,
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |shell, _, _, cx| {
@@ -1271,42 +1303,65 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
                     ),
             )
             .when(is_open, |this| {
-                this.child(match panel {
-                    crate::EngineConfigPanel::KataGo => {
-                        render_katago_dialog(shell, cx).into_any_element()
-                    }
-                    crate::EngineConfigPanel::Engines => {
-                        render_engine_manager(shell, cx).into_any_element()
-                    }
-                    crate::EngineConfigPanel::FoxSync => {
-                        render_fox_sync_dialog(shell, cx).into_any_element()
-                    }
-                    crate::EngineConfigPanel::PositionSgf => {
-                        render_position_to_sgf_dialog(shell, cx).into_any_element()
-                    }
-                })
+                this.child(
+                    div()
+                        .ml_1()
+                        .pl_2p5()
+                        .border_l_2()
+                        .border_color(rgb(palette.accent))
+                        .child(match panel {
+                            crate::EngineConfigPanel::KataGo => {
+                                render_katago_dialog(shell, cx).into_any_element()
+                            }
+                            crate::EngineConfigPanel::Engines => {
+                                render_engine_manager(shell, cx).into_any_element()
+                            }
+                            crate::EngineConfigPanel::FoxSync => {
+                                render_fox_sync_dialog(shell, cx).into_any_element()
+                            }
+                            crate::EngineConfigPanel::PositionSgf => {
+                                render_position_to_sgf_dialog(shell, cx).into_any_element()
+                            }
+                        }),
+                )
             })
     };
 
     div()
         .flex()
         .flex_col()
-        .gap_1p5()
+        .gap_0p5()
         .pt_2()
         .border_t_1()
         .border_color(rgb(palette.border))
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(palette.muted))
-                .child("引擎与工具"),
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .pb_1()
+                .child(icons::icon(ShellIcon::Settings, 13.0, palette.muted))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(palette.text))
+                        .child("引擎与工具"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(palette.subtle))
+                        .child("扩展配置与工具"),
+                ),
         )
         .child(row(
             crate::EngineConfigPanel::KataGo,
             "engine-cfg-katago",
             ShellIcon::Cpu,
             "KataGo 引擎配置",
+            "权重下载、配置生成与版本切换",
             shell,
             cx,
         ))
@@ -1315,6 +1370,7 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-engines",
             ShellIcon::Settings,
             "引擎管理",
+            "添加、编辑并分配 GTP 引擎角色",
             shell,
             cx,
         ))
@@ -1323,6 +1379,7 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-fox",
             ShellIcon::Globe,
             "野狐对局同步",
+            "抓取并导入野狐最新对局",
             shell,
             cx,
         ))
@@ -1331,6 +1388,7 @@ pub(crate) fn render_engine_config_section(shell: &ShellApp, cx: &Context<ShellA
             "engine-cfg-sgf",
             ShellIcon::Upload,
             "局面转 SGF",
+            "把当前局面导出为标准 SGF",
             shell,
             cx,
         ))

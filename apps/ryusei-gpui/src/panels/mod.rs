@@ -1828,7 +1828,14 @@ fn generic_plugin_tabs(
     shell
         .installed_plugins
         .iter()
-        .filter(|plugin| plugin.enabled && plugin.ui_panel_granted && !plugin.panels.is_empty())
+        .filter(|plugin| {
+            plugin.enabled
+                && plugin.ui_panel_granted
+                && !plugin.panels.is_empty()
+                // Built-in tool plugins (KataGo setup / fox / sgf) live in the
+                // left engine sidebar "引擎与工具" section, not as deck tabs.
+                && crate::ShellApp::engine_sidebar_panel_for(&plugin.plugin_id).is_none()
+        })
         .map(|plugin| {
             let id = plugin.plugin_id.clone();
             let selected =
