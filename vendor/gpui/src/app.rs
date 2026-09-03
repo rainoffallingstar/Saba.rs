@@ -201,8 +201,10 @@ impl Application {
     {
         let this = Rc::downgrade(&self.0);
         self.0.borrow_mut().platform.on_reopen(Box::new(move || {
-            if let Some(app) = this.upgrade() {
-                callback(&mut app.borrow_mut());
+            if let Some(app) = this.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                callback(&mut app);
             }
         }));
         self
@@ -687,7 +689,9 @@ impl App {
         platform.on_quit(Box::new({
             let cx = app.clone();
             move || {
-                cx.borrow_mut().shutdown();
+                if let Ok(mut cx) = cx.try_borrow_mut() {
+                    cx.shutdown();
+                }
             }
         }));
 

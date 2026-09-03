@@ -244,7 +244,7 @@ struct ShellApp {
     /// remain independent serialized workspace-tab snapshots.
     workspace_tabs: ryusei_host::WorkspaceTabs,
     file_access: NativeGameFileAccess,
-    dialog_service: Box<dyn DialogService>,
+    dialog_service: std::sync::Arc<dyn DialogService>,
     external_file: ryusei_host::ExternalFileStore,
     persistence: NativeHostPersistence,
     recent_files: ryusei_host::RecentFilesStore,
@@ -323,6 +323,9 @@ struct ShellApp {
     clock_last_updated: Instant,
     #[allow(dead_code)]
     clock_tick_task: Option<Task<()>>,
+    /// Periodic durable auto-save to the game file, for documents with a path.
+    #[allow(dead_code)]
+    autosave_task: Option<Task<()>>,
     /// Last byo-yomi whole-second the countdown cue fired for, so the tick
     /// sounds at most once per second while the period runs low.
     last_byoyomi_tick_secs: Option<u64>,
@@ -374,6 +377,8 @@ struct ShellApp {
     split_drag: Option<SplitDrag>,
     active_drawer: Option<ActiveDrawer>,
     active_plugin_popover: Option<String>,
+    /// Whether the compact whole-game-review dropdown (titlebar) is open.
+    review_menu_open: bool,
     game_graph_context_node: Option<ryusei_domain_core::NodeId>,
     #[allow(dead_code)]
     installed_themes: Vec<ryusei_host::InstalledTheme>,
@@ -604,7 +609,7 @@ impl ShellApp {
         plugin_persistence: NativePluginPersistence,
         initial_status: String,
         startup_file: Option<PathBuf>,
-        dialog_service: Box<dyn DialogService>,
+        dialog_service: std::sync::Arc<dyn DialogService>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut host = ryusei_host::HostApplication::default();
@@ -866,6 +871,28 @@ impl ShellApp {
             },
         ));
 
+        // Periodic durable auto-save: every 30 seconds, persist a dirty game
+        // that already has a source file. Untitled games keep the crash-recovery
+        // autosave (captured on every move) until they get a save location.
+        let autosave_task = Some(cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_secs(30))
+                            .await;
+                        let keep_going = weak
+                            .update(&mut cx, |shell, cx| shell.auto_save(cx))
+                            .is_ok();
+                        if !keep_going {
+                            break;
+                        }
+                    }
+                }
+            },
+        ));
+
         let mut shell = Self {
             host,
             workspace_tabs,
@@ -913,6 +940,7 @@ impl ShellApp {
             clock,
             clock_last_updated: Instant::now(),
             clock_tick_task,
+            autosave_task,
             last_byoyomi_tick_secs: None,
             restart_analysis_after_position_change: false,
             last_analysis_node: None,
@@ -954,6 +982,7 @@ impl ShellApp {
             split_drag: None,
             active_drawer: None,
             active_plugin_popover: None,
+            review_menu_open: false,
             game_graph_context_node: None,
             installed_themes,
             legacy_asar_themes,
@@ -5207,6 +5236,20 @@ impl ShellApp {
         }
     }
 
+    /// Periodic durable auto-save: writes a dirty document to its existing file
+    /// and records it in the library history. Returns silently when there is no
+    /// source path yet or nothing changed, so untitled games are never lost.
+    fn auto_save(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.host.snapshot();
+        if !snapshot.file_state.is_dirty || snapshot.file_state.path.is_none() {
+            return;
+        }
+        // A concurrent engine-sync or save may have cleared the dirty flag;
+        // `save_game` re-checks the path and no-ops safely otherwise.
+        self.save_game(cx);
+        cx.notify();
+    }
+
     #[allow(dead_code)]
     fn on_restore_recovery(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(candidate) = self.autosave.resolve_restore() else {
@@ -5686,45 +5729,72 @@ impl ShellApp {
     }
 
     fn open(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.dialog_service.pick_open_path() else {
-            self.status = "open cancelled".into();
-            cx.notify();
-            return;
-        };
-        let mut events = RecordingSink;
-        match self.host.open(path.clone(), &self.file_access, &mut events) {
-            Ok(_) => {
-                self.disconnect_all_engine_sessions();
-                self.status = format!("opened {}", path.display()).into();
-                self.record_recent(&path);
-                if let Err(error) = track_after_file_operation(&mut self.external_file, &path) {
-                    self.status = format!("external-file tracking failed: {error}").into();
+        let dialog = self.dialog_service.clone();
+        cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let path = cx
+                        .background_executor()
+                        .spawn(async move { dialog.pick_open_path() })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        let Some(path) = path else {
+                            shell.status = "open cancelled".into();
+                            cx.notify();
+                            return;
+                        };
+                        let mut events = RecordingSink;
+                        match shell
+                            .host
+                            .open(path.clone(), &shell.file_access, &mut events)
+                        {
+                            Ok(_) => {
+                                shell.disconnect_all_engine_sessions();
+                                shell.status = format!("opened {}", path.display()).into();
+                                shell.record_recent(&path);
+                                if let Err(error) =
+                                    track_after_file_operation(&mut shell.external_file, &path)
+                                {
+                                    shell.status =
+                                        format!("external-file tracking failed: {error}").into();
+                                }
+                            }
+                            Err(error) => shell.status = format!("open failed: {error}").into(),
+                        }
+                        cx.notify();
+                    })
+                    .ok();
                 }
-            }
-            Err(error) => self.status = format!("open failed: {error}").into(),
-        }
-        cx.notify();
+            },
+        )
+        .detach();
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        self.save_game();
+        self.save_game(cx);
         cx.notify();
     }
 
     /// Saves the current document to its source location, or opens the Save As
-    /// dialog when there is none. Returns `true` only when the document is now
-    /// saved somewhere; failures and cancelled dialogs return `false`.
-    fn save_game(&mut self) -> bool {
+    /// dialog asynchronously when there is none. Returns `true` only when the
+    /// document was saved synchronously to an existing path.
+    fn save_game(&mut self, cx: &mut Context<Self>) -> bool {
         let has_save_location = self.host.snapshot().file_state.path.is_some();
         if !has_save_location {
-            return self.save_game_as();
+            self.save_game_as(cx);
+            return false;
         }
         let mut events = RecordingSink;
+        let saved_path = self.host.snapshot().file_state.path.clone();
         match self.host.save(&mut self.file_access, &mut events) {
             Ok(_) => {
                 self.status = "saved".into();
                 self.clear_recovery();
                 self.track_external_after_save();
+                if let Some(path) = saved_path {
+                    self.record_recent(std::path::Path::new(&path));
+                }
                 true
             }
             Err(error) => {
@@ -5735,14 +5805,16 @@ impl ShellApp {
     }
 
     fn save_as(&mut self, cx: &mut Context<Self>) {
-        self.save_game_as();
+        self.save_game_as(cx);
         cx.notify();
     }
 
-    /// Saves the current document to a user-chosen location. Returns `true`
-    /// only when the document is now saved; a cancelled dialog or a failed
-    /// write returns `false`.
-    fn save_game_as(&mut self) -> bool {
+    /// Saves the current document to a user-chosen location. The native save
+    /// dialog runs off the UI thread (the dialog service dispatches to the
+    /// platform's main thread internally) so the App borrow is released before
+    /// the modal loop starts, avoiding the re-entrant `RefCell` abort that a
+    /// synchronous native dialog would trigger.
+    fn save_game_as(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let suggested_name = snapshot
             .file_state
@@ -5753,27 +5825,43 @@ impl ShellApp {
             .filter(|name| !name.is_empty())
             .unwrap_or("untitled.sgf")
             .to_owned();
-        let Some(path) = self.dialog_service.pick_save_path(&suggested_name) else {
-            self.status = "save cancelled".into();
-            return false;
-        };
-        let mut events = RecordingSink;
-        match self
-            .host
-            .save_at(path.clone(), &mut self.file_access, &mut events)
-        {
-            Ok(_) => {
-                self.status = format!("saved {}", path.display()).into();
-                self.record_recent(&path);
-                self.clear_recovery();
-                self.track_external_after_save();
-                true
-            }
-            Err(error) => {
-                self.status = format!("save failed: {error}").into();
-                false
-            }
-        }
+        let dialog = self.dialog_service.clone();
+        cx.spawn(
+            move |weak: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let path = cx
+                        .background_executor()
+                        .spawn(async move { dialog.pick_save_path(&suggested_name) })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        let Some(path) = path else {
+                            shell.status = "save cancelled".into();
+                            cx.notify();
+                            return;
+                        };
+                        let mut events = RecordingSink;
+                        match shell
+                            .host
+                            .save_at(path.clone(), &mut shell.file_access, &mut events)
+                        {
+                            Ok(_) => {
+                                shell.status = format!("saved {}", path.display()).into();
+                                shell.record_recent(&path);
+                                shell.clear_recovery();
+                                shell.track_external_after_save();
+                            }
+                            Err(error) => {
+                                shell.status = format!("save failed: {error}").into();
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
     }
 
     /// Rebases the external-file fingerprint after a successful save, so the
@@ -5859,7 +5947,7 @@ impl ShellApp {
     /// documents close immediately; dirty documents ask the user to Save,
     /// Discard or Cancel through a native confirmation dialog, and the window
     /// stays open when the save fails or the user cancels.
-    fn should_allow_window_close(&mut self) -> bool {
+    fn should_allow_window_close(&mut self, cx: &mut Context<Self>) -> bool {
         let is_dirty = self.host.snapshot().file_state.is_dirty;
         let decision = ryusei_host::decide_close_request(is_dirty, false);
         if decision == ryusei_host::CloseRequestAction::Allow {
@@ -5876,7 +5964,17 @@ impl ShellApp {
             _ => CloseChoice::Cancel,
         };
         match choice {
-            CloseChoice::Save => close_decision(choice, self.save_game()),
+            CloseChoice::Save => {
+                let has_save_location = self.host.snapshot().file_state.path.is_some();
+                if has_save_location {
+                    close_decision(choice, self.save_game(cx))
+                } else {
+                    // Save As runs asynchronously; keep the window open and let
+                    // the user close again once the dialog has resolved.
+                    self.save_game_as(cx);
+                    false
+                }
+            }
             _ => close_decision(choice, false),
         }
     }
@@ -8328,8 +8426,26 @@ impl ShellApp {
         self.open_drawer(ActiveDrawer::Preferences, "设置已打开", cx);
     }
 
+    #[allow(dead_code)]
     fn open_review(&mut self, cx: &mut Context<Self>) {
         self.open_drawer(ActiveDrawer::Review, "全谱 AI 复盘", cx);
+    }
+
+    /// Toggles the compact whole-game-review dropdown anchored to the titlebar.
+    fn toggle_review_menu(&mut self, cx: &mut Context<Self>) {
+        self.review_menu_open = !self.review_menu_open;
+        cx.notify();
+    }
+
+    /// Closes the review dropdown and starts a whole-game review at the chosen
+    /// budget profile.
+    fn choose_review_profile(
+        &mut self,
+        profile: ryusei_domain_core::ReviewProfile,
+        cx: &mut Context<Self>,
+    ) {
+        self.review_menu_open = false;
+        self.start_review_profile_action(profile, cx);
     }
 
     fn open_export(&mut self, cx: &mut Context<Self>) {
@@ -9606,7 +9722,7 @@ fn main() {
                             plugin_persistence,
                             initial_status,
                             startup_file,
-                            Box::new(RfdDialogService),
+                            std::sync::Arc::new(RfdDialogService),
                             cx,
                         )
                     });
@@ -9632,13 +9748,13 @@ fn main() {
                     let bounds = window.bounds();
                     let maximized = window.is_maximized();
                     let mut allow_close = false;
-                    shell_for_close.update(cx, |shell, _| {
+                    shell_for_close.update(cx, |shell, cx| {
                         shell.remember_window_bounds(
                             bounds.size.width.to_f64(),
                             bounds.size.height.to_f64(),
                             maximized,
                         );
-                        allow_close = shell.should_allow_window_close();
+                        allow_close = shell.should_allow_window_close(cx);
                     });
                     allow_close
                 });
@@ -10254,7 +10370,7 @@ mod headless_smoke {
                 NativePluginPersistence::new(config.clone()),
                 "headless smoke".to_owned(),
                 None,
-                Box::new(MockDialogService::default()),
+                std::sync::Arc::new(MockDialogService::default()),
                 cx,
             )
         });
@@ -11021,7 +11137,7 @@ mod frontend_smoke {
                     NativePluginPersistence::new(config.clone()),
                     "fresh defaults".to_owned(),
                     None,
-                    Box::new(MockDialogService::default()),
+                    std::sync::Arc::new(MockDialogService::default()),
                     cx,
                 )
             });
@@ -11165,7 +11281,7 @@ mod frontend_smoke {
                     NativePluginPersistence::new(config.clone()),
                     "frontend smoke".to_owned(),
                     None,
-                    Box::new(MockDialogService::default()),
+                    std::sync::Arc::new(MockDialogService::default()),
                     cx,
                 )
             });
@@ -11526,7 +11642,7 @@ mod frontend_smoke {
                     NativePluginPersistence::new(config.clone()),
                     "tab focus smoke".to_owned(),
                     None,
-                    Box::new(MockDialogService::default()),
+                    std::sync::Arc::new(MockDialogService::default()),
                     cx,
                 )
             });

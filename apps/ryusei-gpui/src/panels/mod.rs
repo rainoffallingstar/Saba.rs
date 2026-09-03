@@ -432,13 +432,81 @@ pub fn render_titlebar(
                 .items_center()
                 .gap_1p5()
                 .child(
-                    Button::new("titlebar-batch-review")
-                        .small()
-                        .ghost()
-                        .child(icon_label(ShellIcon::Sparkles, "全谱复盘", palette.muted))
-                        .tooltip("全谱 AI 深度复盘：选择档位并逐手推演")
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            shell.open_review(cx);
+                    div()
+                        .relative()
+                        .child(
+                            Button::new("titlebar-batch-review")
+                                .small()
+                                .ghost()
+                                .child(icon_label(ShellIcon::Sparkles, "全谱复盘", palette.muted))
+                                .tooltip("全谱 AI 深度复盘：选择档位并逐手推演")
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.toggle_review_menu(cx);
+                                })),
+                        )
+                        .children(shell.review_menu_open.then(|| {
+                            div()
+                                .absolute()
+                                .top(px(30.0))
+                                .right(px(0.0))
+                                .w(px(220.0))
+                                .p_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.panel))
+                                .shadow_lg()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .children(
+                                    ryusei_domain_core::ReviewProfile::ALL
+                                        .into_iter()
+                                        .filter(|profile| {
+                                            *profile != ryusei_domain_core::ReviewProfile::Quick80
+                                        })
+                                        .map(|profile| {
+                                            let selected =
+                                                shell.batch_review_profile == Some(profile);
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "review-option-{}",
+                                                profile.english_label()
+                                            )))
+                                            .small()
+                                            .ghost()
+                                            .selected(selected)
+                                            .w_full()
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_between()
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(rgb(palette.text))
+                                                            .child(format!(
+                                                                "{} {}",
+                                                                profile.label(),
+                                                                profile.english_label()
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(rgb(palette.muted))
+                                                            .child(format!(
+                                                                "{} visits",
+                                                                profile.visits()
+                                                            )),
+                                                    ),
+                                            )
+                                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                                shell.choose_review_profile(profile, cx);
+                                            }))
+                                        }),
+                                )
                         })),
                 )
                 .child(

@@ -8,7 +8,7 @@ use ryusei_host::{DecodedGameFile, GameFileAccess, HostError, SourceEncoding};
 /// narrow port instead of reaching for a platform API. The future macOS /
 /// Windows / Linux native dialog adapters implement the same trait, and the
 /// host file workflow (`HostApplication::open` / `save_at`) stays unchanged.
-pub trait DialogService {
+pub trait DialogService: Send + Sync {
     /// Ask the user to pick an existing game file to open.
     /// Returning `None` models a cancelled dialog.
     fn pick_open_path(&self) -> Option<PathBuf>;

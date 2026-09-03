@@ -1392,6 +1392,11 @@ pub fn render_review_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statefu
 
     let mut profiles = div().flex().flex_col().gap_2();
     for profile in ryusei_domain_core::ReviewProfile::ALL {
+        // The 80-visit ultra-fast background profile is not a user-selectable
+        // whole-game review tier; keep it out of the picker.
+        if profile == ryusei_domain_core::ReviewProfile::Quick80 {
+            continue;
+        }
         let selected = active_profile == Some(profile);
         let running_this = running && selected;
         profiles = profiles.child(
@@ -1902,7 +1907,7 @@ pub fn render_export_drawer(
                         shell.palette.muted,
                     ))
                     .on_click(cx.listener(|shell, _, _, cx| {
-                        shell.save_game_as();
+                        shell.save_game_as(cx);
                         cx.notify();
                     })),
             )
