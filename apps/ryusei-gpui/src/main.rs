@@ -546,13 +546,17 @@ fn default_new_game_properties_for_size(
         .unwrap_or(0);
 
     let mut properties = BTreeMap::new();
+    let mut resolved_komi = komi;
     if let Some(value) = settings.get_str("game.default_ruleset")
         && !value.trim().is_empty()
     {
         let ruleset = ryusei_host::GoRuleset::from_setting(Some(value));
         properties.insert("RU".to_owned(), vec![ruleset.sgf_name().to_owned()]);
+        if ruleset == ryusei_host::GoRuleset::AncientChinese {
+            resolved_komi = 0.0;
+        }
     }
-    properties.insert("KM".to_owned(), vec![komi.to_string()]);
+    properties.insert("KM".to_owned(), vec![resolved_komi.to_string()]);
     let stones = handicap_placement(size, handicap);
     if !stones.is_empty() {
         properties.insert("HA".to_owned(), vec![handicap.to_string()]);

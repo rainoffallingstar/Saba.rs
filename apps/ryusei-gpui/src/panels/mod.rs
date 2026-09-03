@@ -940,38 +940,6 @@ pub fn render_player_bar(
                                 }),
                         ),
                 )
-                .children((shell.session_policy.mode != SessionMode::Live).then(|| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("pass-button")
-                                .debug_selector(|| "pass-button".to_owned())
-                                .child(
-                                    Button::new("pass-btn")
-                                        .small()
-                                        .ghost()
-                                        .label("Pass")
-                                        .tooltip("停一手 (Pass)")
-                                        .on_click(cx.listener(|shell, _, window, cx| {
-                                            shell.on_pass(&MouseDownEvent::default(), window, cx);
-                                        })),
-                                ),
-                        )
-                        .child(
-                            Button::new("resign-button")
-                                .small()
-                                .ghost()
-                                .danger()
-                                .label("Resign")
-                                .tooltip("认输 (Resign)")
-                                .on_click(cx.listener(|shell, _, window, cx| {
-                                    shell.on_resign(&MouseDownEvent::default(), window, cx);
-                                })),
-                        )
-                }))
                 .children(
                     (shell.mode == GameMode::Scoring || shell.mode == GameMode::Estimator).then(
                         || {
@@ -2690,15 +2658,31 @@ pub fn render_floating_playback_bar(
                 })),
         )
         .child(
-            Button::new("playback-pass")
+            div()
+                .id("pass-button")
+                .debug_selector(|| "pass-button".to_owned())
+                .child(
+                    Button::new("playback-pass")
+                        .small()
+                        .ghost()
+                        .label("Pass")
+                        .tooltip("停一手 (Pass)")
+                        .on_click(cx.listener(|shell, _, window, cx| {
+                            shell.on_pass(&MouseDownEvent::default(), window, cx);
+                        })),
+                ),
+        )
+        .children((shell.session_policy.mode != SessionMode::Live).then(|| {
+            Button::new("resign-button")
                 .small()
                 .ghost()
-                .label("Pass")
-                .tooltip("停一手 (Pass)")
+                .danger()
+                .label("Resign")
+                .tooltip("认输 (Resign)")
                 .on_click(cx.listener(|shell, _, window, cx| {
-                    shell.on_pass(&MouseDownEvent::default(), window, cx);
-                })),
-        )
+                    shell.on_resign(&MouseDownEvent::default(), window, cx);
+                }))
+        }))
 }
 
 /// Progress bar shown below the board while a whole-game review is running.

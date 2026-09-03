@@ -454,15 +454,6 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                                 );
                             }
                         })),
-                )
-                .child(
-                    Button::new("katago-open-terminal-btn")
-                        .small()
-                        .ghost()
-                        .child(icon_label(ShellIcon::Terminal, "GTP 终端", shell.palette.muted))
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.toggle_gtp_terminal(&MouseDownEvent::default(), window, cx);
-                        })),
                 ),
         )
 }

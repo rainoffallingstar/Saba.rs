@@ -1036,8 +1036,10 @@ pub fn render_goban_with_id(
         );
     }
 
-    let marker_w = (spacing * 0.7).clamp(14.0, 28.0);
-    let marker_h = (spacing * 0.8).clamp(16.0, 32.0);
+    // Markup symbols match the full stone dimension so triangles, squares,
+    // circles, and crosses are clearly readable at actual stone size.
+    let marker_size = stone_size;
+    let marker_font_size = (stone_size * 0.85).max(12.0);
     for row in 0..height {
         for column in 0..width {
             if let Some(marker) = board
@@ -1050,14 +1052,15 @@ pub fn render_goban_with_id(
                 children.push(
                     div()
                         .absolute()
-                        .left(px(x - marker_w / 2.0))
-                        .top(px(y - marker_h / 2.0))
-                        .w(px(marker_w))
-                        .h(px(marker_h))
+                        .left(px(x - marker_size / 2.0))
+                        .top(px(y - marker_size / 2.0))
+                        .w(px(marker_size))
+                        .h(px(marker_size))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_sm()
+                        .text_size(px(marker_font_size))
+                        .font_weight(FontWeight::BOLD)
                         .text_color(rgb(danger_color))
                         .child(markup_symbol(&marker.marker_type, marker.label.as_deref())),
                 );
@@ -1074,14 +1077,15 @@ pub fn render_goban_with_id(
         children.push(
             div()
                 .absolute()
-                .left(px(x - marker_w / 2.0))
-                .top(px(y - marker_h / 2.0))
-                .w(px(marker_w))
-                .h(px(marker_h))
+                .left(px(x - marker_size / 2.0))
+                .top(px(y - marker_size / 2.0))
+                .w(px(marker_size))
+                .h(px(marker_size))
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
+                .text_size(px(marker_font_size))
+                .font_weight(FontWeight::BOLD)
                 .text_color(rgb(danger_color))
                 .child("×"),
         );

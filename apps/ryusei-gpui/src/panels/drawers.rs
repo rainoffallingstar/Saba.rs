@@ -1614,7 +1614,10 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
             .and_then(|v| v.first())
             .map(|s| s.as_str())
             .unwrap_or("Chinese");
-        let selected = current_rule.eq_ignore_ascii_case(ruleset);
+        let selected = current_rule.eq_ignore_ascii_case(ruleset)
+            || (ruleset == "Ancient Chinese"
+                && ryusei_host::GoRuleset::from_setting(Some(current_rule))
+                    == ryusei_host::GoRuleset::AncientChinese);
         Button::new(gpui::SharedString::from(format!("setup-rule-{ruleset}")))
             .small()
             .ghost()
@@ -1626,6 +1629,13 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                     key: "game.default_ruleset".to_owned(),
                     value: serde_json::Value::String(ruleset.to_owned()),
                 });
+                if ruleset == "Ancient Chinese" {
+                    shell.host.set_root_property("KM", vec!["0.0".to_owned()]);
+                    shell.apply_settings_edit(crate::SettingEdit::Set {
+                        key: "game.default_komi".to_owned(),
+                        value: serde_json::json!(0.0),
+                    });
+                }
                 cx.notify();
             }))
     };
@@ -1750,6 +1760,7 @@ pub fn render_match_setup_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                 .child(rules_button("Chinese", "中国规则 (数子/贴3.75子)"))
                 .child(rules_button("Japanese", "日本规则 (数目/贴6.5目)"))
                 .child(rules_button("Ing", "应氏规则 (填满/贴8点)"))
+                .child(rules_button("Ancient Chinese", "中国古棋 (还棋头/无贴目)"))
                 .into_any_element(),
         ))
         .child(section(

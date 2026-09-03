@@ -46,9 +46,9 @@ const PAUSE: &str = svg_doc!(
     r#"<rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/>"#
 );
 const CHEVRON_LEFT: &str = svg_doc!(r#"<path d="m15 18-6-6 6-6"/>"#);
-const CHEVRON_RIGHT: &str = svg_doc!(r#"<path d="m9 18 6 6-6-6"/>"#);
+const CHEVRON_RIGHT: &str = svg_doc!(r#"<path d="m9 18 6-6-6-6"/>"#);
 const CHEVRONS_LEFT: &str = svg_doc!(r#"<path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/>"#);
-const CHEVRONS_RIGHT: &str = svg_doc!(r#"<path d="m6 17 5 5 5-5"/><path d="m13 17 5 5-5 5"/>"#);
+const CHEVRONS_RIGHT: &str = svg_doc!(r#"<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>"#);
 const TRENDING_UP: &str = svg_doc!(
     r#"<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>"#
 );
