@@ -1870,8 +1870,15 @@ pub fn render_analysis_preview_panel(
                                     snapshot.board.next_player,
                                 ) * 100.0
                             );
-                            let lead_str = entry
-                                .score_lead
+                            // Score lead also reads from the player-to-move
+                            // perspective, matching the winrate.
+                            let side_score_lead = entry.score_lead.map(|lead| {
+                                crate::engine_console::side_to_move_score_lead(
+                                    lead,
+                                    snapshot.board.next_player,
+                                )
+                            });
+                            let lead_str = side_score_lead
                                 .map(|l| format!("{:+.1}目", l))
                                 .unwrap_or_default();
                             // Policy-network prior probability (design: 先验概率 Prior %).
@@ -1994,8 +2001,7 @@ pub fn render_analysis_preview_panel(
                                                     div()
                                                         .text_xs()
                                                         .text_color(rgb(
-                                                            if entry.score_lead.unwrap_or(0.0)
-                                                                >= 0.0
+                                                            if side_score_lead.unwrap_or(0.0) >= 0.0
                                                             {
                                                                 shell.palette.success
                                                             } else {

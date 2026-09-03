@@ -2158,7 +2158,12 @@ pub fn render_goban_area(
                         snapshot.board.next_player,
                     ) * 100.0,
                     visits: entry.visits,
-                    score_lead: entry.score_lead,
+                    score_lead: entry.score_lead.map(|lead| {
+                        crate::engine_console::side_to_move_score_lead(
+                            lead,
+                            snapshot.board.next_player,
+                        )
+                    }),
                     is_best: index == 0 || Some(vertex) == best_move,
                 })
             })

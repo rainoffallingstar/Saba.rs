@@ -418,6 +418,19 @@ pub fn side_to_move_winrate(black_winrate: f64, next_player: ryusei_domain_core:
     .clamp(0.0, 1.0)
 }
 
+/// Converts a Black-perspective score lead into the side-to-move perspective,
+/// mirroring `side_to_move_winrate` for the board markers and candidate cards.
+/// A positive value always means "the player to move leads".
+pub fn side_to_move_score_lead(
+    black_score_lead: f64,
+    next_player: ryusei_domain_core::Color,
+) -> f64 {
+    match next_player {
+        ryusei_domain_core::Color::Black => black_score_lead,
+        ryusei_domain_core::Color::White => -black_score_lead,
+    }
+}
+
 /// Merges a batch of streamed analysis entries into the current set, keyed by
 /// vertex: later batches replace earlier entries for the same move (KataGo
 /// re-emits candidates as the search progresses). The returned list is sorted
@@ -717,6 +730,16 @@ mod tests {
         assert!((super::side_to_move_winrate(0.42, white) - 0.58).abs() < 1e-9);
         assert_eq!(super::side_to_move_winrate(1.20, black), 1.0);
         assert_eq!(super::side_to_move_winrate(-0.20, white), 1.0);
+    }
+
+    #[test]
+    fn side_to_move_score_lead_flips_sign_for_white() {
+        let black = ryusei_domain_core::Color::Black;
+        let white = ryusei_domain_core::Color::White;
+        assert_eq!(super::side_to_move_score_lead(2.5, black), 2.5);
+        assert_eq!(super::side_to_move_score_lead(2.5, white), -2.5);
+        assert_eq!(super::side_to_move_score_lead(-1.5, white), 1.5);
+        assert_eq!(super::side_to_move_score_lead(-1.5, black), -1.5);
     }
 
     #[test]
