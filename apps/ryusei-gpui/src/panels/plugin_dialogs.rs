@@ -530,74 +530,81 @@ pub(crate) fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -
                 )
                 .child(
                     div()
-                        .flex()
-                        .gap_1p5()
-                        .child(
+                        .w_full()
+                        .track_focus(&shell.text_inputs.fox_query_focus_handle)
+                        .tab_index(8)
+                        .key_context("FoxQueryInput")
+                        .px_3()
+                        .py_1p5()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(
+                            if shell.active_text_input == Some(crate::ActiveTextInput::FoxQuery) {
+                                shell.palette.accent
+                            } else {
+                                shell.palette.border
+                            },
+                        ))
+                        .bg(rgb(shell.palette.panel))
+                        .text_xs()
+                        .text_color(rgb(shell.palette.text))
+                        .child(if shell.text_inputs.fox_query_input.text().is_empty() {
                             div()
-                                .flex_1()
-                                .track_focus(&shell.text_inputs.fox_query_focus_handle)
-                                .tab_index(8)
-                                .key_context("FoxQueryInput")
-                                .px_3()
-                                .py_1p5()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(rgb(
-                                    if shell.active_text_input
-                                        == Some(crate::ActiveTextInput::FoxQuery)
-                                    {
-                                        0x38bdf8
-                                    } else {
-                                        0x26262c
-                                    },
-                                ))
-                                .bg(rgb(shell.palette.panel))
-                                .text_xs()
+                                .text_color(rgb(shell.palette.subtle))
+                                .child("输入野狐用户名或 ID (按 Enter 搜索)")
+                        } else {
+                            div()
                                 .text_color(rgb(shell.palette.text))
-                                .child(if shell.text_inputs.fox_query_input.text().is_empty() {
-                                    div()
-                                        .text_color(rgb(shell.palette.subtle))
-                                        .child("输入野狐用户名或用户 ID (按 Enter 搜索)")
-                                } else {
-                                    div()
-                                        .text_color(rgb(shell.palette.text))
-                                        .child(shell.text_inputs.fox_query_input.text().to_owned())
-                                })
-                                .child(NativeInputBinding::new(
-                                    shell.text_inputs.fox_query_focus_handle.clone(),
-                                    cx.entity().clone(),
-                                ))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(ShellApp::on_fox_query_focus),
-                                )
-                                .on_key_down(cx.listener(ShellApp::on_fox_query_key_down)),
-                        )
-                        .child(
-                            Button::new("fox-search-btn")
-                                .small()
-                                .primary()
-                                .child(icon_label(ShellIcon::Magnify, "查询", shell.palette.muted))
-                                .on_click(cx.listener(|shell, _, _, cx| {
-                                    shell.fetch_fox_query(cx);
-                                })),
-                        ),
+                                .child(shell.text_inputs.fox_query_input.text().to_owned())
+                        })
+                        .child(NativeInputBinding::new(
+                            shell.text_inputs.fox_query_focus_handle.clone(),
+                            cx.entity().clone(),
+                        ))
+                        .on_mouse_down(MouseButton::Left, cx.listener(ShellApp::on_fox_query_focus))
+                        .on_key_down(cx.listener(ShellApp::on_fox_query_key_down)),
                 ),
         )
         .child(
-            div().flex().gap_1p5().child(
-                Button::new("fox-sync-recent-btn")
-                    .small()
-                    .outline()
-                    .child(icon_label(
-                        ShellIcon::RefreshCw,
-                        "同步最近对局",
-                        shell.palette.muted,
-                    ))
-                    .on_click(cx.listener(|shell, _, _, cx| {
-                        shell.on_plugin_command("org.ryusei.fox-kifu-sync", "fox.query_games", cx);
-                    })),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    Button::new("fox-sync-recent-btn")
+                        .small()
+                        .outline()
+                        .child(icon_label(
+                            ShellIcon::RefreshCw,
+                            "同步最近对局",
+                            shell.palette.muted,
+                        ))
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.on_plugin_command(
+                                "org.ryusei.fox-kifu-sync",
+                                "fox.query_games",
+                                cx,
+                            );
+                        })),
+                )
+                .when(
+                    !shell.text_inputs.fox_query_input.text().trim().is_empty(),
+                    |this| {
+                        this.child(
+                            Button::new("fox-search-btn")
+                                .small()
+                                .primary()
+                                .child(icon_label(
+                                    ShellIcon::Magnify,
+                                    "查询用户",
+                                    shell.palette.muted,
+                                ))
+                                .on_click(cx.listener(|shell, _, _, cx| {
+                                    shell.fetch_fox_query(cx);
+                                })),
+                        )
+                    },
+                ),
         )
 }
 
