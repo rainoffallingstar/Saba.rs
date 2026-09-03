@@ -330,8 +330,7 @@ impl<T: GtpTransport> EngineSession<T> {
 
     /// Configures the engine's clock before a local or remote game starts.
     /// Applies SGF rule, komi, and handicap-independent game settings before
-    /// the position is replayed. The JSON Ancient Chinese ruleset is passed as
-    /// one GTP argument, not split on whitespace.
+    /// the position is replayed.
     pub fn set_game_rules(
         &mut self,
         config: &crate::GameRuleConfig,

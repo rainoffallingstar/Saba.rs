@@ -46,11 +46,10 @@ impl GoRuleset {
     pub fn katago_name(self) -> &'static str {
         match self {
             GoRuleset::Chinese => "chinese",
-            // KataGo requires a JSON rules object for the historical group-tax
-            // preset; there is no portable named "ancient" rule.
-            GoRuleset::AncientChinese => {
-                r#"{"koRule":"SIMPLE","scoringRule":"AREA","taxRule":"ALL","suicide":false,"whiteHandicapBonus":"N","hasButton":false}"#
-            }
+            // KataGo's `stone-scoring` named rule is the historical group-tax
+            // (还棋头) preset: scoring=AREA, tax=ALL, ko=SIMPLE, suicide=false,
+            // whiteHandicapBonus=0. It is the closest match to Ancient Chinese.
+            GoRuleset::AncientChinese => "stone-scoring",
             GoRuleset::Japanese => "japanese",
             GoRuleset::Korean => "korean",
             GoRuleset::Aga => "aga",
@@ -202,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn ancient_rules_use_zero_komi_and_group_tax_json() {
+    fn ancient_rules_use_zero_komi_and_group_tax_rule() {
         let mut props = BTreeMap::new();
         props.insert("RU".to_owned(), vec!["Ancient Chinese".to_owned()]);
         let config = GameRuleConfig::from_root_properties(&props, 19);
@@ -212,7 +211,7 @@ mod tests {
         assert!(
             commands
                 .iter()
-                .any(|command| command.contains("taxRule\":\"ALL"))
+                .any(|command| command == "kata-set-rules stone-scoring")
         );
         assert!(commands.iter().any(|command| command == "komi 0.0"));
     }
