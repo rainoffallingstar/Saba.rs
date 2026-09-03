@@ -379,6 +379,8 @@ struct ShellApp {
     active_plugin_popover: Option<String>,
     /// Whether the compact whole-game-review dropdown (titlebar) is open.
     review_menu_open: bool,
+    /// Engine record names whose path and argument details are expanded.
+    expanded_engine_details: BTreeSet<String>,
     game_graph_context_node: Option<ryusei_domain_core::NodeId>,
     #[allow(dead_code)]
     installed_themes: Vec<ryusei_host::InstalledTheme>,
@@ -604,7 +606,7 @@ impl ShellApp {
     )]
     fn new(
         mut settings: ryusei_host::SettingsStore,
-        settings_persistence: NativeSettingsPersistence,
+        mut settings_persistence: NativeSettingsPersistence,
         persistence: NativeHostPersistence,
         plugin_persistence: NativePluginPersistence,
         initial_status: String,
@@ -758,7 +760,21 @@ impl ShellApp {
             .iter()
             .map(entry_from_record)
             .collect();
-        let engine_store = ryusei_host::EngineStore::from_settings(&settings).unwrap_or_default();
+        let mut engine_store =
+            ryusei_host::EngineStore::from_settings(&settings).unwrap_or_default();
+        let mut store_modified = false;
+        let records = engine_store.list().to_vec();
+        for record in records {
+            let repaired = ryusei_host::repair_katago_engine_record(&record);
+            if repaired != record {
+                engine_store.upsert(repaired);
+                store_modified = true;
+            }
+        }
+        if store_modified {
+            let _ = engine_store.save(&mut settings);
+            let _ = ryusei_host::persist_settings_store(&settings, &mut settings_persistence);
+        }
         let engine_roles = EngineRoleAssignments::from_settings(&settings);
         // Analysis is the principal board feedback loop. The legacy setting is
         // optional, so a fresh Ryusei profile must expose analysis markers
@@ -983,6 +999,7 @@ impl ShellApp {
             active_drawer: None,
             active_plugin_popover: None,
             review_menu_open: false,
+            expanded_engine_details: BTreeSet::new(),
             game_graph_context_node: None,
             installed_themes,
             legacy_asar_themes,
@@ -1766,6 +1783,15 @@ impl ShellApp {
         };
         self.text_inputs.engine_spec_input.set_text(&next);
         self.status = "已选择 GTP 引擎可执行文件；请确认规格后保存".into();
+        cx.notify();
+    }
+
+    pub fn toggle_engine_details_expanded(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.expanded_engine_details.contains(name) {
+            self.expanded_engine_details.remove(name);
+        } else {
+            self.expanded_engine_details.insert(name.to_owned());
+        }
         cx.notify();
     }
 

@@ -1168,6 +1168,16 @@ pub fn find_latest_installed_normal_katago_model(base: &Path) -> Option<PathBuf>
 
 pub fn find_installed_normal_katago_model(base: &Path) -> Option<PathBuf> {
     let models_dir = katago_storage_dir(base).join("models");
+    let unified = models_dir.join(KATAGO_UNIFIED_MODEL_NAME);
+    if unified.is_file()
+        && std::fs::read_link(&unified)
+            .ok()
+            .and_then(|target| target.file_name().map(|name| name.to_owned()))
+            .and_then(|name| name.to_str().map(str::to_owned))
+            .is_none_or(|name| !is_human_sl_weight_name(&name))
+    {
+        return Some(unified);
+    }
     let mut candidates = std::fs::read_dir(models_dir)
         .ok()?
         .flatten()
@@ -1230,9 +1240,25 @@ pub fn prepare_katago_human_sl_engine(
             "the selected human model is not recognized as an official HumanSL weight".to_owned(),
         );
     }
-    let environment =
-        ensure_katago_environment(base, KataGoModelTier::Balanced, Some(normal_model_path))
-            .map_err(|error| error.to_string())?;
+    let models_dir = katago_storage_dir(base).join("models");
+    let unified_model = models_dir.join(KATAGO_UNIFIED_MODEL_NAME);
+    let effective_normal_model = if unified_model.is_file()
+        && std::fs::read_link(&unified_model)
+            .ok()
+            .and_then(|target| target.file_name().map(|name| name.to_owned()))
+            .and_then(|name| name.to_str().map(str::to_owned))
+            .is_none_or(|name| !is_human_sl_weight_name(&name))
+    {
+        unified_model
+    } else {
+        normal_model_path.to_path_buf()
+    };
+    let environment = ensure_katago_environment(
+        base,
+        KataGoModelTier::Balanced,
+        Some(&effective_normal_model),
+    )
+    .map_err(|error| error.to_string())?;
     let config_path = katago_storage_dir(base)
         .join("configs")
         .join(KATAGO_HUMAN_SL_CONFIG_NAME);
@@ -1240,7 +1266,7 @@ pub fn prepare_katago_human_sl_engine(
         .map_err(|error| format!("could not write HumanSL config: {error}"))?;
     Ok(build_katago_human_sl_engine_record(
         &environment.executable,
-        normal_model_path,
+        &effective_normal_model,
         human_model_path,
         &config_path,
         environment.backend,
@@ -1312,24 +1338,49 @@ pub fn repair_katago_engine_record(record: &EngineRecord) -> EngineRecord {
         return record.clone();
     };
     let model_path = PathBuf::from(&model);
-    if model_path.is_file() {
+
+    // Locate the models directory associated with this record.
+    let models_dir = model_path.parent().map(Path::to_path_buf).or_else(|| {
+        discover_katago_model(&model_path).and_then(|p| p.parent().map(Path::to_path_buf))
+    });
+
+    let unified_model = models_dir
+        .as_ref()
+        .map(|dir| dir.join(KATAGO_UNIFIED_MODEL_NAME));
+    let has_unified = unified_model.as_ref().is_some_and(|p| p.is_file());
+
+    // Prefer the stable unified active-model link if present in the models directory.
+    let replacement = if has_unified {
+        unified_model.unwrap()
+    } else if model_path.is_file() {
+        model_path.clone()
+    } else if let Some(discovered) = discover_katago_model(&model_path) {
+        discovered
+    } else {
         return record.clone();
+    };
+
+    let human_model = extract_arg_value(&record.args, "-human-model");
+    let config = extract_arg_value(&record.args, "-config");
+
+    let mut new_args = format!("gtp -model \"{}\"", replacement.display());
+    if let Some(human) = human_model {
+        let human_path = PathBuf::from(&human);
+        let resolved_human = if human_path.is_file() {
+            human_path
+        } else if let Some(dir) = &models_dir {
+            find_installed_human_sl_model(dir.parent().unwrap_or(dir)).unwrap_or(human_path)
+        } else {
+            human_path
+        };
+        new_args.push_str(&format!(" -human-model \"{}\"", resolved_human.display()));
+    }
+    if let Some(cfg) = config {
+        new_args.push_str(&format!(" -config \"{}\"", cfg));
     }
 
-    let Some(replacement) = discover_katago_model(&model_path) else {
-        return record.clone();
-    };
-
     let mut repaired = record.clone();
-    let config = extract_arg_value(&record.args, "-config");
-    repaired.args = match config {
-        Some(config) => format!(
-            "gtp -model \"{}\" -config \"{}\"",
-            replacement.display(),
-            config
-        ),
-        None => format!("gtp -model \"{}\"", replacement.display()),
-    };
+    repaired.args = new_args;
     repaired
 }
 
@@ -1857,5 +1908,58 @@ mod tests {
             "engine record must format valid gtp args"
         );
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn repairs_humansl_record_to_unified_active_model() {
+        let base = std::env::temp_dir().join(format!(
+            "ryusei-katago-humansl-repair-{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&base).ok();
+        let models_dir = base.join("models");
+        std::fs::create_dir_all(&models_dir).expect("models dir exists");
+
+        let active_link = models_dir.join(KATAGO_UNIFIED_MODEL_NAME);
+        let hardcoded_model = models_dir.join("b10c384h6nbttflrs.bin.gz");
+        let human_model = models_dir.join("b18c384nbt-humanv0.bin.gz");
+        let config = base.join("human_sl_gtp.cfg");
+
+        std::fs::write(&active_link, b"unified").expect("active link writes");
+        std::fs::write(&hardcoded_model, b"hardcoded").expect("model writes");
+        std::fs::write(&human_model, b"human").expect("human model writes");
+        std::fs::write(&config, b"cfg").expect("config writes");
+
+        let old_record = EngineRecord::new(
+            "KataGo HumanSL (Apple Silicon (Metal GPU))",
+            "/opt/homebrew/bin/katago",
+            format!(
+                "gtp -model \"{}\" -human-model \"{}\" -config \"{}\"",
+                hardcoded_model.display(),
+                human_model.display(),
+                config.display()
+            ),
+        );
+
+        let repaired = repair_katago_engine_record(&old_record);
+        assert!(
+            repaired.args.contains("active-model.bin.gz"),
+            "must point -model to unified active model"
+        );
+        assert!(
+            !repaired.args.contains("b10c384h6nbttflrs"),
+            "must not keep hardcoded model"
+        );
+        assert!(
+            repaired.args.contains("-human-model"),
+            "must preserve -human-model"
+        );
+        assert!(
+            repaired.args.contains("b18c384nbt-humanv0"),
+            "must preserve human model path"
+        );
+        assert!(repaired.args.contains("-config"), "must preserve -config");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -130,6 +130,7 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
                     let edit_name = name.clone();
                     let test_name = name.clone();
                     let remove_name = name.clone();
+                    let toggle_name = name.clone();
                     let path = record.path.clone();
                     let details = if record.args.is_empty() {
                         record.commands.clone().unwrap_or_default()
@@ -138,6 +139,7 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
                     } else {
                         record.args.clone()
                     };
+                    let is_expanded = shell.expanded_engine_details.contains(&name);
                     div()
                         .p_2()
                         .rounded_md()
@@ -204,42 +206,67 @@ pub(crate) fn render_engine_manager(shell: &ShellApp, cx: &Context<ShellApp>) ->
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(rgb(shell.palette.muted))
-                                .child(path),
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(div().flex().flex_wrap().gap_1().children(
+                                    crate::engine_console::EngineRole::ALL.into_iter().map(
+                                        |role| {
+                                            let selected =
+                                                shell.engine_roles.get(role) == Some(name.as_str());
+                                            let assign_name = name.clone();
+                                            Button::new(gpui::SharedString::from(format!(
+                                                "engine-role-{name}-{}",
+                                                role.label()
+                                            )))
+                                            .xsmall()
+                                            .outline()
+                                            .selected(selected)
+                                            .label(role.label())
+                                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                                shell.assign_engine_role(role, &assign_name, cx);
+                                            }))
+                                        },
+                                    ),
+                                ))
+                                .child(
+                                    Button::new(gpui::SharedString::from(format!(
+                                        "engine-toggle-details-{name}"
+                                    )))
+                                    .xsmall()
+                                    .ghost()
+                                    .label(if is_expanded { "收起" } else { "参数" })
+                                    .on_click(cx.listener(move |shell, _, _, cx| {
+                                        shell.toggle_engine_details_expanded(&toggle_name, cx);
+                                    })),
+                                ),
                         )
-                        .when(!details.is_empty(), |this| {
+                        .when(is_expanded, |this| {
                             this.child(
                                 div()
-                                    .text_xs()
-                                    .text_color(rgb(shell.palette.subtle))
-                                    .child(details),
-                            )
-                        })
-                        .child(
-                            div().flex().flex_wrap().gap_1().children(
-                                crate::engine_console::EngineRole::ALL
-                                    .into_iter()
-                                    .map(|role| {
-                                        let selected =
-                                            shell.engine_roles.get(role) == Some(name.as_str());
-                                        let assign_name = name.clone();
-                                        Button::new(gpui::SharedString::from(format!(
-                                            "engine-role-{name}-{}",
-                                            role.label()
-                                        )))
-                                        .xsmall()
-                                        .outline()
-                                        .selected(selected)
-                                        .label(role.label())
-                                        .on_click(
-                                            cx.listener(move |shell, _, _, cx| {
-                                                shell.assign_engine_role(role, &assign_name, cx);
-                                            }),
+                                    .p_1p5()
+                                    .rounded_sm()
+                                    .bg(rgb(shell.palette.input))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(shell.palette.muted))
+                                            .child(path),
+                                    )
+                                    .when(!details.is_empty(), |this| {
+                                        this.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.subtle))
+                                                .child(details),
                                         )
                                     }),
-                            ),
-                        )
+                            )
+                        })
                 })),
         )
 }
