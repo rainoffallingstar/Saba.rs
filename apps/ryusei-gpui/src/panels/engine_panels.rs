@@ -582,7 +582,13 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
     } else {
         0.50
     };
-    let best_score_lead = shell.analysis.first().and_then(|e| e.score_lead);
+    // KataGo's managed config reports score lead from Black's perspective,
+    // matching the sidebar labels and the persisted SGF fields.
+    let best_score_lead = shell
+        .analysis
+        .first()
+        .and_then(|entry| entry.score_lead)
+        .filter(|lead| lead.is_finite());
     let left_tab = shell.left_sidebar_tab;
 
     div()

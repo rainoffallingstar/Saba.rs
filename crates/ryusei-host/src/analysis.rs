@@ -21,7 +21,8 @@ pub struct AnalysisEntry {
     /// GTP vertex of the candidate move (`pass` or `resign` possible).
     pub vertex: Option<String>,
     pub visits: u64,
-    /// Winrate in `[0, 1]` for the side the engine evaluates.
+    /// Winrate in `[0, 1]` for the configured reporting perspective. Sabaki's
+    /// managed KataGo config uses Black.
     pub winrate: f64,
     /// Estimated score lead in points, when the engine reports one.
     pub score_lead: Option<f64>,

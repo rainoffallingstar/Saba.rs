@@ -1548,6 +1548,7 @@ mod tests {
         assert!(cfg.contains("logSearchInfo = false"));
         assert!(cfg.contains("numSearchThreads = 8"));
         assert!(cfg.contains("nnMaxBatchSize = 16"));
+        assert!(cfg.contains("reportAnalysisWinratesAs = BLACK"));
         assert!(!cfg.contains("useOwnership"));
         assert!(!cfg.contains("useScoreLead"));
     }

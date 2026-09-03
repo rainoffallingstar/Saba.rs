@@ -2409,7 +2409,17 @@ impl ShellApp {
         }
         let analysis_snapshot = self.host.snapshot();
         let trial_move = self.trial_move.clone();
-        let (command, command_arguments) = analysis_command_from_settings(&self.settings);
+        let analysis_player = trial_move
+            .as_ref()
+            .map_or(analysis_snapshot.board.next_player, |move_dto| {
+                move_dto.color.opponent()
+            });
+        let (command, configured_arguments) = analysis_command_from_settings(&self.settings);
+        let command_arguments = crate::engine_console::analysis_command_for_player(
+            &command,
+            configured_arguments,
+            analysis_player,
+        );
         // KataGo limits search depth via `maxVisits`; 0 means unlimited.
         // Applied through `kata-set-param` right before the stream starts.
         let max_visits = self
@@ -2453,11 +2463,6 @@ impl ShellApp {
             return;
         }
 
-        let analysis_player = trial_move
-            .as_ref()
-            .map_or(analysis_snapshot.board.next_player, |move_dto| {
-                move_dto.color.opponent()
-            });
         let run = self
             .analysis_run
             .begin(analysis_snapshot.current_node_id.clone(), analysis_player);
@@ -3179,6 +3184,18 @@ impl ShellApp {
         let Some(player) = self.analysis_run.player_for_node(&snapshot.current_node_id) else {
             return false;
         };
+        self.persist_analysis_snapshot_for_node(&snapshot.current_node_id, player)
+    }
+
+    /// Persists the currently displayed analysis onto a specific node. Move
+    /// and navigation transitions call this before clearing candidates, so the
+    /// graph retains the completed prefix and grows incrementally while the
+    /// next position is being analysed.
+    fn persist_analysis_snapshot_for_node(
+        &mut self,
+        node_id: &ryusei_domain_core::NodeId,
+        player: Color,
+    ) -> bool {
         let completed_entries = self
             .analysis
             .iter()
@@ -3194,7 +3211,7 @@ impl ShellApp {
                 .host
                 .apply_transaction(
                     crate::node_inspector::create_property_transaction(
-                        &snapshot.current_node_id,
+                        node_id,
                         property,
                         vec![value],
                     ),
@@ -3214,7 +3231,7 @@ impl ShellApp {
                 .host
                 .apply_transaction(
                     crate::node_inspector::create_property_transaction(
-                        &snapshot.current_node_id,
+                        node_id,
                         CANDIDATES_PROPERTY,
                         vec![candidates],
                     ),
@@ -5897,6 +5914,17 @@ impl ShellApp {
         {
             self.cancel_whole_game_review(false, cx);
         }
+        // Save the live value on the node being left before navigation restores
+        // (and usually clears) the target node's candidate list. Without this,
+        // a streaming run cancelled for replay loses its last graph point and
+        // the graph flashes empty until the new search emits.
+        if self.trial_move.is_none() && !self.analysis.is_empty() {
+            let leaving_snapshot = self.host.snapshot();
+            self.persist_analysis_snapshot_for_node(
+                &leaving_snapshot.current_node_id,
+                leaving_snapshot.board.next_player,
+            );
+        }
         let transaction = ryusei_domain_core::GameTransaction {
             schema_version: ryusei_domain_core::CURRENT_TRANSACTION_SCHEMA_VERSION,
             transaction_type: ryusei_domain_core::GameTransactionType::Navigate,
@@ -6075,9 +6103,24 @@ impl ShellApp {
         vertex: Option<Vertex>,
         cx: &mut Context<Self>,
     ) {
+        let analysis_was_trial =
+            self.trial_move.is_some() || self.active_analysis_trial_move.is_some();
         self.hovered_candidate_vertex = None;
         self.trial_move = None;
         self.active_analysis_trial_move = None;
+        // The position has already advanced. Preserve the just-finished live
+        // evaluation on its parent before clearing board candidates; otherwise
+        // the graph has no historical point and flashes blank until the next
+        // search emits data.
+        let snapshot = self.host.snapshot();
+        let previous_node = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == snapshot.current_node_id)
+            .and_then(|node| node.parent_id.clone());
+        if !analysis_was_trial && let Some(previous_node) = previous_node {
+            self.persist_analysis_snapshot_for_node(&previous_node, color);
+        }
         self.analysis.clear();
         self.analysis_best_move = None;
         let start_idle_analysis = self.analysis_task.is_none() && self.analysis_enabled;
@@ -8688,10 +8731,8 @@ impl Render for ShellApp {
         let _path_label = file_state.path.as_deref().unwrap_or("no source file");
         let _availability = navigation_availability(&snapshot);
         let _position = position_label(&snapshot);
-        // `best_analysis_winrate` already returns Black perspective; the graph
-        // history builder performs the same conversion for White-to-play data,
-        // so feed it the engine's raw player-to-move fraction to avoid a double
-        // conversion.
+        // KataGo's managed config reports Black perspective directly. Keep the
+        // graph and sidebar on that same contract rather than flipping by turn.
         let live_player_winrate =
             best_analysis_entry(&self.analysis).map(|entry| entry.winrate.clamp(0.0, 1.0));
         let live_score_lead = best_analysis_entry(&self.analysis)
@@ -10332,7 +10373,7 @@ mod headless_smoke {
             let (command, arguments) =
                 crate::engine_console::analysis_command_from_settings(&shell.settings);
             assert_eq!(command, "kata-analyze");
-            assert_eq!(arguments, vec!["B", "100", "rootInfo", "true"]);
+            assert_eq!(arguments, vec!["100", "rootInfo", "true"]);
         });
     }
 
@@ -10608,6 +10649,129 @@ mod headless_smoke {
             shell.background_review = true;
             shell.push_analysis_batch(&run, vec![entry], cx);
             assert_eq!(shell.analysis.len(), 1);
+        });
+    }
+
+    #[test]
+    fn moving_preserves_the_previous_analysis_point_for_incremental_graphs() {
+        with_headless_shell_cx("incremental-analysis-graph", |shell, cx| {
+            shell.analysis_enabled = false;
+            let root_id = shell.host.snapshot().current_node_id.clone();
+            shell.analysis = vec![ryusei_host::AnalysisEntry {
+                id: Some(1),
+                vertex: Some("D4".to_owned()),
+                visits: 100,
+                winrate: 0.55,
+                score_lead: Some(2.5),
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            }];
+
+            let vertex = Vertex { column: 3, row: 3 };
+            let mut events = RecordingSink;
+            shell
+                .host
+                .play_move(ryusei_domain_core::Color::Black, Some(vertex), &mut events)
+                .expect("move advances the position");
+            shell.sync_engine_position(None, ryusei_domain_core::Color::Black, Some(vertex), cx);
+
+            assert!(
+                shell.analysis.is_empty(),
+                "stale board candidates are cleared"
+            );
+            let snapshot = shell.host.snapshot();
+            let root = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == root_id)
+                .expect("the analysed parent remains in history");
+            assert_eq!(root.properties.get("SBKV"), Some(&vec!["55.00".to_owned()]));
+            assert_eq!(root.properties.get("SBKS"), Some(&vec!["2.50".to_owned()]));
+
+            let history = crate::winrate_graph::winrate_history(
+                &snapshot,
+                None,
+                None,
+                snapshot.board.next_player,
+            );
+            assert_eq!(history[0].black_winrate, Some(0.55));
+            assert_eq!(history[0].black_score_lead, Some(2.5));
+            assert_eq!(history.last().and_then(|point| point.black_winrate), None);
+        });
+    }
+
+    #[test]
+    fn navigation_preserves_the_previous_analysis_point_for_incremental_graphs() {
+        with_headless_shell_cx("navigation-analysis-graph", |shell, cx| {
+            shell.set_session_mode(ryusei_domain_core::SessionMode::Match, cx);
+            shell.analysis_enabled = false;
+            let root_id = shell.host.snapshot().current_node_id.clone();
+            let mut events = RecordingSink;
+            shell
+                .host
+                .play_move(
+                    ryusei_domain_core::Color::Black,
+                    Some(Vertex { column: 3, row: 3 }),
+                    &mut events,
+                )
+                .expect("first move advances");
+            let first_id = shell.host.snapshot().current_node_id.clone();
+            shell
+                .host
+                .play_move(
+                    ryusei_domain_core::Color::White,
+                    Some(Vertex {
+                        column: 15,
+                        row: 15,
+                    }),
+                    &mut events,
+                )
+                .expect("second move advances");
+            let second_id = shell.host.snapshot().current_node_id.clone();
+
+            shell.navigate_to_node(root_id, cx);
+            shell.navigate_to_node(first_id.clone(), cx);
+            shell.analysis = vec![ryusei_host::AnalysisEntry {
+                id: Some(1),
+                vertex: Some("Q16".to_owned()),
+                visits: 100,
+                winrate: 0.47,
+                score_lead: Some(-1.5),
+                pv: Vec::new(),
+                is_during_search: false,
+                ownership: None,
+                prior: None,
+            }];
+            shell.navigate_to_node(second_id, cx);
+
+            let snapshot = shell.host.snapshot();
+            let first = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == first_id)
+                .expect("the leaving node remains on the current path");
+            assert_eq!(
+                first.properties.get("SBKV"),
+                Some(&vec!["47.00".to_owned()])
+            );
+            assert_eq!(
+                first.properties.get("SBKS"),
+                Some(&vec!["-1.50".to_owned()])
+            );
+            let history = crate::winrate_graph::winrate_history(
+                &snapshot,
+                None,
+                None,
+                snapshot.board.next_player,
+            );
+            let first_point = history
+                .iter()
+                .find(|point| point.node_id == first_id)
+                .expect("the leaving node is represented in the graph");
+            assert_eq!(first_point.black_winrate, Some(0.47));
+            assert_eq!(first_point.black_score_lead, Some(-1.5));
         });
     }
 

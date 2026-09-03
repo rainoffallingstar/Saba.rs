@@ -75,7 +75,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{Disableable, Selectable, Sizable};
 
 use crate::ShellApp;
-use crate::engine_console::{best_analysis_winrate, parse_gtp_vertex};
+use crate::engine_console::parse_gtp_vertex;
 use crate::goban_view::{pv_preview_points, render_goban, render_goban_click_layer};
 use crate::layout::SplitPane;
 use crate::settings::ThemeChoice;
@@ -1897,14 +1897,10 @@ pub fn render_bottom_deck_panel(
                 .flex_col()
                 .child(match active_tab {
                     crate::BottomDeckTab::WinrateGraph => {
-                        let live_player_winrate = if shell.analysis.is_empty() {
-                            None
-                        } else {
-                            Some(best_analysis_winrate(
-                                &shell.analysis,
-                                snapshot.board.next_player,
-                            ))
-                        };
+                        // KataGo's managed config already reports Black perspective. Pass the
+                        // raw engine value here and avoid any turn-based flip.
+                        let live_player_winrate =
+                            crate::engine_console::live_analysis_winrate(&shell.analysis);
                         let live_score_lead =
                             crate::engine_console::best_analysis_entry(&shell.analysis)
                                 .and_then(|entry| entry.score_lead)

@@ -370,20 +370,17 @@ pub fn best_analysis_move(
 
 /// The black winrate fraction of the best candidate, for the winrate bar.
 ///
-/// Engines evaluate from the perspective of the player to move; when it is
-/// White to play, the reported winrate is converted to the black-perspective
-/// fraction (`1 - winrate`) so the bar always reads "black vs white".
+/// Sabaki-managed KataGo configs set `reportAnalysisWinratesAs = BLACK`, so
+/// every parsed analysis value is already from Black's perspective. Keep the
+/// color parameter for API compatibility with existing callers; it must not be
+/// used to flip the value a second time.
 pub fn best_analysis_winrate(
     entries: &[ryusei_host::AnalysisEntry],
-    next_player: ryusei_domain_core::Color,
+    _next_player: ryusei_domain_core::Color,
 ) -> f64 {
-    let raw = best_analysis_entry(entries)
+    best_analysis_entry(entries)
         .map(|entry| entry.winrate.clamp(0.0, 1.0))
-        .unwrap_or(0.0);
-    match next_player {
-        ryusei_domain_core::Color::Black => raw,
-        ryusei_domain_core::Color::White => 1.0 - raw,
-    }
+        .unwrap_or(0.0)
 }
 
 /// Returns the strongest candidate using visits, then a stable vertex
@@ -400,6 +397,13 @@ pub fn best_analysis_entry(
                 .cmp(&right.visits)
                 .then_with(|| right.vertex.cmp(&left.vertex))
         })
+}
+
+/// Returns the raw configured-perspective winrate for graph rendering. With
+/// Sabaki-managed KataGo this is already Black perspective; the helper exists
+/// to keep graph wiring from accidentally calling a turn-based conversion.
+pub fn live_analysis_winrate(entries: &[ryusei_host::AnalysisEntry]) -> Option<f64> {
+    best_analysis_entry(entries).map(|entry| entry.winrate.clamp(0.0, 1.0))
 }
 
 /// Merges a batch of streamed analysis entries into the current set, keyed by
@@ -433,8 +437,9 @@ pub fn merge_analysis_entries(
 
 /// The analysis command for the streaming analyze button, from the
 /// `engines.analyze_commands` setting (first entry wins); defaults to the
-/// official KataGo streaming command when the setting is absent or empty. An
-/// entry may carry valid GTP arguments (`"kata-analyze B 100 rootInfo true"`);
+/// official KataGo streaming command when the setting is absent or empty. The
+/// default omits the optional color so KataGo uses the actual side to move. An
+/// entry may carry valid GTP arguments (for example, `"kata-analyze B 100 rootInfo true"`);
 /// the command name and its arguments are returned separately so transports
 /// receive them verbatim.
 pub fn analysis_command_from_settings(
@@ -447,11 +452,33 @@ pub fn analysis_command_from_settings(
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
         .filter(|command| !command.trim().is_empty())
-        .unwrap_or_else(|| "kata-analyze B 100 rootInfo true".to_owned());
+        .unwrap_or_else(|| "kata-analyze 100 rootInfo true".to_owned());
     let mut tokens = ryusei_host::parse_engine_arguments(&entry).into_iter();
     let name = tokens.next().unwrap_or_else(|| "kata-analyze".to_owned());
     let arguments = tokens.collect();
     (name, arguments)
+}
+
+/// Reconciles a persisted KataGo analysis command with the actual position.
+/// Older settings stored a hard-coded `B`, which makes KataGo analyze the wrong
+/// side whenever White is to move. Replace an explicit color with the requested
+/// position color while preserving all other user arguments.
+pub fn analysis_command_for_player(
+    command: &str,
+    mut arguments: Vec<String>,
+    player: ryusei_domain_core::Color,
+) -> Vec<String> {
+    if command == "kata-analyze"
+        && arguments
+            .first()
+            .is_some_and(|argument| argument == "B" || argument == "W")
+    {
+        arguments[0] = match player {
+            ryusei_domain_core::Color::Black => "B".to_owned(),
+            ryusei_domain_core::Color::White => "W".to_owned(),
+        };
+    }
+    arguments
 }
 
 /// Parses an engine's command-line arguments string into individual argument tokens,
@@ -645,18 +672,38 @@ mod tests {
     }
 
     #[test]
+    fn analysis_command_uses_the_actual_side_to_move_for_katago() {
+        assert_eq!(
+            super::analysis_command_for_player(
+                "kata-analyze",
+                vec![
+                    "B".to_owned(),
+                    "100".to_owned(),
+                    "rootInfo".to_owned(),
+                    "true".to_owned()
+                ],
+                ryusei_domain_core::Color::White,
+            ),
+            vec!["W", "100", "rootInfo", "true"],
+        );
+        assert_eq!(
+            super::analysis_command_for_player(
+                "kata-analyze",
+                vec!["100".to_owned(), "rootInfo".to_owned(), "true".to_owned()],
+                ryusei_domain_core::Color::White,
+            ),
+            vec!["100", "rootInfo", "true"],
+        );
+    }
+
+    #[test]
     fn analysis_command_reads_the_configured_setting() {
         let mut settings = ryusei_host::SettingsStore::default();
         assert_eq!(
             super::analysis_command_from_settings(&settings),
             (
                 "kata-analyze".to_owned(),
-                vec![
-                    "B".to_owned(),
-                    "100".to_owned(),
-                    "rootInfo".to_owned(),
-                    "true".to_owned(),
-                ]
+                vec!["100".to_owned(), "rootInfo".to_owned(), "true".to_owned(),]
             )
         );
 
@@ -716,12 +763,7 @@ mod tests {
             super::analysis_command_from_settings(&settings),
             (
                 "kata-analyze".to_owned(),
-                vec![
-                    "B".to_owned(),
-                    "100".to_owned(),
-                    "rootInfo".to_owned(),
-                    "true".to_owned(),
-                ]
+                vec!["100".to_owned(), "rootInfo".to_owned(), "true".to_owned(),]
             )
         );
     }
@@ -866,13 +908,14 @@ mod tests {
     fn best_analysis_move_prefers_the_most_visited_candidate() {
         let entries = ryusei_host::parse_analysis_response(
             "lz-analyze",
-            "info move D4 visits 90 winrate 0.44\ninfo move Q16 visits 320 winrate 0.55",
+            "info move D4 visits 90 winrate 0.44\ninfo move Q16 visits 320 winrate 0.45",
         );
         assert_eq!(best_analysis_move(&entries, 19), Some((15, 3)));
         assert!(
-            (best_analysis_winrate(&entries, ryusei_domain_core::Color::Black) - 0.55).abs() < 1e-9
+            (best_analysis_winrate(&entries, ryusei_domain_core::Color::Black) - 0.45).abs() < 1e-9
         );
-        // With White to play the bar must flip to the black perspective.
+        // The managed KataGo config already reports Black perspective, even
+        // when White is to play; never flip this value based on turn.
         assert!(
             (best_analysis_winrate(&entries, ryusei_domain_core::Color::White) - 0.45).abs() < 1e-9
         );

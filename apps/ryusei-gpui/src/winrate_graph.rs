@@ -65,24 +65,15 @@ pub fn graph_index_from_x(x: f32, width: f32, point_count: usize) -> Option<usiz
 
 /// Converts a completed Analysis-role result into original Sabaki SGF fields.
 /// `SBKV` is stored as Black's percent; `SBKS` is Black's signed score lead.
+/// Sabaki-managed KataGo reports both values from Black's perspective, so no
+/// player-to-move inversion is appropriate here.
 pub fn analysis_sgf_properties(
     entry: &ryusei_host::AnalysisEntry,
-    player: Color,
+    _player: Color,
 ) -> Vec<(&'static str, String)> {
-    let black_winrate = match player {
-        Color::Black => entry.winrate,
-        Color::White => 1.0 - entry.winrate,
-    }
-    .clamp(0.0, 1.0);
+    let black_winrate = entry.winrate.clamp(0.0, 1.0);
     let mut properties = vec![("SBKV", format!("{:.2}", black_winrate * 100.0))];
-    if let Some(lead) = entry
-        .score_lead
-        .map(|lead| match player {
-            Color::Black => lead,
-            Color::White => -lead,
-        })
-        .filter(|lead| lead.is_finite())
-    {
+    if let Some(lead) = entry.score_lead.filter(|lead| lead.is_finite()) {
         properties.push(("SBKS", format!("{lead:.2}")));
     }
     properties
@@ -219,13 +210,13 @@ fn black_winrate_from_node(snapshot: &GameSnapshot, node_id: &str) -> Option<f64
 
 /// Builds root-to-current history. A live candidate augments the current point
 /// only when the SGF does not already carry a persisted value. `live_winrate`
-/// and `live_score_lead` are both from the engine's player-to-move perspective;
-/// this function converts them to Black perspective for the graph.
+/// and `live_score_lead` are already from Black's perspective because the
+/// managed KataGo config requests `reportAnalysisWinratesAs = BLACK`.
 pub fn winrate_history(
     snapshot: &GameSnapshot,
     live_winrate: Option<f64>,
     live_score_lead: Option<f64>,
-    live_player: Color,
+    _live_player: Color,
 ) -> Vec<WinratePoint> {
     let mut path = Vec::new();
     let mut cursor = Some(snapshot.current_node_id.clone());
@@ -242,22 +233,10 @@ pub fn winrate_history(
         .enumerate()
         .map(|(move_number, node_id)| {
             let is_current = node_id == snapshot.current_node_id;
-            let black_winrate = black_winrate_from_node(snapshot, &node_id).or_else(|| {
-                is_current
-                    .then(|| match live_player {
-                        Color::Black => live_winrate,
-                        Color::White => live_winrate.map(|value| 1.0 - value),
-                    })
-                    .flatten()
-            });
-            let black_score_lead = finite_property(snapshot, &node_id, "SBKS").or_else(|| {
-                is_current
-                    .then(|| match live_player {
-                        Color::Black => live_score_lead,
-                        Color::White => live_score_lead.map(|value| -value),
-                    })
-                    .flatten()
-            });
+            let black_winrate = black_winrate_from_node(snapshot, &node_id)
+                .or_else(|| is_current.then_some(live_winrate).flatten());
+            let black_score_lead = finite_property(snapshot, &node_id, "SBKS")
+                .or_else(|| is_current.then_some(live_score_lead).flatten());
             WinratePoint {
                 node_id,
                 move_number,
@@ -278,16 +257,42 @@ mod tests {
     use ryusei_domain_core::{Color, GameDocument};
 
     #[test]
-    fn reads_sgf_history_and_converts_white_live_analysis() {
+    fn reads_sgf_history_with_black_perspective_live_analysis() {
         let snapshot = GameDocument::from_sgf("(;SZ[5];B[aa]SBKV[0.6];W[bb])")
             .unwrap()
             .snapshot();
         let points = winrate_history(&snapshot, Some(0.3), Some(1.5), Color::White);
         assert_eq!(points.len(), 3);
         assert_eq!(points[1].black_winrate, Some(0.6));
-        assert_eq!(points[2].black_winrate, Some(0.7));
-        assert_eq!(points[2].black_score_lead, Some(-1.5));
+        assert_eq!(points[2].black_winrate, Some(0.3));
+        assert_eq!(points[2].black_score_lead, Some(1.5));
         assert!(points[2].is_current);
+    }
+
+    #[test]
+    fn panel_composition_does_not_double_convert_white_live_winrate() {
+        use crate::engine_console::live_analysis_winrate;
+
+        // White to move after one black stone. KataGo's managed config reports
+        // Black's winrate even though the requested move color is White.
+        let entries = vec![ryusei_host::AnalysisEntry {
+            id: None,
+            vertex: Some("Q16".to_owned()),
+            visits: 100,
+            winrate: 0.58,
+            score_lead: Some(0.5),
+            pv: Vec::new(),
+            is_during_search: false,
+            ownership: None,
+            prior: None,
+        }];
+        let snapshot = GameDocument::from_sgf("(;SZ[19];B[dd])")
+            .unwrap()
+            .snapshot();
+        let live_player_winrate = live_analysis_winrate(&entries);
+        let points = winrate_history(&snapshot, live_player_winrate, None, Color::White);
+        let current = points.iter().find(|point| point.is_current).unwrap();
+        assert!((current.black_winrate.unwrap() - 0.58).abs() < 1e-9);
     }
 
     #[test]
@@ -327,7 +332,7 @@ mod tests {
         };
         assert_eq!(
             analysis_sgf_properties(&entry, Color::White),
-            vec![("SBKV", "75.00".to_owned()), ("SBKS", "-3.50".to_owned())]
+            vec![("SBKV", "25.00".to_owned()), ("SBKS", "3.50".to_owned())]
         );
         let invalid_score = ryusei_host::AnalysisEntry {
             score_lead: Some(f64::NAN),
