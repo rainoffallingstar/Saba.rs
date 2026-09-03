@@ -266,10 +266,12 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                         .text_color(rgb(shell.palette.muted))
                         .child(format!(
                             "统一模型: {}",
-                            shell.katago_local
+                            shell
+                                .katago_local
                                 .as_ref()
-                                .map(|local| local.unified_model.display().to_string())
-                                .unwrap_or_else(|| "尚未初始化".to_owned()),
+                                .and_then(|local| local.unified_model.file_name())
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("尚未初始化"),
                         )),
                 )
                 .child(
@@ -341,26 +343,42 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                     let downloaded = weight.installed;
                     let active = weight.active;
                     let human_sl = ryusei_host::is_human_sl_weight_name(&name);
+                    // Display only the leading 10 characters so long network
+                    // file names never push the trailing action buttons off-screen.
+                    let short_name = if name.chars().count() > 10 {
+                        format!("{}…", name.chars().take(10).collect::<String>())
+                    } else {
+                        name.clone()
+                    };
                     div()
                         .flex()
                         .items_center()
+                        .justify_between()
                         .gap_2()
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
                                 .text_xs()
                                 .text_color(rgb(if active { 0x62d68a } else { 0xc5c5ca }))
                                 .child(format!(
                                     "{}{}{}",
                                     if active { "● " } else { "○ " },
-                                    name,
-                                    if human_sl { " · HumanSL" } else if downloaded { " · 已下载" } else { " · 官网" },
+                                    short_name,
+                                    if human_sl {
+                                        " · HumanSL"
+                                    } else if downloaded {
+                                        " · 已下载"
+                                    } else {
+                                        " · 官网"
+                                    },
                                 )),
                         )
                         .child(if downloaded {
                             Button::new(("katago-activate-weight", index))
                                 .small()
                                 .ghost()
+                                .tooltip(name.clone())
                                 .label(if human_sl {
                                     "启用"
                                 } else if active {
@@ -376,6 +394,7 @@ pub(crate) fn render_katago_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> 
                             Button::new(("katago-download-weight", index))
                                 .small()
                                 .outline()
+                                .tooltip(name.clone())
                                 .label("下载")
                                 .on_click(cx.listener(move |shell, _, _, cx| {
                                     shell.download_katago_weight_asset(&name, cx);
