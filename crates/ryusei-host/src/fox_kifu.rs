@@ -405,7 +405,44 @@ pub fn parse_fox_sgf_response(json_str: &str) -> Result<String, String> {
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "missing chess field in response".to_owned())?;
 
-    Ok(sanitize_fox_sgf(sgf))
+    Ok(normalize_fox_komi(&sanitize_fox_sgf(sgf)))
+}
+
+/// Normalizes the Tencent Weiqi SGF komi encoding. The Tencent API stores komi
+/// as an integer in 子 (stones) × 100 (e.g. `375` = 3.75 子 = 7.5 目), while the
+/// SGF `KM` property is expressed in 目 (points). Convert integer `KM` values to
+/// 目 by dividing by 50 so the imported game shows the correct komi.
+fn normalize_fox_komi(sgf: &str) -> String {
+    let mut result = String::with_capacity(sgf.len());
+    let mut rest = sgf;
+    while let Some(pos) = rest.find("KM[") {
+        result.push_str(&rest[..pos + 3]);
+        rest = &rest[pos + 3..];
+        if let Some(close) = rest.find(']') {
+            let value = &rest[..close];
+            if let Ok(int_val) = value.parse::<i64>() {
+                let komi = int_val as f64 / 50.0;
+                result.push_str(&format_komi(komi));
+            } else {
+                result.push_str(value);
+            }
+            result.push(']');
+            rest = &rest[close + 1..];
+        } else {
+            result.push_str(rest);
+            rest = "";
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+fn format_komi(komi: f64) -> String {
+    if (komi - komi.trunc()).abs() < f64::EPSILON {
+        format!("{}", komi as i64)
+    } else {
+        format!("{:.1}", komi)
+    }
 }
 
 /// Sanitizes raw SGF text from Fox Go server by stripping BOM and stray backslashes.
@@ -527,6 +564,25 @@ mod tests {
         assert!(sgf.contains("PB[柯洁]"));
         assert!(sgf.contains("PW[申真谞]"));
         assert!(sgf.contains(";B[dp]"));
+    }
+
+    #[test]
+    fn normalizes_tencent_komi_from_stones_to_points() {
+        // Tencent stores komi as 子 × 100: 375 = 3.75 子 = 7.5 目.
+        let json = r#"{"result":0,"chess":"(;GM[1]SZ[19]KM[375]HA[0]RU[Chinese];B[pd])"}"#;
+        let sgf = parse_fox_sgf_response(json).expect("valid SGF parses");
+        assert!(sgf.contains("KM[7.5]"), "komi must be 7.5 目, got: {sgf}");
+        assert!(!sgf.contains("KM[375]"), "raw 子 encoding must be removed");
+
+        // Zero komi (handicap) stays zero.
+        let zero = r#"{"result":0,"chess":"(;SZ[19]KM[0]HA[2];B[pd])"}"#;
+        let zero_sgf = parse_fox_sgf_response(zero).expect("valid SGF parses");
+        assert!(zero_sgf.contains("KM[0]"));
+
+        // Decimal komi (already in 目) is left untouched.
+        let decimal = r#"{"result":0,"chess":"(;SZ[19]KM[6.5];B[pd])"}"#;
+        let decimal_sgf = parse_fox_sgf_response(decimal).expect("valid SGF parses");
+        assert!(decimal_sgf.contains("KM[6.5]"));
     }
 
     #[test]
