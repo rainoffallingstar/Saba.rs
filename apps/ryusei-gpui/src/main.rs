@@ -258,6 +258,11 @@ struct ShellApp {
     engine_roles: EngineRoleAssignments,
     analysis: Vec<ryusei_host::AnalysisEntry>,
     analysis_best_move: Option<Vertex>,
+    /// Last known Black-perspective winrate, kept across analysis restarts so
+    /// the sidebar bar does not snap back to 50% while the engine re-searches.
+    last_analysis_winrate: Option<f64>,
+    /// Last known Black-perspective score lead, likewise kept across restarts.
+    last_analysis_score_lead: Option<f64>,
     analysis_run: ryusei_host::AnalysisRunController,
     analysis_task: Option<Task<()>>,
     /// Timed playback through the active main line. Kept separate from analysis
@@ -879,6 +884,8 @@ impl ShellApp {
             engine_roles,
             analysis: active_tab_analysis,
             analysis_best_move: active_tab_analysis_best_move,
+            last_analysis_winrate: None,
+            last_analysis_score_lead: None,
             analysis_run: ryusei_host::AnalysisRunController::default(),
             analysis_task: None,
             autoplay_task: None,
@@ -3248,6 +3255,11 @@ impl ShellApp {
     /// Stores an analysis set and refreshes the best-move marker and status.
     fn set_analysis(&mut self, entries: Vec<ryusei_host::AnalysisEntry>, cx: &mut Context<Self>) {
         self.analysis = entries;
+        self.last_analysis_winrate =
+            best_analysis_entry(&self.analysis).map(|entry| entry.winrate.clamp(0.0, 1.0));
+        self.last_analysis_score_lead = best_analysis_entry(&self.analysis)
+            .and_then(|entry| entry.score_lead)
+            .filter(|lead| lead.is_finite());
         let board_size = self.host.snapshot().board.width;
         self.analysis_best_move = best_analysis_move(&self.analysis, board_size)
             .map(|(column, row)| Vertex { column, row });
@@ -5992,6 +6004,11 @@ impl ShellApp {
         match persisted {
             Some(value) if !value.is_empty() => {
                 let entries = deserialize_analysis_candidates(&value);
+                self.last_analysis_winrate =
+                    best_analysis_entry(&entries).map(|entry| entry.winrate.clamp(0.0, 1.0));
+                self.last_analysis_score_lead = best_analysis_entry(&entries)
+                    .and_then(|entry| entry.score_lead)
+                    .filter(|lead| lead.is_finite());
                 self.analysis = entries.clone();
                 let board_size = snapshot.board.width;
                 self.analysis_best_move = best_analysis_move(&entries, board_size)

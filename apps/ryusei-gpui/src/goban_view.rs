@@ -897,7 +897,7 @@ pub fn render_goban_with_id(
                 .justify_center()
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(px((size * 0.30).clamp(8.0, 16.0)))
                         .font_weight(FontWeight::BOLD)
                         .text_color(rgb(0xffffff))
                         .line_height(px(size * 0.40))
@@ -905,7 +905,7 @@ pub fn render_goban_with_id(
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(px((size * 0.26).clamp(7.0, 13.0)))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(0xe0f2fe))
                         .line_height(px(size * 0.36))

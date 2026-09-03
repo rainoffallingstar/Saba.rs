@@ -2085,7 +2085,10 @@ pub fn render_goban_area(
                     .map(|(column, row)| ryusei_domain_core::Vertex { column, row })?;
                 Some(crate::goban_view::AnalysisCandidate {
                     vertex,
-                    winrate_percent: entry.winrate * 100.0,
+                    winrate_percent: crate::engine_console::side_to_move_winrate(
+                        entry.winrate,
+                        snapshot.board.next_player,
+                    ) * 100.0,
                     visits: entry.visits,
                     score_lead: entry.score_lead,
                     is_best: index == 0 || Some(vertex) == best_move,

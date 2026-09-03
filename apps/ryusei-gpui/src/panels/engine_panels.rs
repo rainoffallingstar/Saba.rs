@@ -2,9 +2,12 @@
 //! sidebar, engine-config section, node inspector and the right analysis
 //! preview. Extracted from `panels/mod.rs` during the architecture convergence.
 
+use std::time::Duration;
+
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, Stateful,
-    StatefulInteractiveElement, div, prelude::*, px, rgb,
+    Animation, AnimationExt as _, Context, Div, FontWeight, InteractiveElement, IntoElement as _,
+    MouseButton, MouseDownEvent, Stateful, StatefulInteractiveElement, div, prelude::*,
+    pulsating_between, px, rgb,
 };
 use gpui_component::badge::Badge;
 use gpui_component::button::{Button, ButtonVariants};
@@ -580,7 +583,9 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
     let live_winrate = if !shell.analysis.is_empty() {
         best_analysis_winrate(&shell.analysis, snapshot.board.next_player)
     } else {
-        0.50
+        // Keep the last known value across an engine restart instead of snapping
+        // back to an even 50% while the new search is still warming up.
+        shell.last_analysis_winrate.unwrap_or(0.50)
     };
     // KataGo's managed config reports score lead from Black's perspective,
     // matching the sidebar labels and the persisted SGF fields.
@@ -588,7 +593,8 @@ pub fn render_left_engine_sidebar(shell: &ShellApp, cx: &Context<ShellApp>) -> S
         .analysis
         .first()
         .and_then(|entry| entry.score_lead)
-        .filter(|lead| lead.is_finite());
+        .filter(|lead| lead.is_finite())
+        .or(shell.last_analysis_score_lead);
     let left_tab = shell.left_sidebar_tab;
 
     div()
@@ -1844,174 +1850,240 @@ pub fn render_analysis_preview_panel(
                     "推演中".to_owned()
                 })),
         )
-        .child(div().flex().flex_col().gap_1p5().children(
-            candidates.iter().take(5).enumerate().map(|(idx, entry)| {
-                let rank = idx + 1;
-                let vertex_str = entry.vertex.clone().unwrap_or_else(|| "pass".to_owned());
-                let winrate_str = format!("{:.1}%", entry.winrate * 100.0);
-                let lead_str = entry
-                    .score_lead
-                    .map(|l| format!("{:+.1}目", l))
-                    .unwrap_or_default();
-                // Policy-network prior probability (design: 先验概率 Prior %).
-                let prior_str = entry.prior.map(|p| format!("先验 {:.0}%", p * 100.0));
-                let is_hovered = shell.hovered_candidate_vertex.as_deref() == Some(&vertex_str);
-                let is_top = rank == 1;
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .children((0..5).map(|idx| {
+                    let rank = idx + 1;
+                    match candidates.get(idx) {
+                        Some(entry) => {
+                            let vertex_str =
+                                entry.vertex.clone().unwrap_or_else(|| "pass".to_owned());
+                            // Candidate cards read as "the player to move's chances", so
+                            // convert the Black-perspective KataGo winrate for White turns.
+                            let winrate_str = format!(
+                                "{:.1}%",
+                                crate::engine_console::side_to_move_winrate(
+                                    entry.winrate,
+                                    snapshot.board.next_player,
+                                ) * 100.0
+                            );
+                            let lead_str = entry
+                                .score_lead
+                                .map(|l| format!("{:+.1}目", l))
+                                .unwrap_or_default();
+                            // Policy-network prior probability (design: 先验概率 Prior %).
+                            let prior_str = entry.prior.map(|p| format!("先验 {:.0}%", p * 100.0));
+                            let is_hovered =
+                                shell.hovered_candidate_vertex.as_deref() == Some(&vertex_str);
+                            let is_top = rank == 1;
 
-                let v_str_for_hover = vertex_str.clone();
-                let v_str_for_move = vertex_str.clone();
-                let v_str_for_click = vertex_str.clone();
+                            let v_str_for_hover = vertex_str.clone();
+                            let v_str_for_move = vertex_str.clone();
+                            let v_str_for_click = vertex_str.clone();
 
-                // Design: the top-1 candidate reads as a tinted accent card
-                // (accent 8% background + accent ring); others stay neutral and
-                // lift on hover. Hover also drives the on-board PV preview.
-                let card_bg = if is_hovered {
-                    shell.palette.button_active
-                } else {
-                    shell.palette.input // accent ring (is_top) or neutral
-                };
-                div()
-                    .id(gpui::SharedString::from(format!("candidate-card-{rank}")))
-                    .p_1p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(if is_hovered || is_top {
-                        shell.palette.accent
-                    } else {
-                        shell.palette.border
-                    }))
-                    .bg(rgb(card_bg))
-                    .cursor_pointer()
-                    .hover(|style| {
-                        if is_top || is_hovered {
-                            style
-                        } else {
-                            style.bg(rgb(shell.palette.button_active))
+                            // Design: the top-1 candidate reads as a tinted accent card
+                            // (accent 8% background + accent ring); others stay neutral and
+                            // lift on hover. Hover also drives the on-board PV preview.
+                            let card_bg = if is_hovered {
+                                shell.palette.button_active
+                            } else {
+                                shell.palette.input // accent ring (is_top) or neutral
+                            };
+                            div()
+                                .id(gpui::SharedString::from(format!("candidate-card-{rank}")))
+                                .p_1p5()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(if is_hovered || is_top {
+                                    shell.palette.accent
+                                } else {
+                                    shell.palette.border
+                                }))
+                                .bg(rgb(card_bg))
+                                .cursor_pointer()
+                                .hover(|style| {
+                                    if is_top || is_hovered {
+                                        style
+                                    } else {
+                                        style.bg(rgb(shell.palette.button_active))
+                                    }
+                                })
+                                .on_mouse_move(cx.listener(move |shell, _, _, cx| {
+                                    shell.set_hovered_candidate(Some(v_str_for_move.clone()), cx);
+                                }))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell, _, _, cx| {
+                                        shell.set_hovered_candidate(
+                                            Some(v_str_for_hover.clone()),
+                                            cx,
+                                        );
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .w(px(18.0))
+                                                        .h(px(18.0))
+                                                        .rounded_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .bg(rgb(if is_top {
+                                                            shell.palette.accent
+                                                        } else {
+                                                            shell.palette.button
+                                                        }))
+                                                        .text_color(rgb(if is_top {
+                                                            0xffffff
+                                                        } else {
+                                                            shell.palette.text
+                                                        }))
+                                                        .child(rank.to_string()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.text))
+                                                        .child(vertex_str.clone()),
+                                                )
+                                                .child(div().size(px(7.0)).rounded_full().bg(rgb(
+                                                    if is_top {
+                                                        shell.palette.success
+                                                    } else if rank <= 3 {
+                                                        shell.palette.info
+                                                    } else {
+                                                        shell.palette.muted
+                                                    },
+                                                ))),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(rgb(shell.palette.text))
+                                                        .child(winrate_str),
+                                                )
+                                                .children(prior_str.map(|prior| {
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(shell.palette.muted))
+                                                        .child(prior)
+                                                }))
+                                                .children((!lead_str.is_empty()).then(|| {
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(
+                                                            if entry.score_lead.unwrap_or(0.0)
+                                                                >= 0.0
+                                                            {
+                                                                shell.palette.success
+                                                            } else {
+                                                                shell.palette.danger_text
+                                                            },
+                                                        ))
+                                                        .child(lead_str)
+                                                }))
+                                                .child(
+                                                    Button::new(gpui::SharedString::from(format!(
+                                                        "btn-pv-{rank}"
+                                                    )))
+                                                    .small()
+                                                    .ghost()
+                                                    .child(
+                                                        if shell.pv_animation.as_ref().is_some_and(
+                                                            |(vertex, _)| {
+                                                                vertex == &v_str_for_click
+                                                            },
+                                                        ) {
+                                                            icon_label(
+                                                                ShellIcon::Stop,
+                                                                "停止",
+                                                                shell.palette.muted,
+                                                            )
+                                                        } else {
+                                                            icon_label(
+                                                                ShellIcon::Play,
+                                                                "推演 PV",
+                                                                shell.palette.muted,
+                                                            )
+                                                        },
+                                                    )
+                                                    .tooltip("400ms 逐手推演主变序列")
+                                                    .on_click(cx.listener(
+                                                        move |shell, _, _, cx| {
+                                                            shell.toggle_pv_animation(
+                                                                v_str_for_click.clone(),
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                ),
+                                        ),
+                                )
+                                .into_any_element()
                         }
-                    })
-                    .on_mouse_move(cx.listener(move |shell, _, _, cx| {
-                        shell.set_hovered_candidate(Some(v_str_for_move.clone()), cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |shell, _, _, cx| {
-                            shell.set_hovered_candidate(Some(v_str_for_hover.clone()), cx);
-                        }),
-                    )
-                    .child(
-                        div()
+                        None => div()
+                            .id(gpui::SharedString::from(format!("candidate-card-{rank}")))
+                            .p_1p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(shell.palette.border))
+                            .bg(rgb(shell.palette.input))
                             .flex()
                             .items_center()
-                            .justify_between()
+                            .gap_2()
                             .child(
                                 div()
+                                    .w(px(18.0))
+                                    .h(px(18.0))
+                                    .rounded_full()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .w(px(18.0))
-                                            .h(px(18.0))
-                                            .rounded_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .bg(rgb(if is_top {
-                                                shell.palette.accent
-                                            } else {
-                                                shell.palette.button
-                                            }))
-                                            .text_color(rgb(if is_top {
-                                                0xffffff
-                                            } else {
-                                                shell.palette.text
-                                            }))
-                                            .child(rank.to_string()),
-                                    )
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_xs()
-                                            .text_color(rgb(shell.palette.text))
-                                            .child(vertex_str.clone()),
-                                    )
-                                    .child(div().size(px(7.0)).rounded_full().bg(rgb(if is_top {
-                                        shell.palette.success
-                                    } else if rank <= 3 {
-                                        shell.palette.info
-                                    } else {
-                                        shell.palette.muted
-                                    }))),
+                                    .justify_center()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .bg(rgb(shell.palette.button))
+                                    .text_color(rgb(shell.palette.text))
+                                    .child(rank.to_string()),
                             )
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(rgb(shell.palette.text))
-                                            .child(winrate_str),
-                                    )
-                                    .children(prior_str.map(|prior| {
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(shell.palette.muted))
-                                            .child(prior)
-                                    }))
-                                    .children((!lead_str.is_empty()).then(|| {
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(
-                                                if entry.score_lead.unwrap_or(0.0) >= 0.0 {
-                                                    shell.palette.success
-                                                } else {
-                                                    shell.palette.danger_text
-                                                },
-                                            ))
-                                            .child(lead_str)
-                                    }))
-                                    .child(
-                                        Button::new(gpui::SharedString::from(format!(
-                                            "btn-pv-{rank}"
-                                        )))
-                                        .small()
-                                        .ghost()
-                                        .child(
-                                            if shell.pv_animation.as_ref().is_some_and(
-                                                |(vertex, _)| vertex == &v_str_for_click,
-                                            ) {
-                                                icon_label(
-                                                    ShellIcon::Stop,
-                                                    "停止",
-                                                    shell.palette.muted,
-                                                )
-                                            } else {
-                                                icon_label(
-                                                    ShellIcon::Play,
-                                                    "推演 PV",
-                                                    shell.palette.muted,
-                                                )
-                                            },
-                                        )
-                                        .tooltip("400ms 逐手推演主变序列")
-                                        .on_click(
-                                            cx.listener(move |shell, _, _, cx| {
-                                                shell.toggle_pv_animation(
-                                                    v_str_for_click.clone(),
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
-                                    ),
-                            ),
-                    )
-            }),
-        ))
+                                    .text_xs()
+                                    .text_color(rgb(shell.palette.muted))
+                                    .child("推演中…"),
+                            )
+                            .with_animation(
+                                gpui::SharedString::from(format!("candidate-slot-{rank}")),
+                                Animation::new(Duration::from_millis(1200))
+                                    .repeat()
+                                    .with_easing(pulsating_between(0.45, 1.0)),
+                                |element, delta| element.opacity(delta),
+                            )
+                            .into_any_element(),
+                    }
+                })),
+        )
         .child(
             div()
                 .flex()

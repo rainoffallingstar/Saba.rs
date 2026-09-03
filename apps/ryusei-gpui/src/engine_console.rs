@@ -406,6 +406,18 @@ pub fn live_analysis_winrate(entries: &[ryusei_host::AnalysisEntry]) -> Option<f
     best_analysis_entry(entries).map(|entry| entry.winrate.clamp(0.0, 1.0))
 }
 
+/// Converts a Black-perspective winrate into the side-to-move perspective used
+/// by board markers and candidate cards. KataGo reports winrate from Black's
+/// perspective, but move-by-move UI reads more naturally as "the player to
+/// move's chances", so White-to-move values are mirrored.
+pub fn side_to_move_winrate(black_winrate: f64, next_player: ryusei_domain_core::Color) -> f64 {
+    match next_player {
+        ryusei_domain_core::Color::Black => black_winrate,
+        ryusei_domain_core::Color::White => 1.0 - black_winrate,
+    }
+    .clamp(0.0, 1.0)
+}
+
 /// Merges a batch of streamed analysis entries into the current set, keyed by
 /// vertex: later batches replace earlier entries for the same move (KataGo
 /// re-emits candidates as the search progresses). The returned list is sorted
@@ -694,6 +706,17 @@ mod tests {
             ),
             vec!["100", "rootInfo", "true"],
         );
+    }
+
+    #[test]
+    fn side_to_move_winrate_mirrors_white_perspective_only() {
+        let black = ryusei_domain_core::Color::Black;
+        let white = ryusei_domain_core::Color::White;
+        assert!((super::side_to_move_winrate(0.60, black) - 0.60).abs() < 1e-9);
+        assert!((super::side_to_move_winrate(0.60, white) - 0.40).abs() < 1e-9);
+        assert!((super::side_to_move_winrate(0.42, white) - 0.58).abs() < 1e-9);
+        assert_eq!(super::side_to_move_winrate(1.20, black), 1.0);
+        assert_eq!(super::side_to_move_winrate(-0.20, white), 1.0);
     }
 
     #[test]
