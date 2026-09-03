@@ -538,6 +538,75 @@ pub(crate) fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -
                     },
                 ),
         )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.subtle))
+                        .child(shell.fox_query_status.clone()),
+                )
+                .children(
+                    shell
+                        .fox_recent_games
+                        .iter()
+                        .enumerate()
+                        .map(|(index, game)| {
+                            let chess_id = game.chess_id.clone();
+                            div()
+                                .p_2()
+                                .rounded_md()
+                                .bg(rgb(shell.palette.panel))
+                                .border_1()
+                                .border_color(rgb(shell.palette.border))
+                                .cursor_pointer()
+                                .hover(|style| style.border_color(rgb(shell.palette.accent)))
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |shell, _, _, cx| {
+                                        shell.open_fox_game(&chess_id, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgb(shell.palette.text))
+                                                .child(format!(
+                                                    "{} ({}) vs {} ({})",
+                                                    game.black_name,
+                                                    game.black_rank,
+                                                    game.white_name,
+                                                    game.white_rank
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(shell.palette.muted))
+                                                .child(format!("#{}", index + 1)),
+                                        ),
+                                )
+                                .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(
+                                    format!(
+                                        "{} · {} · {} 手",
+                                        game.result, game.date, game.moves_count
+                                    ),
+                                ))
+                        }),
+                ),
+        )
 }
 
 pub(crate) fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {

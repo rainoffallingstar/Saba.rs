@@ -366,6 +366,10 @@ struct ShellApp {
     library_status: SharedString,
     library_task: Option<Task<()>>,
     library_syncing_source: Option<String>,
+    /// Recent Fox Go Server games returned by the last user query.
+    fox_recent_games: Vec<ryusei_host::FoxGameSummary>,
+    /// Status line shown in the Fox sync panel (loading / error / empty).
+    fox_query_status: SharedString,
     theme_choice: ThemeChoice,
     theme: ThemeTokens,
     palette: UiPalette,
@@ -993,6 +997,8 @@ impl ShellApp {
             library_status: "尚未同步".into(),
             library_task: None,
             library_syncing_source: None,
+            fox_recent_games: Vec::new(),
+            fox_query_status: "输入用户名或 ID 后查询".into(),
             theme_choice,
             theme,
             palette,
@@ -1573,9 +1579,55 @@ impl ShellApp {
         let toast_msg = if query.is_empty() {
             "🦊 正在同步野狐最新对局棋谱...".to_owned()
         } else {
-            format!("🦊 正在查询野狐用户 {query} 的最新棋谱...")
+            format!("🦊 正在查询野狐用户 {query} 的最近对局...")
         };
         self.show_toast(toast_msg, cx);
+        self.fox_query_status = "正在查询...".into();
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result: Result<Vec<ryusei_host::FoxGameSummary>, String> = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let games = ryusei_host::fetch_user_recent_games(&query)?;
+                            Ok(games.into_iter().take(5).collect())
+                        })
+                        .await;
+                    weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(games) => {
+                                shell.fox_recent_games = games;
+                                shell.fox_query_status = if shell.fox_recent_games.is_empty() {
+                                    "未查询到近期对局记录".into()
+                                } else {
+                                    format!("共 {} 局，点击导入", shell.fox_recent_games.len())
+                                        .into()
+                                };
+                            }
+                            Err(err) => {
+                                shell.fox_recent_games.clear();
+                                shell.fox_query_status = format!("查询失败: {err}").into();
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn open_fox_game(&mut self, chess_id: &str, cx: &mut Context<Self>) {
+        let chess_id = chess_id.to_owned();
+        let summary = self
+            .fox_recent_games
+            .iter()
+            .find(|game| game.chess_id == chess_id)
+            .cloned();
+        self.show_toast("🦊 正在下载野狐棋谱...".to_owned(), cx);
         let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
@@ -1584,12 +1636,9 @@ impl ShellApp {
                     let result: Result<(ryusei_host::FoxGameSummary, String), String> = cx
                         .background_executor()
                         .spawn(async move {
-                            let games = ryusei_host::fetch_user_recent_games(&query)?;
-                            let game = games
-                                .first()
-                                .ok_or_else(|| "未查询到近期对局记录".to_owned())?;
-                            let sgf = ryusei_host::fetch_game_sgf(&game.chess_id)?;
-                            Ok((game.clone(), sgf))
+                            let sgf = ryusei_host::fetch_game_sgf(&chess_id)?;
+                            let game = summary.ok_or_else(|| "对局信息缺失".to_owned())?;
+                            Ok((game, sgf))
                         })
                         .await;
                     weak.update(&mut cx, |shell, cx| shell.apply_fox_game_result(result, cx))
