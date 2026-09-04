@@ -162,6 +162,13 @@ pub struct SgfLibraryEntry {
     pub metadata: ryusei_domain_core::RecordMetadata,
 }
 
+impl SgfLibraryEntry {
+    /// Opaque string identity for UI keys, number lookups, and thumbnail caching.
+    pub fn entry_id(&self) -> String {
+        format!("{}-{}", self.source_id, self.relative_path)
+    }
+}
+
 /// Finds regular SGF files without following symlinks out of the synchronized
 /// repository. Results are stable and capped so a malformed source cannot make
 /// the desktop library allocate without bound.

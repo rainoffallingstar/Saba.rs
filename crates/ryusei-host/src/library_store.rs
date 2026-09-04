@@ -106,6 +106,8 @@ pub enum LibraryStoreError {
     RecordDelete(String),
     #[error("local library persistence is disabled (no local root configured)")]
     LocalPersistenceDisabled,
+    #[error("atomic file write failed: {0}")]
+    FileWrite(String),
 }
 
 /// Outcome of ingesting one record.
@@ -239,10 +241,13 @@ fn ingest_record_no_save(
     let properties = ryusei_domain_core::extract_root_properties(content);
     let metadata = RecordMetadata::from_root_properties(&properties);
     let title = metadata.display_name(source.kind_label());
-    let created_at = index
-        .get(&id)
-        .map(|existing| existing.created_at)
-        .unwrap_or(now);
+    let fingerprint = Some(fingerprint_content(content));
+    let existing = index.get(&id);
+    let created_at = existing.map(|e| e.created_at).unwrap_or(now);
+    let updated_at = match existing {
+        Some(e) if e.content_fingerprint == fingerprint => e.updated_at,
+        _ => now,
+    };
 
     let record = GameRecord {
         id,
@@ -251,10 +256,10 @@ fn ingest_record_no_save(
         source,
         metadata,
         tags,
-        content_fingerprint: Some(fingerprint_content(content)),
+        content_fingerprint: fingerprint,
         revisions: Vec::new(),
         created_at,
-        updated_at: now,
+        updated_at,
     };
     let (number, outcome) = index.insert(record.clone());
     IngestOutcome {
@@ -406,7 +411,8 @@ impl LibraryStoreIo for FsLibraryStore {
 
     fn save_index(&self, index: &LibraryIndex) -> Result<(), LibraryStoreError> {
         let json = index.to_json().map_err(LibraryStoreError::IndexWrite)?;
-        atomic_write_text(&self.index_path(), &json).map_err(LibraryStoreError::IndexWrite)
+        atomic_write_text(&self.index_path(), &json)
+            .map_err(|e| LibraryStoreError::IndexWrite(e.to_string()))
     }
 
     fn local_root(&self) -> Option<&Path> {
@@ -415,7 +421,7 @@ impl LibraryStoreIo for FsLibraryStore {
 
     fn write_record(&self, id: &RecordId, content: &str) -> Result<(), LibraryStoreError> {
         let path = self.records_dir().join(record_file_name(id));
-        atomic_write_text(&path, content).map_err(LibraryStoreError::RecordWrite)
+        atomic_write_text(&path, content).map_err(|e| LibraryStoreError::RecordWrite(e.to_string()))
     }
 
     fn read_record(&self, id: &RecordId) -> Result<String, LibraryStoreError> {
@@ -447,7 +453,7 @@ impl LibraryStoreIo for FsLibraryStore {
             .join(LIBRARY_REVISIONS_DIR)
             .join(record_file_name(id))
             .join(format!("{revision}.sgf"));
-        atomic_write_text(&path, content).map_err(LibraryStoreError::RecordWrite)
+        atomic_write_text(&path, content).map_err(|e| LibraryStoreError::RecordWrite(e.to_string()))
     }
 
     fn read_revision(&self, id: &RecordId, revision: u64) -> Result<String, LibraryStoreError> {
@@ -463,16 +469,56 @@ impl LibraryStoreIo for FsLibraryStore {
 
 /// Writes `content` to `path` atomically: parent directories are created and
 /// the final write is a temporary-sibling + rename.
-pub fn atomic_write_text(path: &Path, content: &str) -> Result<(), String> {
+pub fn atomic_write_text(path: &Path, content: &str) -> Result<(), LibraryStoreError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            LibraryStoreError::FileWrite(format!("could not create {}: {error}", parent.display()))
+        })?;
     }
     let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, content)
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, path)
-        .map_err(|error| format!("could not move {} into place: {error}", path.display()))
+    std::fs::write(&temporary, content).map_err(|error| {
+        LibraryStoreError::FileWrite(format!("could not write {}: {error}", temporary.display()))
+    })?;
+    std::fs::rename(&temporary, path).map_err(|error| {
+        LibraryStoreError::FileWrite(format!(
+            "could not move {} into place: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Scans every synchronized Git checkout under `base/<source-id>` and merges
+/// the results into the persistent library index (via `FsLibraryStore` at
+/// `base`), so each entry carries a stable record number. Returns the entries
+/// ordered by record number plus the entry-id → number map. Content that already
+/// lives in the checkouts is never copied into the managed records directory.
+pub fn index_library_sources(
+    sources: &[crate::sgf_library::SgfLibrarySource],
+    base: &Path,
+) -> Result<
+    (
+        Vec<crate::sgf_library::SgfLibraryEntry>,
+        std::collections::HashMap<String, u64>,
+    ),
+    LibraryStoreError,
+> {
+    let mut entries = Vec::new();
+    for source in sources {
+        entries.extend(
+            crate::sgf_library::scan_sgf_library(&source.id, &base.join(&source.id))
+                .map_err(|error| LibraryStoreError::IndexRead(error.to_string()))?,
+        );
+    }
+    let store = FsLibraryStore::new(base.to_path_buf());
+    let mut index = load_library(&store)?;
+    let outcomes = ingest_git_entries(&store, &mut index, &entries)?;
+    let numbers = entries
+        .iter()
+        .zip(outcomes.iter())
+        .map(|(entry, outcome)| (entry.entry_id(), outcome.number.0))
+        .collect::<std::collections::HashMap<String, u64>>();
+    entries.sort_by_key(|entry| numbers.get(&entry.entry_id()).copied().unwrap_or(u64::MAX));
+    Ok((entries, numbers))
 }
 
 /// In-memory adapter for hermetic tests. Honors the optional local root flag
@@ -596,6 +642,34 @@ mod tests {
         assert_eq!(duplicate.outcome, InsertOutcome::Updated);
         assert_eq!(duplicate.number, RecordNumber(1));
         assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    fn reingesting_unchanged_content_preserves_updated_at() {
+        let io = MemoryLibraryStoreIo::default();
+        let mut index = load_library(&io).expect("fresh index");
+        let initial = ingest_library_record(
+            &io,
+            &mut index,
+            fox_source("g1"),
+            &fox_sgf("甲", "乙"),
+            vec![],
+        )
+        .expect("initial");
+        let first_updated_at = initial.record.updated_at;
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Re-ingest with identical content: updated_at must NOT change!
+        let again = ingest_library_record(
+            &io,
+            &mut index,
+            fox_source("g1"),
+            &fox_sgf("甲", "乙"),
+            vec![],
+        )
+        .expect("again");
+        assert_eq!(again.record.updated_at, first_updated_at);
     }
 
     #[test]
@@ -950,6 +1024,49 @@ mod tests {
             RecordNumber(4),
             "no number reuse after reopen"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_library_sources_orchestrates_scanning_batch_ingest_and_ordering() {
+        let root = std::env::temp_dir().join("ryusei-host-index-sources-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let src1_dir = root.join("src1");
+        let src2_dir = root.join("src2");
+        std::fs::create_dir_all(&src1_dir).expect("src1");
+        std::fs::create_dir_all(&src2_dir).expect("src2");
+        std::fs::write(src1_dir.join("a.sgf"), "(;GM[1]PB[A1]PW[W1])").expect("a.sgf");
+        std::fs::write(src2_dir.join("b.sgf"), "(;GM[1]PB[A2]PW[W2])").expect("b.sgf");
+
+        let sources = vec![
+            crate::sgf_library::SgfLibrarySource {
+                id: "src1".to_owned(),
+                name: "Source 1".to_owned(),
+                github_url: "https://github.com/test/src1".to_owned(),
+                reference: "main".to_owned(),
+                rights: crate::sgf_library::RedistributionRights::Permitted,
+                license_name: Some("MIT".to_owned()),
+                license_url: Some("https://example.com".to_owned()),
+            },
+            crate::sgf_library::SgfLibrarySource {
+                id: "src2".to_owned(),
+                name: "Source 2".to_owned(),
+                github_url: "https://github.com/test/src2".to_owned(),
+                reference: "main".to_owned(),
+                rights: crate::sgf_library::RedistributionRights::Permitted,
+                license_name: Some("MIT".to_owned()),
+                license_url: Some("https://example.com".to_owned()),
+            },
+        ];
+
+        let (entries, numbers) = index_library_sources(&sources, &root).expect("index sources");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(numbers.len(), 2);
+        assert_eq!(numbers.get("src1-a.sgf"), Some(&1));
+        assert_eq!(numbers.get("src2-b.sgf"), Some(&2));
+        assert_eq!(entries[0].relative_path, "a.sgf");
+        assert_eq!(entries[1].relative_path, "b.sgf");
 
         let _ = std::fs::remove_dir_all(&root);
     }

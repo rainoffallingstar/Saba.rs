@@ -43,6 +43,7 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "engines.analyze_commands",
     "library.local_root",
     "library.auto_save_to_library",
+    "library.revision_limit",
 ];
 
 /// A single rendered settings row: the key, a human label, the value kind from
@@ -195,6 +196,7 @@ pub fn setting_label(key: &str) -> &'static str {
         "engines.analyze_commands" => "分析命令",
         "library.local_root" => "棋谱库本地保存路径（留空为默认）",
         "library.auto_save_to_library" => "OGS 终局自动入库",
+        "library.revision_limit" => "历史修订版本保留上限",
         _ => "Setting",
     }
 }

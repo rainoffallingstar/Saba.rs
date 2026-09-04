@@ -288,3 +288,42 @@ fn index_serializes_and_restores_without_losing_numbers() {
     let (number, _) = restored.insert(git_record("pro", "c.sgf", "C", 300));
     assert_eq!(number, RecordNumber(3));
 }
+
+#[test]
+fn index_query_filters_by_date_range_and_truncates_to_limit() {
+    let mut index = LibraryIndex::default();
+
+    let mut r1 = git_record("pro", "2023.sgf", "Game 2023", 100);
+    r1.metadata = RecordMetadata::from_root_properties(&properties_of("(;DT[2023-05-01])"));
+    index.insert(r1);
+
+    let mut r2 = git_record("pro", "2024_spring.sgf", "Game 2024 Spring", 200);
+    r2.metadata = RecordMetadata::from_root_properties(&properties_of("(;DT[2024-03-15])"));
+    index.insert(r2);
+
+    let mut r3 = git_record("pro", "2024_autumn.sgf", "Game 2024 Autumn", 300);
+    r3.metadata = RecordMetadata::from_root_properties(&properties_of("(;DT[2024-09-20])"));
+    index.insert(r3);
+
+    let mut r4 = git_record("pro", "2025.sgf", "Game 2025", 400);
+    r4.metadata = RecordMetadata::from_root_properties(&properties_of("(;DT[2025-01-10])"));
+    index.insert(r4);
+
+    // Filter date range [2024-01-01, 2024-12-31]
+    let in_2024 = index.query(&LibraryQuery {
+        date_from: Some("2024-01-01".to_owned()),
+        date_to: Some("2024-12-31".to_owned()),
+        ..LibraryQuery::default()
+    });
+    assert_eq!(in_2024.len(), 2);
+    let titles: Vec<&str> = in_2024.iter().map(|r| r.title.as_str()).collect();
+    assert!(titles.contains(&"Game 2024 Spring"));
+    assert!(titles.contains(&"Game 2024 Autumn"));
+
+    // Pagination limit
+    let capped = index.query(&LibraryQuery {
+        limit: Some(2),
+        ..LibraryQuery::default()
+    });
+    assert_eq!(capped.len(), 2);
+}

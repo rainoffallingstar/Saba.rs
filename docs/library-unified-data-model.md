@@ -397,46 +397,46 @@ pub trait HostPersistence {
 
 ### 已落地（本仓库工作区，全部带测试）
 
-- **统一领域模型**（`crates/domain-core/src/library.rs`，9 个集成测试）：
+- **统一领域模型**（`crates/domain-core/src/library.rs`，10 个集成测试）：
   - `RecordId`（由 `RecordSource` 溯源派生的稳定 id）、`RecordNumber`（稳定编号）。
   - `RecordSource`：`Local / Git / Ogs / Fox / Live`，`#[serde(tag = "kind")]` 序列化。
   - `RecordMetadata`：GN/PB/PW/RE/DT/EV/RO/KM/RU/HA/SZ 全字段归一化，贴目用字符串表示。
   - `GameRecord` + 有界 revision 引用（`RecordRevisionRef` / `RevisionTrigger`）。
-  - `LibraryIndex`：稳定编号分配、按来源身份去重、`LibraryQuery`（文本/棋手/结果/来源/标签/排序）、JSON 往返保留编号与 `nextRecordNumber`、`push_revision` 有界（保留最新 N 条）。
+  - `LibraryIndex`：稳定编号分配、按来源身份去重、`LibraryQuery`（文本/棋手/结果/来源/标签/日期区间/分页上限/排序）、JSON 往返保留编号与 `nextRecordNumber`、`push_revision` 有界（保留最新 N 条）。
 - **SGF 根属性解析收敛**：删除手写 `extract_root_properties`，改为复用权威 `SgfParser::parse_root_properties`（消灭双解析器漂移）。
-- **host 数据模型收敛**（`ryusei-host/src/sgf_library.rs`）：删除 host 自有 `LibraryEntryMetadata`，`SgfLibraryEntry.metadata` 直接用 domain `RecordMetadata`。
-- **host 统一库工作流**（`ryusei-host/src/library_store.rs`，11 个测试）：
+- **host 数据模型与身份方法**（`ryusei-host/src/sgf_library.rs`）：
+  - 删除 host 自有 `LibraryEntryMetadata`，`SgfLibraryEntry.metadata` 直接用 domain `RecordMetadata`。
+  - `SgfLibraryEntry::entry_id()` 统一复合键封装，消除散落魔法拼串。
+- **host 统一库工作流**（`ryusei-host/src/library_store.rs`，13 个测试）：
   - `LibraryStoreIo` seam（load/save index、可选 `local_root`、record/revision 内容读写、任意源文件读取）。
   - `ingest_library_record`（OGS/Fox/Live 抓取内容）、`ingest_git_entry`（Git 扫描项，不复制内容）、`ingest_local_path`（本地文件，canonical 溯源，不复制内容）、`ingest_git_entries`（批量入库，单次原子保存 index，跨重启编号不回收）。
-  - `FsLibraryStore`：原子写（临时文件 + rename）、`records/<content-hex>.sgf` 路径安全（敌意 id 无法逃逸）。
+  - **增量更新守卫**：相同内容重复入库时保持原有 `updated_at` 不变，只有内容指纹改变时才更新时间戳。
+  - `FsLibraryStore`：原子写 `atomic_write_text` 返回类型化 `LibraryStoreError::FileWrite`、`records/<content-hex>.sgf` 路径安全（敌意 id 无法逃逸）。
+  - `index_library_sources` 工作流下沉至 host 统一管理并补齐单测，消除 UI 壳层 Feature Envy。
   - `append_library_revision`：有界版本历史，本地根开启时快照 `revisions/<id>/<rev>.sgf`；单槽 crash recovery（autosave）保持独立，不入库。
   - 所有工作流失败时回滚内存索引（沿用 `persistence.rs` 的 previous-store 模式）。
-- **设置键**（`ryusei-host/src/settings.rs`）：新增 `library.local_root`（NullableString，可选本地保存根）与 `library.auto_save_to_library`（Boolean，默认关闭），带类型校验测试。
-- **缩略图纯 seam + 指纹**（`sgf_library.rs`）：
+- **设置键与表单**（`ryusei-host/src/settings.rs` + `apps/ryusei-gpui/src/settings_form.rs`）：
+  - `library.local_root`（NullableString，可选本地保存根）。
+  - `library.auto_save_to_library`（Boolean，默认关闭，终局自动入库）。
+  - `library.revision_limit`（Number，历史修订保留上限）。
+  - 设置抽屉完全暴露上述配置项，带完整校验与测试。
+- **缩略图纯 seam + 指纹缓存与容量治理**（`sgf_library.rs` + `main.rs`）：
   - `render_thumbnail_png(content)`（纯、无 FS）、`render_library_thumbnail(path)`（typed `SgfLibraryError`）、`render_library_thumbnail_with_fingerprint`（返回内容指纹，供缓存键）。
-- **GPUI 展示修正 + 索引接入**（`apps/ryusei-gpui`）：
-  - gallery 改为真多列 `flex_wrap` 网格（固定 112px 卡片），不再 `flex_col` 竖排。
-  - 缩略图缓存键改为**内容指纹**（`library_thumbnails: HashMap<fp, Image>` + `entry → fp` 映射），文件内容变化不再复用旧盘面图；渲染并发有界（≤8 in-flight），完成后自动泵下一批。
-  - `index_library_sources`：打开/刷新棋谱库时把所有 Git 扫描项批量写入 `FsLibraryStore` 持久索引，`ShellApp` 持有 `library_record_numbers`（entry-id → 稳定编号），列表与网格按编号排序、list 显示索引编号——跨重启编号持久化已接入 UI（`panels::drawers::tests` 3 个 headless 通过）。
-  - `sync_library` 完成后自动重建索引，新拉取的棋谱在编号序列末尾追加，不复用旧编号。
-
-- **全来源 `save_to_library` UI 接线**（`apps/ryusei-gpui`）：
-  - **野狐**：`save_fox_game_to_library`（`main.rs`）在野狐对局列表每行提供「保存到棋谱库」按钮（`plugin_dialogs.rs`），后台拉取 SGF → `ingest_library_record`（`RecordSource::Fox`）写入 `FsLibraryStore` 并刷新索引。
-  - **直播**：`render_live_capture_drawer` 新增「保存快照到库」按钮，将当前直播棋谱抓取为 `RecordSource::Live` 快照入库。
-  - **OGS 手动保存**：`render_ogs_account_drawer` 在连接对局时新增「保存对局到库」按钮，将当前 OGS 比赛存入 `RecordSource::Ogs`。
-  - **OGS 终局自动入库**：当 OGS 对局切入 `finished` 状态，若 `library.auto_save_to_library` 开关开启，自动调用 `save_current_game_to_library` 入库并提醒。
-- **设置表单入口暴露**（`apps/ryusei-gpui/src/settings_form.rs`）：
-  - `library.local_root`：「棋谱库本地保存路径（留空为默认）」，支持输入自定义目录，为空时回退默认。
-  - `library.auto_save_to_library`：「OGS 终局自动入库」，可直接在设置抽屉中勾选切换。
-  - `library_base()` 统一样本，当用户配置 `library.local_root` 时全局生效，覆盖刷新、同步及保存路径。
+  - 缩略图缓存键改为**内容指纹**，并发有界（≤8 in-flight）；替换新指纹时清理孤儿旧图，超过 300 容量时自动淘汰无引用图片，根绝内存泄漏风险。
+- **GPUI 展示与入库管道去重**（`apps/ryusei-gpui`）：
+  - gallery 为真多列 `flex_wrap` 网格（固定 112px 卡片）。
+  - list 编号为整库稳定序号（`panels::drawers::tests` 3 个 headless 通过）。
+  - 提取通用 `save_sgf_content_to_library` 内部管道，消灭野狐与通用保存的重复流程。
+  - 全来源一键入库覆盖：野狐列表按钮、直播快照按钮、OGS 比赛入库按钮、OGS 终局自动入库。
+  - `library_base()` 统一样本，当配置 `library.local_root` 时全局重定向。
 
 ### 仍需后续完成（未在本轮落地）
 
 - 旧版本索引/目录的显式迁移工具（当前 `FsLibraryStore` 找不到 `index.json` 时从零开始，不破坏既有 `<config>/libraries/<source-id>` Git 检出）。
-- 窗口/上下文类 GPUI 测试受 GPUI 0.2.2 无 offscreen API 限制，本环境无法运行；相关纯语义由 domain/host seam 测试与 GPUI 纯逻辑测试（3 个通过）覆盖。
+- 窗口/上下文类 GPUI 测试受 GPUI 0.2.2 无 offscreen API 限制，本环境无法运行；相关纯语义由 domain/host seam 测试与 GPUI 纯逻辑测试覆盖。
 
 ### 测试与构建状态
 
-- `cargo test -p ryusei-domain-core`（lib 79 + 集成 27）与 `cargo test -p ryusei-host --lib`（272）全绿。
+- `cargo test -p ryusei-domain-core`（lib 79 + 集成 28）与 `cargo test -p ryusei-host --lib`（274）全绿。
 - GPUI 纯逻辑测试 `panels::drawers::tests`（3 个）与 `settings_form::tests`（9 个）可 headless 运行，全部通过。
 - `cargo check --workspace` / `cargo build -p ryusei-gpui` 通过，`cargo fmt --check` 干净。

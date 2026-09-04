@@ -633,52 +633,6 @@ fn workspace_tab_title(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
         .unwrap_or_else(|| "Untitled Game".to_owned())
 }
 
-/// Scans every synchronized Git checkout under `base/libraries/<source-id>`
-/// and merges the results into the persistent library index (via
-/// `FsLibraryStore` at `base/libraries`), so each entry carries a stable record
-/// number. Returns the entries ordered by record number plus the entry-id →
-/// number map. Content that already lives in the checkouts is never copied
-/// into the managed records directory.
-fn index_library_sources(
-    sources: &[ryusei_host::SgfLibrarySource],
-    base: &std::path::Path,
-) -> Result<
-    (
-        Vec<ryusei_host::SgfLibraryEntry>,
-        std::collections::HashMap<String, u64>,
-    ),
-    String,
-> {
-    let mut entries = Vec::new();
-    for source in sources {
-        entries.extend(
-            ryusei_host::scan_sgf_library(&source.id, &base.join(&source.id))
-                .map_err(|error| error.to_string())?,
-        );
-    }
-    let store = ryusei_host::FsLibraryStore::new(base.to_path_buf());
-    let mut index = ryusei_host::load_library(&store).map_err(|error| error.to_string())?;
-    let outcomes = ryusei_host::ingest_git_entries(&store, &mut index, &entries)
-        .map_err(|error| error.to_string())?;
-    let numbers = entries
-        .iter()
-        .zip(outcomes.iter())
-        .map(|(entry, outcome)| {
-            (
-                format!("{}-{}", entry.source_id, entry.relative_path),
-                outcome.number.0,
-            )
-        })
-        .collect::<std::collections::HashMap<String, u64>>();
-    entries.sort_by_key(|entry| {
-        numbers
-            .get(&format!("{}-{}", entry.source_id, entry.relative_path))
-            .copied()
-            .unwrap_or(u64::MAX)
-    });
-    Ok((entries, numbers))
-}
-
 impl ShellApp {
     #[expect(
         clippy::too_many_arguments,
@@ -1756,84 +1710,15 @@ impl ShellApp {
         cx.notify();
     }
 
-    /// Fetches a Fox game's SGF and saves it into the library (without opening
-    /// it in the current session). The record is ingested through the managed
-    /// `FsLibraryStore` under the config libraries directory, so it receives a
-    /// stable record number and its content is persisted for later reopening.
-    fn save_fox_game_to_library(&mut self, chess_id: &str, cx: &mut Context<Self>) {
-        let chess_id = chess_id.to_owned();
-        let summary = self
-            .fox_recent_games
-            .iter()
-            .find(|game| game.chess_id == chess_id)
-            .cloned();
-        let base = match self.library_base() {
-            Ok(base) => base,
-            Err(error) => {
-                self.show_toast(format!("无法确定棋谱库目录：{error}"), cx);
-                return;
-            }
-        };
-        self.show_toast("🦊 正在保存野狐棋谱到棋谱库…".to_owned(), cx);
-        let weak = cx.entity().downgrade();
-        cx.spawn(
-            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
-                let mut cx = cx.clone();
-                async move {
-                    let result = cx
-                        .background_executor()
-                        .spawn(async move {
-                            let sgf = ryusei_host::fetch_game_sgf(&chess_id)
-                                .map_err(|error| error.to_string())?;
-                            let game = summary.ok_or_else(|| "对局信息缺失".to_owned())?;
-                            let store = ryusei_host::FsLibraryStore::new(base);
-                            let mut index = ryusei_host::load_library(&store)
-                                .map_err(|error| error.to_string())?;
-                            let source = ryusei_domain_core::RecordSource::Fox {
-                                chess_id: game.chess_id.clone(),
-                            };
-                            let outcome = ryusei_host::ingest_library_record(
-                                &store,
-                                &mut index,
-                                source,
-                                &sgf,
-                                Vec::new(),
-                            )
-                            .map_err(|error| error.to_string())?;
-                            Ok::<_, String>((game, outcome))
-                        })
-                        .await;
-                    let _ = weak.update(&mut cx, |shell, cx| {
-                        match result {
-                            Ok((game, outcome)) => {
-                                shell.refresh_library_entries(cx);
-                                shell.show_toast(
-                                    format!(
-                                        "🦊 已保存到棋谱库（编号 {}）：{} vs {}",
-                                        outcome.number.0, game.black_name, game.white_name
-                                    ),
-                                    cx,
-                                );
-                            }
-                            Err(error) => {
-                                shell.show_toast(format!("保存到棋谱库失败：{error}"), cx);
-                            }
-                        }
-                        cx.notify();
-                    });
-                }
-            },
-        )
-        .detach();
-    }
-
-    /// Ingests the currently loaded game's SGF content into the library index
-    /// and persists it under the managed local root (if enabled), attributing
-    /// it to the provided `source` provenance (Live / OGS / Local).
-    pub(crate) fn save_current_game_to_library(
+    /// Core pipeline for ingesting SGF content into the library index, persisting
+    /// it under the managed local root (if configured), refreshing the library
+    /// entries, and surfacing a toast notification.
+    fn save_sgf_content_to_library(
         &mut self,
         source: ryusei_domain_core::RecordSource,
+        sgf: String,
         tags: Vec<String>,
+        toast_prefix: &'static str,
         cx: &mut Context<Self>,
     ) {
         let base = match self.library_base() {
@@ -1843,8 +1728,7 @@ impl ShellApp {
                 return;
             }
         };
-        let sgf = self.host.to_sgf();
-        self.show_toast("正在保存棋谱到棋谱库…".to_owned(), cx);
+        self.show_toast(format!("{toast_prefix}正在保存棋谱到棋谱库…"), cx);
         let weak = cx.entity().downgrade();
         cx.spawn(
             move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
@@ -1869,7 +1753,7 @@ impl ShellApp {
                                 shell.refresh_library_entries(cx);
                                 shell.show_toast(
                                     format!(
-                                        "已保存到棋谱库（编号 {}）：{}",
+                                        "{toast_prefix}已保存到棋谱库（编号 {}）：{}",
                                         outcome.number.0, outcome.record.title
                                     ),
                                     cx,
@@ -1885,6 +1769,60 @@ impl ShellApp {
             },
         )
         .detach();
+    }
+
+    /// Fetches a Fox game's SGF and saves it into the library (without opening
+    /// it in the current session).
+    fn save_fox_game_to_library(&mut self, chess_id: &str, cx: &mut Context<Self>) {
+        let chess_id = chess_id.to_owned();
+        self.show_toast("🦊 正在下载野狐棋谱…".to_owned(), cx);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let fetch_id = chess_id.clone();
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            ryusei_host::fetch_game_sgf(&fetch_id)
+                                .map_err(|error| error.to_string())
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(sgf) => {
+                                shell.save_sgf_content_to_library(
+                                    ryusei_domain_core::RecordSource::Fox { chess_id },
+                                    sgf,
+                                    Vec::new(),
+                                    "🦊 ",
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                shell.show_toast(format!("野狐棋谱下载失败：{error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Ingests the currently loaded game's SGF content into the library index
+    /// and persists it under the managed local root (if enabled), attributing
+    /// it to the provided `source` provenance (Live / OGS / Local).
+    pub(crate) fn save_current_game_to_library(
+        &mut self,
+        source: ryusei_domain_core::RecordSource,
+        tags: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let sgf = self.host.to_sgf();
+        self.save_sgf_content_to_library(source, sgf, tags, "", cx);
     }
 
     fn on_engine_input_focus(
@@ -7889,7 +7827,7 @@ impl ShellApp {
             if self.library_thumbnail_pending.len() >= MAX_INFLIGHT {
                 break;
             }
-            let id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let id = entry.entry_id();
             let already_cached = self
                 .library_thumbnail_fingerprints
                 .get(&id)
@@ -7917,8 +7855,29 @@ impl ShellApp {
                                     gpui::ImageFormat::Png,
                                     png,
                                 ));
+                                let old_fp = shell
+                                    .library_thumbnail_fingerprints
+                                    .insert(id, fingerprint.clone());
                                 shell.library_thumbnails.insert(fingerprint.clone(), image);
-                                shell.library_thumbnail_fingerprints.insert(id, fingerprint);
+                                // Evict old fingerprint if no other entry references it.
+                                if let Some(old) = old_fp
+                                    && old != fingerprint
+                                    && !shell
+                                        .library_thumbnail_fingerprints
+                                        .values()
+                                        .any(|fp| fp == &old)
+                                {
+                                    shell.library_thumbnails.remove(&old);
+                                }
+                                // Bounded capacity: purge unreferenced images if cache exceeds limit.
+                                const MAX_CACHED_THUMBNAILS: usize = 300;
+                                if shell.library_thumbnails.len() > MAX_CACHED_THUMBNAILS {
+                                    let referenced: std::collections::HashSet<&String> =
+                                        shell.library_thumbnail_fingerprints.values().collect();
+                                    shell
+                                        .library_thumbnails
+                                        .retain(|fp, _| referenced.contains(fp));
+                                }
                             }
                             // Pump the next batch so the grid fills progressively.
                             shell.render_library_thumbnails(cx);
@@ -7972,7 +7931,10 @@ impl ShellApp {
                 async move {
                     let result = cx
                         .background_executor()
-                        .spawn(async move { index_library_sources(&sources, &base) })
+                        .spawn(async move {
+                            ryusei_host::index_library_sources(&sources, &base)
+                                .map_err(|error| error.to_string())
+                        })
                         .await;
                     let _ = weak.update(&mut cx, |shell, cx| {
                         shell.library_task = None;

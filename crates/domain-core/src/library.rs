@@ -350,6 +350,9 @@ impl LibraryIndex {
                 results.sort_by(|left, right| left.title.cmp(&right.title));
             }
         }
+        if let Some(limit) = query.limit {
+            results.truncate(limit);
+        }
         results
     }
 
@@ -462,6 +465,28 @@ fn matches_query(record: &GameRecord, query: &LibraryQuery) -> bool {
             return false;
         }
     }
+    if let Some(from) = query
+        .date_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        let date = record.metadata.date.as_deref().unwrap_or_default();
+        if date < from {
+            return false;
+        }
+    }
+    if let Some(to) = query
+        .date_to
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        let date = record.metadata.date.as_deref().unwrap_or_default();
+        if date.is_empty() || date > to {
+            return false;
+        }
+    }
     true
 }
 
@@ -477,6 +502,10 @@ pub struct LibraryQuery {
     /// One of `RecordSource::kind()` values, e.g. `"fox"`, `"ogs"`, `"git"`.
     pub source_kind: Option<String>,
     pub tag: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+    /// Maximum number of records to return after sorting (for pagination).
+    pub limit: Option<usize>,
     pub sort: LibrarySort,
 }
 

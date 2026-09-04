@@ -98,9 +98,9 @@ pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_st
 pub use library_store::{
     DEFAULT_REVISION_LIMIT, FsLibraryStore, IngestOutcome, LIBRARY_INDEX_FILE_NAME,
     LIBRARY_RECORDS_DIR, LIBRARY_REVISIONS_DIR, LibraryStoreError, LibraryStoreIo,
-    append_library_revision, atomic_write_text, ingest_git_entries, ingest_git_entry,
-    ingest_library_record, ingest_local_path, load_library, managed_record_path, persist_library,
-    read_library_record, record_file_name, remove_library_record,
+    append_library_revision, atomic_write_text, index_library_sources, ingest_git_entries,
+    ingest_git_entry, ingest_library_record, ingest_local_path, load_library, managed_record_path,
+    persist_library, read_library_record, record_file_name, remove_library_record,
 };
 pub use move_grading::{
     ComprehensiveGameAnalytics, GameAnalyticsSummary, GamePhase, MoveEvaluation, MoveQuality,

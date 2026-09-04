@@ -618,7 +618,7 @@ pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statef
 fn render_library_gallery(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
     div().flex().flex_wrap().gap_2().items_start().children(
         shell.library_entries.iter().take(200).map(|entry| {
-            let id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let id = entry.entry_id();
             let path = entry.path.clone();
             let name = entry.metadata.display_name(&entry.relative_path.clone());
             let thumbnail = shell.library_thumbnail_image(&id);
@@ -695,7 +695,7 @@ pub(crate) fn library_list_rows(
         .enumerate()
         .filter(|(index, _)| *index < RENDER_LIMIT)
         .map(|(index, entry)| {
-            let entry_id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let entry_id = entry.entry_id();
             let number = record_numbers
                 .get(&entry_id)
                 .map(|number| number.to_string())

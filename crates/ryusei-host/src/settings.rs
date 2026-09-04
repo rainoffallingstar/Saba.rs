@@ -115,7 +115,8 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "review.analyze_during_game"
         | "library.redistribution_allowed"
         | "library.auto_save_to_library" => Some(SettingKind::Boolean),
-        "app.hide_busy_delay"
+        "library.revision_limit"
+        | "app.hide_busy_delay"
         | "app.loadgame_delay"
         | "app.startup_check_updates_delay"
         | "app.zoom_factor"
@@ -471,6 +472,14 @@ mod tests {
         );
         assert!(validate_setting_value("library.auto_save_to_library", &json!(true)).is_ok());
         assert!(validate_setting_value("library.auto_save_to_library", &json!("yes")).is_err());
+
+        // revision_limit is a numeric cap on point-in-time revisions.
+        assert_eq!(
+            setting_kind("library.revision_limit"),
+            Some(SettingKind::Number)
+        );
+        assert!(validate_setting_value("library.revision_limit", &json!(50)).is_ok());
+        assert!(validate_setting_value("library.revision_limit", &json!("50")).is_err());
     }
 
     #[test]
