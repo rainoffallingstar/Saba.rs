@@ -41,6 +41,8 @@ pub const PANEL_SETTING_KEYS: &[&str] = &[
     "katago.human_sl_profile",
     "katago.human_sl_enabled",
     "engines.analyze_commands",
+    "library.local_root",
+    "library.auto_save_to_library",
 ];
 
 /// A single rendered settings row: the key, a human label, the value kind from
@@ -191,6 +193,8 @@ pub fn setting_label(key: &str) -> &'static str {
         "katago.human_sl_profile" => "KataGo HumanSL 风格",
         "katago.human_sl_enabled" => "默认启用 KataGo HumanSL",
         "engines.analyze_commands" => "分析命令",
+        "library.local_root" => "棋谱库本地保存路径（留空为默认）",
+        "library.auto_save_to_library" => "OGS 终局自动入库",
         _ => "Setting",
     }
 }

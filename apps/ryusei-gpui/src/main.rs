@@ -217,6 +217,16 @@ enum ActiveDrawer {
     MatchSetup,
 }
 
+/// The two switchable display forms of the library drawer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum LibraryViewMode {
+    /// Gallery: game name + board thumbnail.
+    #[default]
+    Gallery,
+    /// List: game number + black + white + result.
+    List,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ActiveTextInput {
     Comment,
@@ -366,6 +376,20 @@ struct ShellApp {
     library_status: SharedString,
     library_task: Option<Task<()>>,
     library_syncing_source: Option<String>,
+    /// Display form of the library drawer: gallery (name + thumbnail) or list
+    /// (number + black + white + result).
+    library_view_mode: LibraryViewMode,
+    /// Decoded thumbnails keyed by *content fingerprint*, so an edited SGF gets
+    /// a fresh image instead of a stale board position.
+    library_thumbnails: std::collections::HashMap<String, std::sync::Arc<gpui::Image>>,
+    /// Maps a library entry id to the fingerprint of the thumbnail currently
+    /// cached for it (the image lives in `library_thumbnails`).
+    library_thumbnail_fingerprints: std::collections::HashMap<String, String>,
+    /// Entry ids whose thumbnail render is currently in flight.
+    library_thumbnail_pending: std::collections::BTreeSet<String>,
+    /// Stable, persistent record numbers (from the library index) keyed by
+    /// library entry id. Survives rescans and restarts via `index.json`.
+    library_record_numbers: std::collections::HashMap<String, u64>,
     /// Recent Fox Go Server games returned by the last user query.
     fox_recent_games: Vec<ryusei_host::FoxGameSummary>,
     /// Status line shown in the Fox sync panel (loading / error / empty).
@@ -607,6 +631,52 @@ fn workspace_tab_title(snapshot: &ryusei_domain_core::GameSnapshot) -> String {
                 .cloned()
         })
         .unwrap_or_else(|| "Untitled Game".to_owned())
+}
+
+/// Scans every synchronized Git checkout under `base/libraries/<source-id>`
+/// and merges the results into the persistent library index (via
+/// `FsLibraryStore` at `base/libraries`), so each entry carries a stable record
+/// number. Returns the entries ordered by record number plus the entry-id →
+/// number map. Content that already lives in the checkouts is never copied
+/// into the managed records directory.
+fn index_library_sources(
+    sources: &[ryusei_host::SgfLibrarySource],
+    base: &std::path::Path,
+) -> Result<
+    (
+        Vec<ryusei_host::SgfLibraryEntry>,
+        std::collections::HashMap<String, u64>,
+    ),
+    String,
+> {
+    let mut entries = Vec::new();
+    for source in sources {
+        entries.extend(
+            ryusei_host::scan_sgf_library(&source.id, &base.join(&source.id))
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let store = ryusei_host::FsLibraryStore::new(base.to_path_buf());
+    let mut index = ryusei_host::load_library(&store).map_err(|error| error.to_string())?;
+    let outcomes = ryusei_host::ingest_git_entries(&store, &mut index, &entries)
+        .map_err(|error| error.to_string())?;
+    let numbers = entries
+        .iter()
+        .zip(outcomes.iter())
+        .map(|(entry, outcome)| {
+            (
+                format!("{}-{}", entry.source_id, entry.relative_path),
+                outcome.number.0,
+            )
+        })
+        .collect::<std::collections::HashMap<String, u64>>();
+    entries.sort_by_key(|entry| {
+        numbers
+            .get(&format!("{}-{}", entry.source_id, entry.relative_path))
+            .copied()
+            .unwrap_or(u64::MAX)
+    });
+    Ok((entries, numbers))
 }
 
 impl ShellApp {
@@ -997,6 +1067,11 @@ impl ShellApp {
             library_status: "尚未同步".into(),
             library_task: None,
             library_syncing_source: None,
+            library_view_mode: LibraryViewMode::default(),
+            library_thumbnails: std::collections::HashMap::new(),
+            library_thumbnail_fingerprints: std::collections::HashMap::new(),
+            library_thumbnail_pending: std::collections::BTreeSet::new(),
+            library_record_numbers: std::collections::HashMap::new(),
             fox_recent_games: Vec::new(),
             fox_query_status: "输入用户名或 ID 后查询".into(),
             theme_choice,
@@ -1679,6 +1754,137 @@ impl ShellApp {
             Err(err) => self.show_toast(format!("野狐对局同步失败: {err}"), cx),
         }
         cx.notify();
+    }
+
+    /// Fetches a Fox game's SGF and saves it into the library (without opening
+    /// it in the current session). The record is ingested through the managed
+    /// `FsLibraryStore` under the config libraries directory, so it receives a
+    /// stable record number and its content is persisted for later reopening.
+    fn save_fox_game_to_library(&mut self, chess_id: &str, cx: &mut Context<Self>) {
+        let chess_id = chess_id.to_owned();
+        let summary = self
+            .fox_recent_games
+            .iter()
+            .find(|game| game.chess_id == chess_id)
+            .cloned();
+        let base = match self.library_base() {
+            Ok(base) => base,
+            Err(error) => {
+                self.show_toast(format!("无法确定棋谱库目录：{error}"), cx);
+                return;
+            }
+        };
+        self.show_toast("🦊 正在保存野狐棋谱到棋谱库…".to_owned(), cx);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let sgf = ryusei_host::fetch_game_sgf(&chess_id)
+                                .map_err(|error| error.to_string())?;
+                            let game = summary.ok_or_else(|| "对局信息缺失".to_owned())?;
+                            let store = ryusei_host::FsLibraryStore::new(base);
+                            let mut index = ryusei_host::load_library(&store)
+                                .map_err(|error| error.to_string())?;
+                            let source = ryusei_domain_core::RecordSource::Fox {
+                                chess_id: game.chess_id.clone(),
+                            };
+                            let outcome = ryusei_host::ingest_library_record(
+                                &store,
+                                &mut index,
+                                source,
+                                &sgf,
+                                Vec::new(),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            Ok::<_, String>((game, outcome))
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok((game, outcome)) => {
+                                shell.refresh_library_entries(cx);
+                                shell.show_toast(
+                                    format!(
+                                        "🦊 已保存到棋谱库（编号 {}）：{} vs {}",
+                                        outcome.number.0, game.black_name, game.white_name
+                                    ),
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                shell.show_toast(format!("保存到棋谱库失败：{error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// Ingests the currently loaded game's SGF content into the library index
+    /// and persists it under the managed local root (if enabled), attributing
+    /// it to the provided `source` provenance (Live / OGS / Local).
+    pub(crate) fn save_current_game_to_library(
+        &mut self,
+        source: ryusei_domain_core::RecordSource,
+        tags: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let base = match self.library_base() {
+            Ok(base) => base,
+            Err(error) => {
+                self.show_toast(format!("无法确定棋谱库目录：{error}"), cx);
+                return;
+            }
+        };
+        let sgf = self.host.to_sgf();
+        self.show_toast("正在保存棋谱到棋谱库…".to_owned(), cx);
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let store = ryusei_host::FsLibraryStore::new(base);
+                            let mut index = ryusei_host::load_library(&store)
+                                .map_err(|error| error.to_string())?;
+                            let outcome = ryusei_host::ingest_library_record(
+                                &store, &mut index, source, &sgf, tags,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            Ok::<_, String>(outcome)
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(outcome) => {
+                                shell.refresh_library_entries(cx);
+                                shell.show_toast(
+                                    format!(
+                                        "已保存到棋谱库（编号 {}）：{}",
+                                        outcome.number.0, outcome.record.title
+                                    ),
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                shell.show_toast(format!("保存到棋谱库失败：{error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            },
+        )
+        .detach();
     }
 
     fn on_engine_input_focus(
@@ -7650,13 +7856,109 @@ impl ShellApp {
         self.refresh_library_entries(cx);
     }
 
+    /// Switches between the gallery and list display forms. Entering the gallery
+    /// kicks off lazy thumbnail rendering for the visible entries.
+    fn toggle_library_view_mode(&mut self, cx: &mut Context<Self>) {
+        self.library_view_mode = match self.library_view_mode {
+            LibraryViewMode::Gallery => LibraryViewMode::List,
+            LibraryViewMode::List => LibraryViewMode::Gallery,
+        };
+        if self.library_view_mode == LibraryViewMode::Gallery {
+            self.render_library_thumbnails(cx);
+        }
+        cx.notify();
+    }
+
+    /// Lazily renders board thumbnails for library entries that do not have a
+    /// cached image yet. Rendering happens on the background executor; each PNG
+    /// is decoded to a GPUI `Image` and cached *by content fingerprint*, with an
+    /// entry-id → fingerprint map for lookup. Concurrency is bounded so a large
+    /// library never fires one task per entry at once; completions re-pump the
+    /// queue until every visible entry has an image.
+    fn render_library_thumbnails(&mut self, cx: &mut Context<Self>) {
+        if self.library_view_mode != LibraryViewMode::Gallery {
+            return;
+        }
+        const MAX_INFLIGHT: usize = 8;
+        if self.library_thumbnail_pending.len() >= MAX_INFLIGHT {
+            return;
+        }
+        let entries = self.library_entries.clone();
+        let weak = cx.entity().downgrade();
+        for entry in entries {
+            if self.library_thumbnail_pending.len() >= MAX_INFLIGHT {
+                break;
+            }
+            let id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let already_cached = self
+                .library_thumbnail_fingerprints
+                .get(&id)
+                .is_some_and(|fingerprint| self.library_thumbnails.contains_key(fingerprint));
+            if already_cached || self.library_thumbnail_pending.contains(&id) {
+                continue;
+            }
+            self.library_thumbnail_pending.insert(id.clone());
+            let path = entry.path.clone();
+            let weak = weak.clone();
+            let _ = cx.spawn(
+                move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                    let mut cx = cx.clone();
+                    async move {
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move {
+                                ryusei_host::render_library_thumbnail_with_fingerprint(&path, 160)
+                            })
+                            .await;
+                        let _ = weak.update(&mut cx, |shell, cx| {
+                            shell.library_thumbnail_pending.remove(&id);
+                            if let Ok((fingerprint, png)) = result {
+                                let image = std::sync::Arc::new(gpui::Image::from_bytes(
+                                    gpui::ImageFormat::Png,
+                                    png,
+                                ));
+                                shell.library_thumbnails.insert(fingerprint.clone(), image);
+                                shell.library_thumbnail_fingerprints.insert(id, fingerprint);
+                            }
+                            // Pump the next batch so the grid fills progressively.
+                            shell.render_library_thumbnails(cx);
+                            cx.notify();
+                        });
+                    }
+                },
+            );
+        }
+    }
+
+    /// Resolves the cached thumbnail image for a library entry, if present.
+    fn library_thumbnail_image(&self, entry_id: &str) -> Option<std::sync::Arc<gpui::Image>> {
+        self.library_thumbnail_fingerprints
+            .get(entry_id)
+            .and_then(|fingerprint| self.library_thumbnails.get(fingerprint))
+            .cloned()
+    }
+
+    /// Resolves the effective library data root: the user-configured
+    /// `library.local_root` when set (a non-empty path), otherwise the default
+    /// `<config>/libraries`. This is where the persistent index, managed
+    /// records, revisions, and Git checkouts all live.
+    fn library_base(&self) -> Result<std::path::PathBuf, String> {
+        if let Some(root) = self.settings.get_str("library.local_root") {
+            let root = root.trim();
+            if !root.is_empty() {
+                return Ok(std::path::PathBuf::from(root));
+            }
+        }
+        crate::file_workflow::current_user_config_directory().map(|base| base.join("libraries"))
+    }
+
     fn refresh_library_entries(&mut self, cx: &mut Context<Self>) {
         if self.library_task.is_some() || self.library_sources.is_empty() {
             return;
         }
         let sources = self.library_sources.clone();
-        let base = match crate::file_workflow::current_user_config_directory() {
-            Ok(base) => base.join("libraries"),
+        let base = match self.library_base() {
+            Ok(base) => base,
             Err(error) => {
                 self.library_status = format!("无法确定数据目录：{error}").into();
                 return;
@@ -7670,28 +7972,19 @@ impl ShellApp {
                 async move {
                     let result = cx
                         .background_executor()
-                        .spawn(async move {
-                            let mut entries = Vec::new();
-                            for source in sources {
-                                entries.extend(
-                                    ryusei_host::scan_sgf_library(
-                                        &source.id,
-                                        &base.join(&source.id),
-                                    )
-                                    .map_err(|error| error.to_string())?,
-                                );
-                            }
-                            Ok::<_, String>(entries)
-                        })
+                        .spawn(async move { index_library_sources(&sources, &base) })
                         .await;
                     let _ = weak.update(&mut cx, |shell, cx| {
                         shell.library_task = None;
                         match result {
-                            Ok(entries) => {
+                            Ok((entries, numbers)) => {
                                 shell.library_entries = entries;
+                                shell.library_record_numbers = numbers;
                                 shell.library_status =
                                     format!("已载入 {} 个本地 SGF", shell.library_entries.len())
                                         .into();
+                                // Kick off lazy thumbnails when the gallery is active.
+                                shell.render_library_thumbnails(cx);
                             }
                             Err(error) => {
                                 shell.library_status = format!("索引读取失败：{error}").into();
@@ -7897,7 +8190,7 @@ impl ShellApp {
             cx.notify();
             return;
         }
-        let base = match crate::file_workflow::current_user_config_directory() {
+        let base = match self.library_base() {
             Ok(base) => base,
             Err(error) => {
                 self.library_status = format!("无法确定数据目录：{error}").into();
@@ -7905,8 +8198,7 @@ impl ShellApp {
                 return;
             }
         };
-        let destination = base.join("libraries").join(&source.id);
-        let source_id = source.id.clone();
+        let destination = base.join(&source.id);
         self.library_syncing_source = Some(source.id.clone());
         self.library_status = "正在同步 Git 棋谱库…".into();
         let weak = cx.entity().downgrade();
@@ -7918,27 +8210,23 @@ impl ShellApp {
                         .background_executor()
                         .spawn(async move {
                             let mut adapter = ryusei_host::ProcessGitSyncAdapter;
-                            let report =
-                                ryusei_host::sync_sgf_library(&source, &destination, &mut adapter)
-                                    .map_err(|error| error.to_string())?;
-                            let entries = ryusei_host::scan_sgf_library(&source_id, &destination)
-                                .map_err(|error| error.to_string())?;
-                            Ok::<_, String>((report, entries))
+                            ryusei_host::sync_sgf_library(&source, &destination, &mut adapter)
+                                .map_err(|error| error.to_string())
                         })
                         .await;
                     let _ = weak.update(&mut cx, |shell, cx| {
                         shell.library_task = None;
                         shell.library_syncing_source = None;
                         match result {
-                            Ok((report, entries)) => {
-                                shell.library_entries = entries;
-                                shell.library_status = format!(
-                                    "同步完成：{} 个 SGF（{:?}）",
-                                    shell.library_entries.len(),
-                                    report.operation
-                                )
-                                .into();
+                            Ok(report) => {
+                                shell.library_status =
+                                    format!("同步完成（{:?}），正在重建索引…", report.operation)
+                                        .into();
                                 shell.show_toast("授权 SGF 棋谱库同步完成".to_owned(), cx);
+                                // Re-scan every source and rebuild the record
+                                // numbers so newly fetched games are appended in
+                                // record-number order.
+                                shell.refresh_library_entries(cx);
                             }
                             Err(error) => {
                                 shell.library_status = format!("同步失败：{error}").into();
@@ -8091,11 +8379,23 @@ impl ShellApp {
             if game.phase == "finished"
                 && self.session_policy.source == SessionSource::RemoteCompetition
             {
+                let game_id = game.game_id;
                 self.project_ogs_server_moves(game);
                 self.finish_local_game(
                     &format!("OGS 对局结束：{} vs {}", game.black_name, game.white_name),
                     cx,
                 );
+                if self
+                    .settings
+                    .get_bool("library.auto_save_to_library")
+                    .unwrap_or(false)
+                {
+                    self.save_current_game_to_library(
+                        ryusei_domain_core::RecordSource::Ogs { game_id },
+                        vec!["OGS".to_owned(), "自动入库".to_owned()],
+                        cx,
+                    );
+                }
             }
         }
     }

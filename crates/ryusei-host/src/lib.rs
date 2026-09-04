@@ -11,6 +11,7 @@ pub mod fox_kifu;
 pub mod gif_exporter;
 pub mod katago_setup;
 pub mod legacy_styles;
+pub mod library_store;
 pub mod move_grading;
 pub mod ogs;
 pub mod ogs_auth;
@@ -94,6 +95,13 @@ pub use katago_setup::{
     upgrade_katago_via_brew, validate_katago_engine_record,
 };
 pub use legacy_styles::{LegacyStylesReport, MigratedColorRule, analyze_legacy_styles};
+pub use library_store::{
+    DEFAULT_REVISION_LIMIT, FsLibraryStore, IngestOutcome, LIBRARY_INDEX_FILE_NAME,
+    LIBRARY_RECORDS_DIR, LIBRARY_REVISIONS_DIR, LibraryStoreError, LibraryStoreIo,
+    append_library_revision, atomic_write_text, ingest_git_entries, ingest_git_entry,
+    ingest_library_record, ingest_local_path, load_library, managed_record_path, persist_library,
+    read_library_record, record_file_name, remove_library_record,
+};
 pub use move_grading::{
     ComprehensiveGameAnalytics, GameAnalyticsSummary, GamePhase, MoveEvaluation, MoveQuality,
     PhaseAnalytics, RankInterval, compute_comprehensive_game_analytics,
@@ -148,6 +156,7 @@ pub use settings::{
 pub use sgf_library::{
     ProcessGitSyncAdapter, RedistributionRights, SgfGitSyncAdapter, SgfLibraryEntry,
     SgfLibraryError, SgfLibrarySource, SgfLibrarySyncOperation, SgfLibrarySyncReport,
+    render_library_thumbnail, render_library_thumbnail_with_fingerprint, render_thumbnail_png,
     scan_sgf_library, sync_sgf_library,
 };
 pub use starriver_capture::{

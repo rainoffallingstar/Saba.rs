@@ -5,6 +5,7 @@ use thiserror::Error;
 
 pub mod gtp;
 pub mod legacy;
+pub mod library;
 pub mod monte_carlo;
 pub mod opening;
 pub mod review;
@@ -12,6 +13,10 @@ pub mod scoring;
 pub mod session;
 pub mod time_control;
 
+pub use library::{
+    GameRecord, InsertOutcome, LIBRARY_SCHEMA_VERSION, LibraryIndex, LibraryQuery, LibrarySort,
+    RecordId, RecordMetadata, RecordNumber, RecordRevisionRef, RecordSource, RevisionTrigger,
+};
 pub use opening::OpeningConvention;
 pub use review::ReviewProfile;
 pub use scoring::{
@@ -1512,6 +1517,19 @@ struct ParsedSgfNode {
     children: Vec<ParsedSgfNode>,
 }
 
+/// Lightweight extraction of the root node's SGF properties without building a
+/// full game tree. Used for library indexing where only header metadata (PB,
+/// PW, RE, GN, ...) is needed. Returns an empty map when the text is not a
+/// well-formed SGF root, so callers can degrade gracefully instead of failing
+/// the whole scan on one malformed file. Escape and whitespace handling is
+/// delegated to the authoritative `SgfParser`, so this can never diverge from
+/// full-document parsing.
+pub fn extract_root_properties(sgf: &str) -> Properties {
+    SgfParser::new(sgf)
+        .parse_root_properties()
+        .unwrap_or_default()
+}
+
 struct SgfParser<'a> {
     bytes: &'a [u8],
     index: usize,
@@ -1523,6 +1541,17 @@ impl<'a> SgfParser<'a> {
             bytes: content.as_bytes(),
             index: 0,
         }
+    }
+
+    /// Parses only the root node's properties by reusing the authoritative
+    /// sequence/property/value machinery. Stops after the first node, so
+    /// move sequences and variations are never walked.
+    fn parse_root_properties(&mut self) -> Result<Properties, DomainError> {
+        self.skip_whitespace();
+        self.expect(b'(')?;
+        self.skip_whitespace();
+        self.expect(b';')?;
+        self.parse_properties()
     }
 
     fn parse_game_tree(&mut self) -> Result<ParsedSgfNode, DomainError> {
@@ -1952,6 +1981,34 @@ mod tests {
             round_tripped_snapshot.root_properties,
             snapshot.root_properties
         );
+    }
+
+    #[test]
+    fn extracts_root_properties_without_building_a_game_tree() {
+        let properties = extract_root_properties(
+            "(;GM[1]FF[4]SZ[19]PB[柯洁]PW[申真谞]RE[黑中盘胜]GN[Example];B[pd];W[dp])",
+        );
+        assert_eq!(properties["PB"], ["柯洁"]);
+        assert_eq!(properties["PW"], ["申真谞"]);
+        assert_eq!(properties["RE"], ["黑中盘胜"]);
+        assert_eq!(properties["GN"], ["Example"]);
+        assert_eq!(properties["SZ"], ["19"]);
+        // Only the root node's properties are read; move nodes are ignored.
+        assert!(!properties.contains_key("B"));
+        assert!(!properties.contains_key("W"));
+    }
+
+    #[test]
+    fn extract_root_properties_handles_escaping_and_malformed_input() {
+        let escaped = extract_root_properties("(;C[Bracket: \\] and slash: \\\\]N[日本語])");
+        assert_eq!(escaped["C"], ["Bracket: ] and slash: \\"]);
+        assert_eq!(escaped["N"], ["日本語"]);
+
+        // Malformed / non-SGF text degrades to an empty map instead of failing.
+        assert!(extract_root_properties("not an sgf").is_empty());
+        assert!(extract_root_properties("").is_empty());
+        // A truncated-but-parseable root still yields its properties.
+        assert!(!extract_root_properties("(;SZ[19]").is_empty());
     }
 
     #[test]

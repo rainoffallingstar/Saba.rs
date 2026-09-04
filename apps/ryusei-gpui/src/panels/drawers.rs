@@ -543,15 +543,54 @@ pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statef
                             .child(div().text_xs().text_color(rgb(shell.palette.muted)).child(shell.library_status.clone())),
                     ),
             )
-            .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(shell.palette.subtle)).child(format!("已同步棋谱（{}）", shell.library_entries.len())))
-            .child(div().flex().flex_col().gap_1().children(shell.library_entries.iter().take(200).map(|entry| {
-                let path = entry.path.clone();
-                Button::new(gpui::SharedString::from(format!("library-entry-{}-{}", entry.source_id, entry.relative_path)))
-                    .small()
-                    .ghost()
-                    .label(entry.relative_path.clone())
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.open_library_entry(path.clone(), cx)))
-            })))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(shell.palette.subtle))
+                            .child(format!("已同步棋谱（{}）", shell.library_entries.len())),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .child(
+                                Button::new("library-view-gallery")
+                                    .xsmall()
+                                    .ghost()
+                                    .selected(shell.library_view_mode == crate::LibraryViewMode::Gallery)
+                                    .label("缩略图")
+                                    .tooltip("以缩略图形式展示（对局名 + 盘面）")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        if shell.library_view_mode != crate::LibraryViewMode::Gallery {
+                                            shell.toggle_library_view_mode(cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                Button::new("library-view-list")
+                                    .xsmall()
+                                    .ghost()
+                                    .selected(shell.library_view_mode == crate::LibraryViewMode::List)
+                                    .label("列表")
+                                    .tooltip("以列表形式展示（编号 + 黑方 + 白方 + 结果）")
+                                    .on_click(cx.listener(|shell, _, _, cx| {
+                                        if shell.library_view_mode != crate::LibraryViewMode::List {
+                                            shell.toggle_library_view_mode(cx);
+                                        }
+                                    })),
+                            ),
+                    ),
+            )
+            .child(match shell.library_view_mode {
+                crate::LibraryViewMode::Gallery => render_library_gallery(shell, cx),
+                crate::LibraryViewMode::List => render_library_list(shell, cx),
+            })
             .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(shell.palette.subtle)).child("最近打开"))
             .child(div().flex().flex_col().gap_1().children(recent_files.into_iter().map(|entry| {
                 let entry_id = entry.id.clone();
@@ -570,6 +609,177 @@ pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statef
             }))),
         shell,
         cx,
+    )
+}
+
+/// Gallery display form: a wrapping grid of cards, each showing a board
+/// thumbnail and the game name. Thumbnails are rendered lazily (fingerprint
+/// keyed) and cached in the shell.
+fn render_library_gallery(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    div().flex().flex_wrap().gap_2().items_start().children(
+        shell.library_entries.iter().take(200).map(|entry| {
+            let id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let path = entry.path.clone();
+            let name = entry.metadata.display_name(&entry.relative_path.clone());
+            let thumbnail = shell.library_thumbnail_image(&id);
+            div()
+                .id(gpui::SharedString::from(format!("library-gallery-{id}")))
+                .debug_selector(move || format!("library-gallery-{id}"))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .w(px(112.0))
+                .p_1()
+                .border_1()
+                .border_color(rgb(shell.palette.border))
+                .rounded_md()
+                .bg(rgb(shell.palette.panel))
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |shell, _, _, cx| shell.open_library_entry(path.clone(), cx)),
+                )
+                .child(if let Some(image) = thumbnail {
+                    gpui::img(image)
+                        .w(px(104.0))
+                        .h(px(104.0))
+                        .object_fit(gpui::ObjectFit::Contain)
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(104.0))
+                        .h(px(104.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_xs()
+                        .text_color(rgb(shell.palette.muted))
+                        .child("…")
+                        .into_any_element()
+                })
+                .child(
+                    div()
+                        .w(px(104.0))
+                        .text_xs()
+                        .text_color(rgb(shell.palette.text))
+                        .child(name),
+                )
+        }),
+    )
+}
+
+/// One row of the library list view: a stable game number plus the header
+/// columns the user asked for (black, white, result). Kept as a pure value so
+/// the renderer only paints and the row shape is testable without a window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LibraryListRow {
+    pub number: String,
+    pub black: String,
+    pub white: String,
+    pub result: String,
+    pub entry_id: String,
+    pub path: std::path::PathBuf,
+}
+
+/// Builds list rows from the *whole* sorted library. The number is the entry's
+/// rank within the library (1-based), never the rendered-slice index, so a
+/// bounded render limit does not renumber the rows shown. Missing header
+/// values render as an em dash rather than an empty cell.
+pub(crate) fn library_list_rows(
+    entries: &[ryusei_host::SgfLibraryEntry],
+    record_numbers: &std::collections::HashMap<String, u64>,
+) -> Vec<LibraryListRow> {
+    const RENDER_LIMIT: usize = 200;
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < RENDER_LIMIT)
+        .map(|(index, entry)| {
+            let entry_id = format!("{}-{}", entry.source_id, entry.relative_path);
+            let number = record_numbers
+                .get(&entry_id)
+                .map(|number| number.to_string())
+                .unwrap_or_else(|| (index + 1).to_string());
+            LibraryListRow {
+                number,
+                black: entry
+                    .metadata
+                    .black
+                    .clone()
+                    .unwrap_or_else(|| "—".to_owned()),
+                white: entry
+                    .metadata
+                    .white
+                    .clone()
+                    .unwrap_or_else(|| "—".to_owned()),
+                result: entry
+                    .metadata
+                    .result
+                    .clone()
+                    .unwrap_or_else(|| "—".to_owned()),
+                entry_id,
+                path: entry.path.clone(),
+            }
+        })
+        .collect()
+}
+
+/// List display form: rows of game number + black + white + result.
+fn render_library_list(shell: &ShellApp, cx: &Context<ShellApp>) -> Div {
+    div().flex().flex_col().gap_1().children(
+        library_list_rows(&shell.library_entries, &shell.library_record_numbers)
+            .into_iter()
+            .map(|row| {
+                let id = row.entry_id.clone();
+                let path = row.path.clone();
+                div()
+                    .id(gpui::SharedString::from(format!("library-list-{id}")))
+                    .debug_selector(move || format!("library-list-{id}"))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .border_1()
+                    .border_color(rgb(shell.palette.border))
+                    .rounded_md()
+                    .bg(rgb(shell.palette.panel))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |shell, _, _, cx| {
+                            shell.open_library_entry(path.clone(), cx)
+                        }),
+                    )
+                    .child(
+                        div()
+                            .w(px(24.0))
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.muted))
+                            .child(row.number),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.text))
+                            .child(row.black),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.text))
+                            .child(row.white),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(shell.palette.subtle))
+                            .child(row.result),
+                    )
+            }),
     )
 }
 
@@ -659,6 +869,22 @@ pub fn render_live_capture_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> S
                                 if let Some(url) = shell.live_source_url.clone() {
                                     shell.text_inputs.live_url_input.set_text(url);
                                     shell.capture_public_live_game(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("live-capture-save-library")
+                            .small()
+                            .outline()
+                            .label("保存快照到库")
+                            .disabled(shell.live_source_url.is_none())
+                            .on_click(cx.listener(|shell, _, _, cx| {
+                                if let Some(url) = shell.live_source_url.clone() {
+                                    shell.save_current_game_to_library(
+                                        ryusei_domain_core::RecordSource::Live { page_url: url },
+                                        vec!["直播快照".to_owned()],
+                                        cx,
+                                    );
                                 }
                             })),
                     ),
@@ -872,12 +1098,33 @@ pub fn render_ogs_account_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> St
                         ShellApp::on_ogs_game_id_key_down,
                     ))
                     .child(
-                        Button::new("ogs-connect-game")
-                            .small()
-                            .outline()
-                            .label("连接对局")
-                            .disabled(!signed_in)
-                            .on_click(cx.listener(|shell, _, _, cx| shell.connect_ogs_game(cx))),
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("ogs-connect-game")
+                                    .small()
+                                    .outline()
+                                    .label("连接对局")
+                                    .disabled(!signed_in)
+                                    .on_click(cx.listener(|shell, _, _, cx| shell.connect_ogs_game(cx))),
+                            )
+                            .when(shell.ogs_client.competition_game_id().is_some(), |this| {
+                                let game_id = shell.ogs_client.competition_game_id().unwrap();
+                                this.child(
+                                    Button::new("ogs-save-to-library")
+                                        .small()
+                                        .outline()
+                                        .label("保存对局到库")
+                                        .on_click(cx.listener(move |shell, _, _, cx| {
+                                            shell.save_current_game_to_library(
+                                                ryusei_domain_core::RecordSource::Ogs { game_id },
+                                                vec!["OGS".to_owned()],
+                                                cx,
+                                            );
+                                        })),
+                                )
+                            }),
                     ),
             )
             .when(signed_in, |this| {
@@ -1975,4 +2222,97 @@ pub fn render_export_drawer(
         shell,
         cx,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LibraryListRow, library_list_rows};
+    use ryusei_domain_core::RecordMetadata;
+    use ryusei_host::SgfLibraryEntry;
+    use std::path::PathBuf;
+
+    fn entry(source_id: &str, relative_path: &str, metadata: RecordMetadata) -> SgfLibraryEntry {
+        SgfLibraryEntry {
+            source_id: source_id.to_owned(),
+            relative_path: relative_path.to_owned(),
+            path: PathBuf::from("/checkout").join(relative_path),
+            metadata,
+        }
+    }
+
+    fn meta(black: Option<&str>, white: Option<&str>, result: Option<&str>) -> RecordMetadata {
+        RecordMetadata {
+            black: black.map(ToOwned::to_owned),
+            white: white.map(ToOwned::to_owned),
+            result: result.map(ToOwned::to_owned),
+            ..RecordMetadata::default()
+        }
+    }
+
+    #[test]
+    fn list_rows_assign_rank_as_number_and_fill_columns() {
+        let entries = vec![
+            entry(
+                "pro",
+                "a.sgf",
+                meta(Some("黑甲"), Some("白乙"), Some("B+R")),
+            ),
+            entry("pro", "b.sgf", meta(Some("丙"), Some("丁"), None)),
+        ];
+        let rows = library_list_rows(&entries, &std::collections::HashMap::new());
+        assert_eq!(
+            rows,
+            vec![
+                LibraryListRow {
+                    number: "1".to_owned(),
+                    black: "黑甲".to_owned(),
+                    white: "白乙".to_owned(),
+                    result: "B+R".to_owned(),
+                    entry_id: "pro-a.sgf".to_owned(),
+                    path: PathBuf::from("/checkout/a.sgf"),
+                },
+                LibraryListRow {
+                    number: "2".to_owned(),
+                    black: "丙".to_owned(),
+                    white: "丁".to_owned(),
+                    result: "—".to_owned(),
+                    entry_id: "pro-b.sgf".to_owned(),
+                    path: PathBuf::from("/checkout/b.sgf"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn list_rows_are_capped_at_two_hundred_and_numbering_is_by_rank() {
+        let mut entries = Vec::new();
+        for i in 0..220 {
+            let name = format!("g{i:03}.sgf");
+            entries.push(entry("pro", &name, meta(None, None, None)));
+        }
+        let rows = library_list_rows(&entries, &std::collections::HashMap::new());
+        assert_eq!(rows.len(), 200);
+        // First rendered row keeps its whole-library rank, not 1.
+        assert_eq!(rows[0].number, "1");
+        assert_eq!(rows[199].number, "200");
+        // Rows beyond the render limit are excluded entirely.
+        assert!(!rows.iter().any(|row| row.number == "201"));
+    }
+
+    #[test]
+    fn list_rows_use_stable_record_numbers_when_index_has_them() {
+        let entries = vec![
+            entry("pro", "a.sgf", meta(Some("甲"), Some("乙"), Some("B+R"))),
+            entry("pro", "b.sgf", meta(None, None, None)),
+        ];
+        // The index assigned b number 7 and a number 3 in an earlier run; the
+        // rows must surface those stable numbers, not the list position.
+        let numbers = std::collections::HashMap::from([
+            ("pro-a.sgf".to_owned(), 3u64),
+            ("pro-b.sgf".to_owned(), 7u64),
+        ]);
+        let rows = library_list_rows(&entries, &numbers);
+        assert_eq!(rows[0].number, "3");
+        assert_eq!(rows[1].number, "7");
+    }
 }

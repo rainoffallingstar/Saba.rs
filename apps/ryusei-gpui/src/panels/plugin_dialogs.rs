@@ -556,6 +556,7 @@ pub(crate) fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -
                         .enumerate()
                         .map(|(index, game)| {
                             let chess_id = game.chess_id.clone();
+                            let save_chess_id = chess_id.clone();
                             div()
                                 .p_2()
                                 .rounded_md()
@@ -604,6 +605,28 @@ pub(crate) fn render_fox_sync_dialog(shell: &ShellApp, cx: &Context<ShellApp>) -
                                         game.result, game.date, game.moves_count
                                     ),
                                 ))
+                                .child(
+                                    div().mt_1().flex().justify_end().child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .text_xs()
+                                            .text_color(rgb(shell.palette.accent))
+                                            .hover(|style| style.bg(rgb(shell.palette.input)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |shell, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    shell.save_fox_game_to_library(
+                                                        &save_chess_id,
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                            .child("保存到棋谱库"),
+                                    ),
+                                )
                         }),
                 ),
         )

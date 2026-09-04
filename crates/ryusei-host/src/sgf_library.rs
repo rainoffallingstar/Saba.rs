@@ -150,12 +150,16 @@ pub enum SgfLibrarySyncOperation {
     Fetched,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SgfLibraryEntry {
     pub source_id: String,
     pub relative_path: String,
     pub path: PathBuf,
+    /// Header metadata extracted from the SGF root node, using the shared
+    /// domain `RecordMetadata` so every library consumer sees one vocabulary.
+    #[serde(default)]
+    pub metadata: ryusei_domain_core::RecordMetadata,
 }
 
 /// Finds regular SGF files without following symlinks out of the synchronized
@@ -201,10 +205,12 @@ pub fn scan_sgf_library(
                 .map_err(|error| SgfLibraryError::Scan(error.to_string()))?
                 .to_string_lossy()
                 .replace('\\', "/");
+            let metadata = read_library_metadata(&path);
             entries.push(SgfLibraryEntry {
                 source_id: source_id.to_owned(),
                 relative_path,
                 path,
+                metadata,
             });
             if entries.len() >= MAX_LIBRARY_FILES {
                 return Err(SgfLibraryError::Scan(format!(
@@ -215,6 +221,74 @@ pub fn scan_sgf_library(
     }
     entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(entries)
+}
+
+/// Reads an SGF file and extracts its root-node header metadata. Failures
+/// (unreadable file, malformed SGF) degrade to empty metadata so one bad file
+/// never aborts the whole library scan.
+fn read_library_metadata(path: &Path) -> ryusei_domain_core::RecordMetadata {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return ryusei_domain_core::RecordMetadata::default();
+    };
+    let properties = ryusei_domain_core::extract_root_properties(&content);
+    ryusei_domain_core::RecordMetadata::from_root_properties(&properties)
+}
+
+/// Renders a PNG thumbnail of the final board position from SGF content. Pure
+/// over its input (no file system), so it is testable at a hermetic seam and
+/// the caller decides where content comes from. The board is shown at the last
+/// move of the preferred mainline. Failures surface as typed `SgfLibraryError`
+/// so the caller can show a placeholder instead of a broken image.
+pub fn render_thumbnail_png(content: &str, size: u32) -> Result<Vec<u8>, SgfLibraryError> {
+    let mut game = ryusei_domain_core::GameDocument::from_sgf(content)
+        .map_err(|error| SgfLibraryError::Thumbnail(format!("could not parse SGF: {error}")))?;
+    // Walk the preferred mainline to its last node so the thumbnail shows the
+    // final position rather than the empty opening board.
+    let snapshot = game.snapshot();
+    let mut cursor = snapshot.root_node_id.clone();
+    while let Some(next) = snapshot.preferred_child_by_node.get(&cursor) {
+        cursor = next.clone();
+    }
+    if cursor != snapshot.root_node_id {
+        game.restore_current_node(&cursor).map_err(|error| {
+            SgfLibraryError::Thumbnail(format!("could not reach final position: {error}"))
+        })?;
+    }
+    let board = game.snapshot().board;
+    crate::export_position_to_png(
+        &board,
+        &crate::PositionPngOptions {
+            image_size: size.clamp(64, 512),
+            show_coordinates: false,
+            ownership: None,
+        },
+    )
+    .map_err(SgfLibraryError::Thumbnail)
+}
+
+/// Convenience wrapper that reads an SGF file and renders its thumbnail. The
+/// read is the only file-system touch; rendering itself is the pure
+/// `render_thumbnail_png` seam.
+pub fn render_library_thumbnail(path: &Path, size: u32) -> Result<Vec<u8>, SgfLibraryError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        SgfLibraryError::Thumbnail(format!("could not read {}: {error}", path.display()))
+    })?;
+    render_thumbnail_png(&content, size)
+}
+
+/// Renders a thumbnail and returns its content fingerprint alongside the PNG.
+/// The fingerprint is the thumbnail cache key: when a file's content changes
+/// the fingerprint changes, so a caller keyed by it can never serve a stale
+/// board position for an edited game.
+pub fn render_library_thumbnail_with_fingerprint(
+    path: &Path,
+    size: u32,
+) -> Result<(String, Vec<u8>), SgfLibraryError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        SgfLibraryError::Thumbnail(format!("could not read {}: {error}", path.display()))
+    })?;
+    let png = render_thumbnail_png(&content, size)?;
+    Ok((crate::external_file::fingerprint_content(&content), png))
 }
 
 /// Real Git adapter. It deliberately disables terminal prompts: the library
@@ -397,6 +471,8 @@ pub enum SgfLibraryError {
     Git(String),
     #[error("SGF library scan failed: {0}")]
     Scan(String),
+    #[error("SGF library thumbnail failed: {0}")]
+    Thumbnail(String),
     #[error(
         "SGF library source `{source_id}` origin `{origin}` does not match declared `{declared}`"
     )]
@@ -625,7 +701,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("nested")).expect("scan fixture directories");
         std::fs::write(root.join("a.sgf"), "(;GM[1])").expect("scan fixture sgf");
-        std::fs::write(root.join("nested/b.SGF"), "(;GM[1])").expect("scan fixture sgf");
+        std::fs::write(
+            root.join("nested/b.SGF"),
+            "(;GM[1]PB[Black]PW[White]RE[B+R]GN[Fixture])",
+        )
+        .expect("scan fixture sgf");
         std::fs::create_dir_all(root.join(".git")).expect("scan fixture git dir");
         std::fs::write(root.join("notes.txt"), "not an sgf").expect("scan fixture text");
 
@@ -638,6 +718,108 @@ mod tests {
             vec!["a.sgf", "nested/b.SGF"]
         );
         assert!(entries.iter().all(|entry| entry.source_id == "scan-test"));
+        // Header metadata is extracted from the SGF root node.
+        let with_metadata = entries
+            .iter()
+            .find(|entry| entry.relative_path == "nested/b.SGF")
+            .expect("metadata fixture present");
+        assert_eq!(with_metadata.metadata.black.as_deref(), Some("Black"));
+        assert_eq!(with_metadata.metadata.white.as_deref(), Some("White"));
+        assert_eq!(with_metadata.metadata.result.as_deref(), Some("B+R"));
+        assert_eq!(with_metadata.metadata.game_name.as_deref(), Some("Fixture"));
+        assert_eq!(with_metadata.metadata.display_name("fallback"), "Fixture");
+        // Files without header metadata degrade to empty metadata.
+        let plain = entries
+            .iter()
+            .find(|entry| entry.relative_path == "a.sgf")
+            .expect("plain fixture present");
+        assert_eq!(
+            plain.metadata,
+            ryusei_domain_core::RecordMetadata::default()
+        );
+        assert_eq!(plain.metadata.display_name("a.sgf"), "a.sgf");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_library_metadata_degrades_on_unreadable_or_malformed_files() {
+        let root = std::env::temp_dir().join("ryusei-sgf-library-metadata-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("metadata fixture directory");
+        let missing = root.join("missing.sgf");
+        assert_eq!(
+            read_library_metadata(&missing),
+            ryusei_domain_core::RecordMetadata::default()
+        );
+        let malformed = root.join("malformed.sgf");
+        std::fs::write(&malformed, "not an sgf").expect("malformed fixture");
+        assert_eq!(
+            read_library_metadata(&malformed),
+            ryusei_domain_core::RecordMetadata::default()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn renders_a_png_thumbnail_of_the_final_position() {
+        let root = std::env::temp_dir().join("ryusei-sgf-library-thumbnail-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("thumbnail fixture directory");
+        let game = root.join("game.sgf");
+        let content = "(;SZ[9];B[dd];W[dd];B[ee])";
+        std::fs::write(&game, content).expect("thumbnail fixture");
+
+        // Pure content seam: deterministic, no file system involved.
+        let png = render_thumbnail_png(content, 128).expect("thumbnail renders");
+        // PNG magic bytes.
+        assert_eq!(
+            &png[..8],
+            &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']
+        );
+        assert!(png.len() > 100, "thumbnail should contain image data");
+        // The same content always renders the same bytes.
+        assert_eq!(
+            png,
+            render_thumbnail_png(content, 128).expect("deterministic")
+        );
+
+        // Path wrapper reads the file and produces identical bytes.
+        assert_eq!(
+            png,
+            render_library_thumbnail(&game, 128).expect("path wrapper renders")
+        );
+
+        // Malformed content surfaces a typed error rather than a broken image.
+        let bad = root.join("bad.sgf");
+        std::fs::write(&bad, "not an sgf").expect("bad fixture");
+        assert!(render_thumbnail_png("not an sgf", 128).is_err());
+        assert!(render_library_thumbnail(&bad, 128).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fingerprint_wrapper_renders_and_changes_when_content_changes() {
+        let root = std::env::temp_dir().join("ryusei-sgf-library-thumbnail-fp-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("fixture dir");
+        let game = root.join("game.sgf");
+        std::fs::write(&game, "(;SZ[9];B[dd];W[dd];B[ee])").expect("write sgf");
+
+        let (first_fp, first_png) =
+            render_library_thumbnail_with_fingerprint(&game, 128).expect("render with fp");
+        assert!(!first_fp.is_empty());
+        assert_eq!(
+            first_png,
+            render_library_thumbnail(&game, 128).expect("identical bytes")
+        );
+
+        // Editing the file changes the fingerprint, so a fingerprint-keyed cache
+        // would not serve the old board position.
+        std::fs::write(&game, "(;SZ[9];B[cc];W[dc];B[dd])").expect("edit sgf");
+        let (second_fp, second_png) =
+            render_library_thumbnail_with_fingerprint(&game, 128).expect("render edited");
+        assert_ne!(first_fp, second_fp);
+        assert_ne!(first_png, second_png);
         let _ = std::fs::remove_dir_all(&root);
     }
 

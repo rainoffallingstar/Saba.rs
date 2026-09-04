@@ -67,7 +67,8 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "theme.custom_blackstones"
         | "theme.custom_whitestones"
         | "theme.custom_board"
-        | "theme.custom_background" => Some(SettingKind::NullableString),
+        | "theme.custom_background"
+        | "library.local_root" => Some(SettingKind::NullableString),
         "app.always_show_result"
         | "app.enable_hardware_acceleration"
         | "app.startup_check_updates"
@@ -112,7 +113,8 @@ pub fn setting_kind(key: &str) -> Option<SettingKind> {
         | "katago.human_sl_enabled"
         | "window.maximized"
         | "review.analyze_during_game"
-        | "library.redistribution_allowed" => Some(SettingKind::Boolean),
+        | "library.redistribution_allowed"
+        | "library.auto_save_to_library" => Some(SettingKind::Boolean),
         "app.hide_busy_delay"
         | "app.loadgame_delay"
         | "app.startup_check_updates_delay"
@@ -447,6 +449,28 @@ mod tests {
         assert_eq!(setting_kind("unknown.key"), None);
         assert!(is_legacy_overwrite_marker("setting.overwrite.v0.50.1"));
         assert!(!is_legacy_overwrite_marker("setting.overwrite.future"));
+    }
+
+    #[test]
+    fn library_settings_kinds_and_validation() {
+        // local_root is an optional path (null or a string).
+        assert_eq!(
+            setting_kind("library.local_root"),
+            Some(SettingKind::NullableString)
+        );
+        assert!(validate_setting_value("library.local_root", &json!(null)).is_ok());
+        assert!(
+            validate_setting_value("library.local_root", &json!("/data/games/library")).is_ok()
+        );
+        assert!(validate_setting_value("library.local_root", &json!(42)).is_err());
+
+        // auto_save_to_library is a boolean flag, defaulting off.
+        assert_eq!(
+            setting_kind("library.auto_save_to_library"),
+            Some(SettingKind::Boolean)
+        );
+        assert!(validate_setting_value("library.auto_save_to_library", &json!(true)).is_ok());
+        assert!(validate_setting_value("library.auto_save_to_library", &json!("yes")).is_err());
     }
 
     #[test]
