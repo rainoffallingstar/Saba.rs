@@ -344,7 +344,7 @@ impl LibraryIndex {
                 results.sort_by_key(|record| record.number);
             }
             LibrarySort::UpdatedDescending => {
-                results.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+                results.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
             }
             LibrarySort::TitleAscending => {
                 results.sort_by(|left, right| left.title.cmp(&right.title));
@@ -440,52 +440,46 @@ fn matches_query(record: &GameRecord, query: &LibraryQuery) -> bool {
         .as_deref()
         .map(str::trim)
         .filter(|r| !r.is_empty())
-    {
-        if record
+        && record
             .metadata
             .result
             .as_deref()
             .is_none_or(|value| value != result)
-        {
-            return false;
-        }
+    {
+        return false;
     }
-    if let Some(kind) = query.source_kind.as_deref() {
-        if record.source.kind() != kind {
-            return false;
-        }
+    if let Some(kind) = query.source_kind.as_deref()
+        && record.source.kind() != kind
+    {
+        return false;
     }
     if let Some(tag) = query
         .tag
         .as_deref()
         .map(str::trim)
         .filter(|t| !t.is_empty())
+        && !record.tags.iter().any(|candidate| candidate == tag)
     {
-        if !record.tags.iter().any(|candidate| candidate == tag) {
-            return false;
-        }
+        return false;
     }
+    let date = record.metadata.date.as_deref().unwrap_or_default();
     if let Some(from) = query
         .date_from
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty())
+        && date < from
     {
-        let date = record.metadata.date.as_deref().unwrap_or_default();
-        if date < from {
-            return false;
-        }
+        return false;
     }
     if let Some(to) = query
         .date_to
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty())
+        && (date.is_empty() || date > to)
     {
-        let date = record.metadata.date.as_deref().unwrap_or_default();
-        if date.is_empty() || date > to {
-            return false;
-        }
+        return false;
     }
     true
 }

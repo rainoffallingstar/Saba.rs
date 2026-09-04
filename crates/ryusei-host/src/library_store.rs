@@ -359,7 +359,7 @@ fn unix_milliseconds() -> u64 {
 /// digest of the record id, so ids containing path separators or `..` can never
 /// escape the records directory.
 pub fn record_file_name(id: &RecordId) -> String {
-    format!("{}.sgf", &fingerprint_content(id.as_str())[..16.min(64)])
+    format!("{}.sgf", &fingerprint_content(id.as_str())[..16])
 }
 
 /// Resolves the managed content path for a record id. Returns
@@ -618,7 +618,7 @@ mod tests {
         assert_eq!(first.number, RecordNumber(1));
         assert_eq!(first.outcome, InsertOutcome::Added);
         assert_eq!(first.record.metadata.black.as_deref(), Some("甲"));
-        assert_eq!(first.record.content_fingerprint.as_deref().is_some(), true);
+        assert!(first.record.content_fingerprint.as_deref().is_some());
 
         let second = ingest_library_record(
             &io,
@@ -754,10 +754,7 @@ mod tests {
         let id = &fox.record.id;
         assert!(root.join("records").join(record_file_name(id)).is_file());
         assert!(root.join(LIBRARY_INDEX_FILE_NAME).is_file());
-        assert_eq!(
-            io.read_record(id).expect("read back").contains("柯洁"),
-            true
-        );
+        assert!(io.read_record(id).expect("read back").contains("柯洁"));
 
         // A second store over the same root reloads index + numbers.
         let io2 = FsLibraryStore::new(root.clone());

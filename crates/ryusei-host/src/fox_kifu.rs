@@ -151,10 +151,10 @@ fn parse_rank_value(val: Option<&serde_json::Value>) -> String {
 }
 
 fn parse_result_value(item: &serde_json::Value) -> String {
-    if let Some(res) = item.get("result").and_then(serde_json::Value::as_str) {
-        if !res.is_empty() {
-            return res.to_owned();
-        }
+    if let Some(res) = item.get("result").and_then(serde_json::Value::as_str)
+        && !res.is_empty()
+    {
+        return res.to_owned();
     }
     let winner = item
         .get("winner")
@@ -349,22 +349,21 @@ where
 
         // Direct query by username (Tencent Weiqi production endpoint)
         let direct_url = build_query_user_chess_list_url(trimmed, "0");
-        if let Ok(list_json) = self.http.get(&direct_url) {
-            if let Ok(games) = parse_fox_chess_list_response(&list_json) {
-                if !games.is_empty() {
-                    return Ok(games);
-                }
-            }
+        if let Ok(list_json) = self.http.get(&direct_url)
+            && let Ok(games) = parse_fox_chess_list_response(&list_json)
+            && !games.is_empty()
+        {
+            return Ok(games);
         }
 
         // Fallback to legacy two-step user query (supports legacy fixture test)
         let user_url = build_query_user_url(trimmed);
-        if let Ok(user_json) = self.http.get(&user_url) {
-            if let Ok(summary) = parse_query_user_response(&user_json) {
-                let list_url = build_fetch_chess_list_url(&summary.uid, "0");
-                let list_json = self.http.get(&list_url)?;
-                return parse_fox_chess_list_response(&list_json);
-            }
+        if let Ok(user_json) = self.http.get(&user_url)
+            && let Ok(summary) = parse_query_user_response(&user_json)
+        {
+            let list_url = build_fetch_chess_list_url(&summary.uid, "0");
+            let list_json = self.http.get(&list_url)?;
+            return parse_fox_chess_list_response(&list_json);
         }
 
         Err(format!("未查询到野狐用户或对局: {trimmed}"))

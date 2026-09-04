@@ -7838,7 +7838,7 @@ impl ShellApp {
             self.library_thumbnail_pending.insert(id.clone());
             let path = entry.path.clone();
             let weak = weak.clone();
-            let _ = cx.spawn(
+            cx.spawn(
                 move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
                     let mut cx = cx.clone();
                     async move {
@@ -7885,7 +7885,8 @@ impl ShellApp {
                         });
                     }
                 },
-            );
+            )
+            .detach();
         }
     }
 
