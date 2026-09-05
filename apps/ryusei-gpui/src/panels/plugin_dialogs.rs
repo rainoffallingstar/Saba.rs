@@ -5,14 +5,14 @@
 //! generic declarative panels) and the pinned-plugin manager. They are used by
 //! the bottom deck and the left engine sidebar's "引擎与工具" section.
 
-use gpui::{
+use gpui_kit::component::badge::Badge;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::{
     Context, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, div, prelude::*, px,
     rgb,
 };
-use gpui_component::badge::Badge;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Disableable, Selectable, Sizable};
 
 use super::icon_label;
 use crate::ShellApp;

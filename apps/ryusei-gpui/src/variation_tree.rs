@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, rc::Rc};
 
-use gpui::{
+use gpui_kit::{
     App, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, ParentElement, Stateful,
-    Styled, Window, div, px, rgb,
+    Styled, Window, div, gpui, px, rgb,
 };
 use ryusei_domain_core::{Color, GameSnapshot, NodeId, NodeSnapshot};
 use ryusei_host::MoveQuality;

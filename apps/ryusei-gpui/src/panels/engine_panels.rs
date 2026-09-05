@@ -4,15 +4,16 @@
 
 use std::time::Duration;
 
-use gpui::{
+use gpui_kit::component::badge::Badge;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{Selectable, Sizable};
+use gpui_kit::gpui;
+use gpui_kit::{
     Animation, AnimationExt as _, Context, Div, FontWeight, InteractiveElement, IntoElement as _,
     MouseButton, MouseDownEvent, Stateful, StatefulInteractiveElement, div, prelude::*,
     pulsating_between, px, relative, rgb,
 };
-use gpui_component::badge::Badge;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{Selectable, Sizable};
 
 use ryusei_domain_core::GameSnapshot;
 
@@ -1411,10 +1412,12 @@ pub fn render_node_inspector_panel(
     div()
         .id("node-inspector-panel")
         .debug_selector(|| "node-inspector-panel".to_owned())
+        .flex_1()
         .flex()
         .flex_col()
         .gap_2()
         .p_3()
+        .pb_4()
         .child(
             if shell
                 .settings
@@ -1422,6 +1425,7 @@ pub fn render_node_inspector_panel(
                 .unwrap_or(true)
             {
                 div()
+                    .flex_1()
                     .flex()
                     .flex_col()
                     .gap_1p5()
@@ -1518,9 +1522,10 @@ pub fn render_node_inspector_panel(
                         };
                         div()
                             .id("node-comment-preview")
+                            .flex_1()
                             .px_3()
                             .py_2()
-                            .min_h(px(80.0))
+                            .min_h(px(120.0))
                             .border_1()
                             .border_color(rgb(shell.palette.border))
                             .rounded_md()
@@ -1542,9 +1547,10 @@ pub fn render_node_inspector_panel(
                             .track_focus(&shell.text_inputs.comment_focus_handle)
                             .tab_index(1)
                             .key_context("CommentInput")
+                            .flex_1()
                             .px_3()
                             .py_2()
-                            .min_h(px(80.0))
+                            .min_h(px(120.0))
                             .border_1()
                             .border_color(rgb(
                                 if shell.active_text_input == Some(crate::ActiveTextInput::Comment)

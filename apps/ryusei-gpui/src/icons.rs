@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 
-use gpui::{AssetSource, Result, SharedString, Styled as _};
+use gpui_kit::{AssetSource, Result, SharedString, Styled as _, gpui};
 
 /// Wraps inner SVG content in a 24×24 monoline document using `currentColor`.
 macro_rules! svg_doc {
@@ -374,7 +374,7 @@ pub fn icon(icon: ShellIcon, size: f32, color: u32) -> gpui::Svg {
 #[cfg(test)]
 mod tests {
     use super::{EmbeddedIcons, lookup};
-    use gpui::AssetSource;
+    use gpui_kit::AssetSource;
 
     #[test]
     fn every_lookup_entry_is_a_well_formed_svg_document() {

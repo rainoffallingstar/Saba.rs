@@ -6,6 +6,8 @@
 
 use std::ops::Range;
 
+use gpui_kit::gpui;
+
 const MAX_HISTORY: usize = 100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,8 +1,9 @@
 //! Compact global navigation rail, separate from the resizable engine sidebar.
 
-use gpui::{Context, Stateful, div, prelude::*, px, rgb};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Selectable, Sizable};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Selectable, Sizable};
+use gpui_kit::gpui;
+use gpui_kit::{Context, Stateful, div, prelude::*, px, rgb};
 
 use crate::icons::{self, ShellIcon};
 use crate::{NAVIGATION_RAIL_WIDTH, ShellApp};

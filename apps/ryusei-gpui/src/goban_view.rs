@@ -3,13 +3,13 @@ use std::{collections::BTreeMap, rc::Rc};
 
 use std::time::Duration;
 
-use gpui::{
+use gpui_kit::{
     Animation, AnimationExt as _, App, BoxShadow, Div, FontWeight, InteractiveElement,
     IntoElement as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Stateful, Styled, Window, div, hsla, point, pulsating_between, px, rgb,
+    Stateful, Styled, Window, div, gpui, hsla, point, pulsating_between, px, rgb,
 };
 #[cfg(test)]
-use gpui::{Pixels, Point};
+use gpui_kit::{Pixels, Point};
 #[cfg(test)]
 use ryusei_domain_core::MoveDto;
 use ryusei_domain_core::{BoardSnapshot, Color, GameSnapshot, NodeSnapshot, Vertex};
@@ -440,6 +440,7 @@ fn stone(color: Color, x: f32, y: f32, size: f32, stone_black: u32, stone_white:
             offset: point(px(1.5), px(3.5)),
             blur_radius: px(2.5),
             spread_radius: px(0.0),
+            inset: false,
         }])
         // Deepening bottom-right shade first (the gradient's dark/far stop),
         // kept inside the stone so the sheen and highlight read on top of it.
@@ -1204,6 +1205,7 @@ pub fn render_goban_with_id(
                 offset: point(px(0.0), px(0.0)),
                 blur_radius: px(18.0),
                 spread_radius: px(-6.0),
+                inset: false,
             }])
     });
 
@@ -1233,7 +1235,8 @@ mod tests {
         estimate_ownership_from_board, format_sgf_vertex, move_numbers_from_moves,
         parse_sgf_vertex, render_goban, vertex_at,
     };
-    use gpui::px;
+    use gpui_kit::gpui;
+    use gpui_kit::px;
     use ryusei_domain_core::{BoardSnapshot, Color, MoveDto, Vertex};
 
     fn test_board(width: usize, height: usize) -> BoardSnapshot {

@@ -6,7 +6,7 @@
 //! owns every text buffer uniformly. `ActiveTextInput` is the shell's enum
 //! naming a specific input; `TextInputs` maps that enum to a mutable buffer.
 
-use gpui::{FocusHandle, SharedString};
+use gpui_kit::{App, FocusHandle, SharedString};
 
 use crate::ActiveTextInput;
 use crate::native_text_input::NativeTextInput;
@@ -58,7 +58,7 @@ pub struct TextInputs {
 
 impl TextInputs {
     /// Builds every buffer empty and every focus handle fresh.
-    pub fn new(cx: &mut gpui::App) -> Self {
+    pub fn new(cx: &mut App) -> Self {
         Self {
             gtp_input: NativeTextInput::new(""),
             engine_input_focus_handle: cx.focus_handle(),

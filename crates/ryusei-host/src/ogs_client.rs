@@ -579,7 +579,7 @@ impl LiveOgsClient {
         transport.send_text(&encode_request("authenticate", &payload, request_id))?;
 
         // Wait for the authenticate reply before exposing the session.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {

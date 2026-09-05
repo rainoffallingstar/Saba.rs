@@ -5,14 +5,15 @@
 //! drawers share the `render_readonly_drawer` scaffold (overlay + panel +
 //! close control) and are pure views over `ShellApp` state.
 
-use gpui::{
+use gpui_kit::component::badge::Badge;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::gpui;
+use gpui_kit::{
     Context, Div, FocusHandle, FontWeight, InteractiveElement, MouseButton, MouseDownEvent,
     Stateful, StatefulInteractiveElement, Window, div, hsla, prelude::*, px, rgb,
 };
-use gpui_component::badge::Badge;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::checkbox::Checkbox;
-use gpui_component::{Disableable, Selectable, Sizable};
 
 use ryusei_domain_core::{GameSnapshot, MatchParticipants, PlayerKind, TimeControl};
 
@@ -1562,7 +1563,7 @@ fn render_preference_row(shell: &ShellApp, cx: &Context<ShellApp>, row: SettingR
                 .map(|value| editable_setting_value(Some(value)))
                 .unwrap_or_default()
                 .into();
-            window.focus(&shell.text_inputs.settings_input_focus_handle);
+            window.focus(&shell.text_inputs.settings_input_focus_handle, cx);
             cx.notify();
         }))
         .into_any_element()

@@ -24,7 +24,7 @@ pub(crate) use plugin_dialogs::{
 
 use std::rc::Rc;
 
-use gpui::{
+use gpui_kit::{
     App, Context, Div, FontWeight, InteractiveElement, MouseButton, MouseDownEvent, PathBuilder,
     Stateful, StatefulInteractiveElement, Window, canvas, deferred, div, hsla, linear_color_stop,
     linear_gradient, point, prelude::*, px, relative, rgb,
@@ -59,6 +59,7 @@ pub(crate) fn focus_ring(accent: u32) -> gpui::BoxShadow {
         offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
         blur_radius: gpui::px(0.0),
         spread_radius: gpui::px(3.0),
+        inset: false,
     }
 }
 
@@ -70,9 +71,10 @@ pub(crate) fn hsla_from_accent(accent: u32, alpha: f32) -> gpui::Hsla {
     gpui::Rgba { r, g, b, a: alpha }.into()
 }
 
-use gpui_component::badge::Badge;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::{Disableable, Selectable, Sizable};
+use gpui_kit::component::badge::Badge;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::gpui;
 
 use crate::ShellApp;
 use crate::engine_console::parse_gtp_vertex;

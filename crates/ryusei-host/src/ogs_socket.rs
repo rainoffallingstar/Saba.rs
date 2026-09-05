@@ -17,6 +17,15 @@ use serde_json::Value;
 use tungstenite::Message;
 
 pub const OGS_SOCKET_URL: &str = "wss://online-go.com/";
+/// OGS realtime endpoint pool:
+/// - `wsp.online-go.com`: Google Premium Network gateway (bypasses Cloudflare WebSocket throttling/timeouts on macOS)
+/// - `online-go.com`: Cloudflare gateway
+/// - `wss.online-go.com`: Direct public internet gateway
+pub const OGS_FALLBACK_SOCKET_URLS: &[&str] = &[
+    "wss://wsp.online-go.com/",
+    "wss://online-go.com/",
+    "wss://wss.online-go.com/",
+];
 pub const OGS_DEVICE_LANGUAGE: &str = "zh";
 pub const OGS_LANGUAGE_VERSION: &str = "1.0";
 pub const OGS_CLIENT_VERSION: &str = "0.1";
@@ -166,7 +175,7 @@ impl OgsWebSocketTransport for TungsteniteOgsWebSocketTransport {
             })
             .map_err(|_| "OGS socket worker has stopped".to_owned())?;
         ready_rx
-            .recv_timeout(Duration::from_secs(15))
+            .recv_timeout(Duration::from_secs(25))
             .map_err(|_| "OGS socket connection timed out".to_owned())?
     }
 
@@ -247,19 +256,56 @@ fn socket_worker(
     connected.store(false, Ordering::SeqCst);
 }
 
+fn build_ws_request(url: &str) -> Result<tungstenite::http::Request<()>, String> {
+    use tungstenite::client::IntoClientRequest;
+    let mut req = url
+        .into_client_request()
+        .map_err(|e| format!("invalid websocket url {url}: {e}"))?;
+    req.headers_mut().insert(
+        "Origin",
+        tungstenite::http::HeaderValue::from_static("https://online-go.com"),
+    );
+    req.headers_mut().insert(
+        "User-Agent",
+        tungstenite::http::HeaderValue::from_static(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Ryusei/0.1",
+        ),
+    );
+    Ok(req)
+}
+
 fn connect_stream(url: &str, ready: &Sender<Result<(), String>>) -> Option<WsStream> {
-    let (ws, _) = match tungstenite::connect(url) {
-        Ok(pair) => pair,
-        Err(error) => {
-            let _ = ready.send(Err(format!("OGS WebSocket connect failed: {error}")));
-            return None;
-        }
+    let endpoints: Vec<&str> = if url == OGS_SOCKET_URL || OGS_FALLBACK_SOCKET_URLS.contains(&url) {
+        OGS_FALLBACK_SOCKET_URLS.to_vec()
+    } else {
+        vec![url]
     };
-    if let Err(error) = set_socket_read_timeout(&ws, Duration::from_millis(250)) {
-        let _ = ready.send(Err(format!("could not configure OGS socket: {error}")));
-        return None;
+
+    let mut last_error = String::new();
+    for endpoint in endpoints {
+        let req = match build_ws_request(endpoint) {
+            Ok(req) => req,
+            Err(error) => {
+                last_error = error;
+                continue;
+            }
+        };
+        match tungstenite::connect(req) {
+            Ok((ws, _)) => {
+                if let Err(error) = set_socket_read_timeout(&ws, Duration::from_millis(250)) {
+                    last_error = format!("could not configure OGS socket: {error}");
+                    continue;
+                }
+                return Some(ws);
+            }
+            Err(error) => {
+                last_error = format!("OGS WebSocket connect failed to {endpoint}: {error}");
+            }
+        }
     }
-    Some(ws)
+
+    let _ = ready.send(Err(last_error));
+    None
 }
 
 fn drain_commands(

@@ -42,10 +42,8 @@ pub fn pane_size_for_drag(
 ) -> f32 {
     let delta = current_position - start_position;
     match pane {
-        SplitPane::Left | SplitPane::PeerList | SplitPane::WinrateGraph | SplitPane::Properties => {
-            start_size + delta
-        }
-        SplitPane::Right => start_size - delta,
+        SplitPane::Left | SplitPane::PeerList | SplitPane::WinrateGraph => start_size + delta,
+        SplitPane::Right | SplitPane::Properties => start_size - delta,
     }
 }
 
@@ -113,7 +111,7 @@ mod tests {
             140.0
         );
         assert_eq!(
-            pane_size_for_drag(180.0, 100.0, 130.0, SplitPane::Properties),
+            pane_size_for_drag(180.0, 100.0, 70.0, SplitPane::Properties),
             210.0
         );
     }

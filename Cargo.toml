@@ -15,8 +15,6 @@ authors = ["Ryusei Contributors"]
 license = "MIT"
 repository = "https://github.com/rainoffallingstar/ryusei"
 
-# Local GPUI 0.2.2 patch: defer a transparent-titlebar mutation while macOS
-# exits fullscreen. On macOS 26 this mutation re-enters AppKit frame resizing
-# and crashes BladeRenderer::update_drawable_size (see vendor/gpui patch).
-[patch.crates-io]
-gpui = { path = "vendor/gpui" }
+# Local GPUI 0.2.2 patch (kept for reference; gpui-kit uses gpui-pre 0.3.1)
+# [patch.crates-io]
+# gpui = { path = "vendor/gpui" }
