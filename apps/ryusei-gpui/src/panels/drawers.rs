@@ -483,6 +483,20 @@ pub fn render_library_drawer(shell: &ShellApp, cx: &Context<ShellApp>) -> Statef
                 "仅同步明确允许再分发的公开 GitHub SGF 仓库。配置会保存在本机，Git 不会弹出凭据提示。",
             ))
             .child(
+                Button::new("library-save-current-game")
+                    .small()
+                    .primary()
+                    .child(icon_label(
+                        ShellIcon::Save,
+                        "保存当前棋谱到棋谱库",
+                        shell.palette.muted,
+                    ))
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        let source = shell.current_record_source();
+                        shell.save_current_game_to_library(source, Vec::new(), cx);
+                    })),
+            )
+            .child(
                 div()
                     .flex()
                     .items_center()
@@ -2196,8 +2210,8 @@ pub fn render_export_drawer(
                         "导出动画 GIF 棋谱",
                         shell.palette.muted,
                     ))
-                    .on_click(cx.listener(|shell, _, window, cx| {
-                        shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        shell.on_export_gif_action(cx);
                     })),
             )
             .child(

@@ -1825,6 +1825,103 @@ impl ShellApp {
         self.save_sgf_content_to_library(source, sgf, tags, "", cx);
     }
 
+    /// Normalizes the current session into a library `RecordSource`, so the
+    /// "save to library" entry point works from any mode: live broadcasts map
+    /// to `Live`, remote OGS competitions to `Ogs`, and everything else (local
+    /// study/editing and local matches) to `Local` anchored at the open file.
+    pub(crate) fn current_record_source(&self) -> ryusei_domain_core::RecordSource {
+        match self.session_policy.source {
+            SessionSource::LiveBroadcast => {
+                let page_url = self.live_source_url.clone().unwrap_or_default();
+                ryusei_domain_core::RecordSource::Live { page_url }
+            }
+            SessionSource::RemoteCompetition => {
+                let game_id = self.ogs_client.competition_game_id().unwrap_or(0);
+                ryusei_domain_core::RecordSource::Ogs { game_id }
+            }
+            SessionSource::Library | SessionSource::Local => {
+                let path = self
+                    .host
+                    .snapshot()
+                    .file_state
+                    .path
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("untitled.sgf"));
+                ryusei_domain_core::RecordSource::Local { path }
+            }
+        }
+    }
+
+    /// Periodic auto-save hook: while `library.auto_save_to_library` is enabled
+    /// and the current document is dirty, snapshot it into the library (ingest +
+    /// revision history) in addition to writing the source file. Runs silently —
+    /// no toast — so the 30s cycle never interrupts editing.
+    fn autosave_current_game_to_library(&mut self, cx: &mut Context<Self>) {
+        if !self
+            .settings
+            .get_bool("library.auto_save_to_library")
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let snapshot = self.host.snapshot();
+        if !snapshot.file_state.is_dirty {
+            return;
+        }
+        let sgf = self.host.to_sgf();
+        let source = self.current_record_source();
+        let base = match self.library_base() {
+            Ok(base) => base,
+            Err(_) => return,
+        };
+        let shell_revision_limit = self.library_revision_limit();
+        let weak = cx.entity().downgrade();
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let store = ryusei_host::FsLibraryStore::new(base);
+                            let mut index = ryusei_host::load_library(&store)
+                                .map_err(|error| error.to_string())?;
+                            let outcome = ryusei_host::ingest_library_record(
+                                &store,
+                                &mut index,
+                                source,
+                                &sgf,
+                                vec!["自动保存".to_owned()],
+                            )
+                            .map_err(|error| error.to_string())?;
+                            ryusei_host::append_library_revision(
+                                &store,
+                                &mut index,
+                                &outcome.record.id,
+                                &sgf,
+                                ryusei_domain_core::RevisionTrigger::Autosave,
+                                shell_revision_limit,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            Ok::<_, String>(())
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        if result.is_err() {
+                            shell.status = format!(
+                                "自动保存到棋谱库失败：{}",
+                                result.err().unwrap_or_default()
+                            )
+                            .into();
+                            cx.notify();
+                        }
+                    });
+                }
+            },
+        )
+        .detach();
+    }
+
     fn on_engine_input_focus(
         &mut self,
         _: &MouseDownEvent,
@@ -5564,6 +5661,9 @@ impl ShellApp {
         // A concurrent engine-sync or save may have cleared the dirty flag;
         // `save_game` re-checks the path and no-ops safely otherwise.
         self.save_game(cx);
+        // When enabled, also snapshot the dirty document into the library as a
+        // versioned revision so 对局历史 records editing progress.
+        self.autosave_current_game_to_library(cx);
         cx.notify();
     }
 
@@ -7718,68 +7818,102 @@ impl ShellApp {
                 .unwrap_or(true),
             ownership,
         };
-        match ryusei_host::export_position_to_png(&snapshot.board, &options) {
-            Ok(png_bytes) => {
-                let suggested = format!("ryusei-position-{}.png", std::process::id());
-                let Some(destination) = self.dialog_service.pick_save_png_path(&suggested) else {
-                    self.status = "PNG export cancelled".into();
-                    cx.notify();
-                    return;
-                };
-                match self
-                    .persistence
-                    .persist_png_export(&destination, &png_bytes)
-                {
-                    Ok(()) => {
-                        self.status =
-                            format!("current position PNG exported: {}", destination.display())
+        let dialog = self.dialog_service.clone();
+        let persistence = self.persistence.clone();
+        let suggested = format!("ryusei-position-{}.png", std::process::id());
+        let weak = cx.entity().downgrade();
+        // Render, native save dialog, and file write must run off the UI thread:
+        // a synchronous rfd dialog while the shell borrow is held triggers the
+        // re-entrant RefCell abort documented in `save_game_as`.
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let png_bytes =
+                                ryusei_host::export_position_to_png(&snapshot.board, &options)
+                                    .map_err(|error| error.to_string())?;
+                            let Some(destination) = dialog.pick_save_png_path(&suggested) else {
+                                return Err("PNG export cancelled".to_owned());
+                            };
+                            persistence
+                                .persist_png_export(&destination, &png_bytes)
+                                .map_err(|error| error.to_string())?;
+                            Ok::<_, String>(destination)
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(destination) => {
+                                shell.status = format!(
+                                    "current position PNG exported: {}",
+                                    destination.display()
+                                )
                                 .into();
-                        self.show_toast(
-                            format!("已导出当前局面 PNG: {}", destination.display()),
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        self.status = format!("PNG export failed: {error}").into();
-                        self.show_toast(self.status.clone(), cx);
-                    }
+                                shell.show_toast(
+                                    format!("已导出当前局面 PNG: {}", destination.display()),
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                shell.status = format!("PNG export failed: {error}").into();
+                                shell.show_toast(shell.status.clone(), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
                 }
-            }
-            Err(error) => {
-                self.status = format!("PNG export failed: {error}").into();
-                self.show_toast(self.status.clone(), cx);
-            }
-        }
-        cx.notify();
+            },
+        )
+        .detach();
     }
 
-    fn on_export_gif_action(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_export_gif_action(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.host.snapshot();
         let options = ryusei_host::GifExportOptions::default();
-        match ryusei_host::export_sgf_to_gif(&snapshot, &options) {
-            Ok(gif_bytes) => {
-                let suggested = format!("saba_game_{}.gif", std::process::id());
-                let dest = self
-                    .dialog_service
-                    .pick_save_gif_path(&suggested)
-                    .unwrap_or_else(|| std::env::temp_dir().join(&suggested));
-                match self.persistence.persist_gif_export(&dest, &gif_bytes) {
-                    Ok(()) => {
-                        self.show_toast(
-                            format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()),
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        self.show_toast(format!("GIF 保存失败: {error}"), cx);
-                    }
+        let dialog = self.dialog_service.clone();
+        let persistence = self.persistence.clone();
+        let suggested = format!("saba_game_{}.gif", std::process::id());
+        let weak = cx.entity().downgrade();
+        // Same rule as PNG export: render + native dialog + write off-thread.
+        cx.spawn(
+            move |_: gpui::WeakEntity<ShellApp>, cx: &mut gpui::AsyncApp| {
+                let mut cx = cx.clone();
+                async move {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let gif_bytes = ryusei_host::export_sgf_to_gif(&snapshot, &options)
+                                .map_err(|error| error.to_string())?;
+                            let Some(dest) = dialog.pick_save_gif_path(&suggested) else {
+                                return Err("GIF export cancelled".to_owned());
+                            };
+                            persistence
+                                .persist_gif_export(&dest, &gif_bytes)
+                                .map_err(|error| error.to_string())?;
+                            Ok::<_, String>(dest)
+                        })
+                        .await;
+                    let _ = weak.update(&mut cx, |shell, cx| {
+                        match result {
+                            Ok(dest) => {
+                                shell.show_toast(
+                                    format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()),
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                shell.show_toast(format!("GIF 导出失败: {error}"), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
                 }
-            }
-            Err(e) => {
-                self.show_toast(format!("GIF 导出失败: {e}"), cx);
-            }
-        }
-        cx.notify();
+            },
+        )
+        .detach();
     }
 
     fn open_drawer(&mut self, drawer: ActiveDrawer, status: &str, cx: &mut Context<Self>) {
@@ -7910,6 +8044,16 @@ impl ShellApp {
             }
         }
         crate::file_workflow::current_user_config_directory().map(|base| base.join("libraries"))
+    }
+
+    /// How many point-in-time revisions to keep per record, from the
+    /// `library.revision_limit` setting (default 50).
+    fn library_revision_limit(&self) -> usize {
+        self.settings
+            .get("library.revision_limit")
+            .and_then(serde_json::Value::as_u64)
+            .map(|limit| limit.clamp(1, 10_000) as usize)
+            .unwrap_or(50)
     }
 
     fn refresh_library_entries(&mut self, cx: &mut Context<Self>) {
@@ -10555,26 +10699,7 @@ fn main() {
         let shell_export_gif = shell.clone();
         cx.on_action(move |_: &ExportGif, cx| {
             shell_export_gif.update(cx, |shell, cx| {
-                let snapshot = shell.host.snapshot();
-                let options = ryusei_host::GifExportOptions::default();
-                match ryusei_host::export_sgf_to_gif(&snapshot, &options) {
-                    Ok(gif_bytes) => {
-                        let suggested = format!("saba_game_{}.gif", std::process::id());
-                        let dest = shell
-                            .dialog_service
-                            .pick_save_gif_path(&suggested)
-                            .unwrap_or_else(|| std::env::temp_dir().join(&suggested));
-                        if std::fs::write(&dest, &gif_bytes).is_ok() {
-                            shell.show_toast(
-                                format!("🎬 成功导出 GIF 动画棋谱: {}", dest.display()),
-                                cx,
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        shell.show_toast(format!("GIF 导出失败: {e}"), cx);
-                    }
-                }
+                shell.on_export_gif_action(cx);
                 cx.notify();
             });
         });

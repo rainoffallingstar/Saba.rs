@@ -714,8 +714,8 @@ pub(crate) fn render_position_to_sgf_dialog(shell: &ShellApp, cx: &Context<Shell
                             "导出动画 GIF 棋谱…",
                             shell.palette.muted,
                         ))
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.on_export_gif_action(&MouseDownEvent::default(), window, cx);
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            shell.on_export_gif_action(cx);
                         })),
                 )
                 .child(
