@@ -11,7 +11,10 @@ use serde_json::Value;
 pub const OGS_KEYCHAIN_SERVICE: &str = "net.ryusei.ogs";
 
 /// A persisted OGS session. The password is absent by construction.
-#[derive(Clone, Debug)]
+///
+/// Serialized as a single JSON blob under one keychain entry so a startup
+/// restore touches exactly one credential instead of three.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OgsCredentials {
     pub server_url: String,
     pub jwt_token: String,
@@ -29,8 +32,17 @@ pub trait OgsCredentialStore: Send + Sync {
     fn clear(&self);
 }
 
-/// Production store backed by the `keyring` crate. JWT and cookie are separate
-/// entries; non-secret metadata (server URL, user summary) is a third entry.
+/// The keychain account name holding the whole OGS session as one JSON blob.
+/// Keeping everything under a single account means macOS shows at most one
+/// Keychain authorization prompt on startup, instead of one per legacy
+/// `jwt` / `cookie` / `meta` entry (three prompts).
+const SESSION_ACCOUNT: &str = "session";
+/// Accounts used by the pre-consolidation layout, kept only for one-time
+/// migration so existing logins are not dropped.
+const LEGACY_ACCOUNTS: &[&str] = &["jwt", "cookie", "meta"];
+
+/// Production store backed by the `keyring` crate. The JWT, REST cookie and
+/// non-secret metadata live in a single generic-password entry.
 #[derive(Clone, Debug, Default)]
 pub struct KeyringOgsCredentialStore;
 
@@ -42,27 +54,27 @@ impl KeyringOgsCredentialStore {
     fn entry(&self, account: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(OGS_KEYCHAIN_SERVICE, account).map_err(|error| error.to_string())
     }
-}
 
-impl OgsCredentialStore for KeyringOgsCredentialStore {
-    fn is_available(&self) -> bool {
-        self.entry("jwt").is_ok()
+    fn read_entry(&self, account: &str) -> Option<String> {
+        self.entry(account)
+            .ok()?
+            .get_password()
+            .ok()
+            .filter(|value| !value.is_empty())
     }
 
-    fn load(&self) -> Option<OgsCredentials> {
-        let jwt_token = self.entry("jwt").ok()?.get_password().ok()?;
-        if jwt_token.is_empty() {
-            return None;
+    fn delete_entry(&self, account: &str) {
+        if let Ok(entry) = self.entry(account) {
+            let _ = entry.delete_credential();
         }
-        let cookie_header = self
-            .entry("cookie")
-            .ok()
-            .and_then(|entry| entry.get_password().ok())
-            .filter(|value| !value.is_empty());
+    }
+
+    /// Loads the legacy three-entry layout, preserving the full session.
+    fn load_legacy(&self) -> Option<OgsCredentials> {
+        let jwt_token = self.read_entry("jwt")?;
+        let cookie_header = self.read_entry("cookie");
         let meta = self
-            .entry("meta")
-            .ok()
-            .and_then(|entry| entry.get_password().ok())
+            .read_entry("meta")
             .and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let server_url = meta
             .as_ref()
@@ -83,39 +95,47 @@ impl OgsCredentialStore for KeyringOgsCredentialStore {
             created_at,
         })
     }
+}
+
+impl OgsCredentialStore for KeyringOgsCredentialStore {
+    fn is_available(&self) -> bool {
+        self.entry(SESSION_ACCOUNT).is_ok()
+    }
+
+    fn load(&self) -> Option<OgsCredentials> {
+        // Prefer the consolidated single entry (one keychain prompt).
+        if let Some(text) = self.read_entry(SESSION_ACCOUNT)
+            && let Some(credentials) = serde_json::from_str::<OgsCredentials>(&text).ok()
+        {
+            return Some(credentials);
+        }
+
+        // One-time migration from the legacy three-entry layout. This is the
+        // last time three prompts can appear; afterwards only one entry exists.
+        let legacy = self.load_legacy()?;
+        let _ = self.save(&legacy);
+        for account in LEGACY_ACCOUNTS {
+            self.delete_entry(account);
+        }
+        Some(legacy)
+    }
 
     fn save(&self, credentials: &OgsCredentials) -> Result<(), String> {
-        self.entry("jwt")?
-            .set_password(&credentials.jwt_token)
+        let text = serde_json::to_string(credentials).map_err(|error| error.to_string())?;
+        self.entry(SESSION_ACCOUNT)?
+            .set_password(&text)
             .map_err(|error| error.to_string())?;
-        match &credentials.cookie_header {
-            Some(cookie) if !cookie.is_empty() => {
-                self.entry("cookie")?
-                    .set_password(cookie)
-                    .map_err(|error| error.to_string())?;
-            }
-            _ => {
-                if let Ok(entry) = self.entry("cookie") {
-                    let _ = entry.delete_credential();
-                }
-            }
+        // Remove any stale legacy entries so they cannot prompt again later.
+        for account in LEGACY_ACCOUNTS {
+            self.delete_entry(account);
         }
-        let meta = serde_json::json!({
-            "server_url": credentials.server_url,
-            "user": credentials.user,
-            "created_at": credentials.created_at,
-        });
-        self.entry("meta")?
-            .set_password(&meta.to_string())
-            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
     fn clear(&self) {
-        for account in ["jwt", "cookie", "meta"] {
-            if let Ok(entry) = self.entry(account) {
-                let _ = entry.delete_credential();
-            }
+        self.delete_entry(SESSION_ACCOUNT);
+        for account in LEGACY_ACCOUNTS {
+            self.delete_entry(account);
         }
     }
 }
@@ -214,5 +234,33 @@ mod tests {
             .expect_err("unavailable store must refuse");
         assert!(error.contains("unavailable"));
         assert!(store.load().is_none());
+    }
+
+    #[test]
+    fn credentials_json_round_trips_every_field() {
+        let credentials = OgsCredentials {
+            server_url: "https://online-go.com".to_owned(),
+            jwt_token: "jwt-secret".to_owned(),
+            cookie_header: Some("sessionid=abc; csrftoken=def".to_owned()),
+            user: Some(serde_json::json!({"id": 7, "username": "player"})),
+            created_at: Some(1_700_000_000),
+        };
+        let text = serde_json::to_string(&credentials).expect("serialize");
+        let decoded: OgsCredentials = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(decoded.server_url, credentials.server_url);
+        assert_eq!(decoded.jwt_token, credentials.jwt_token);
+        assert_eq!(decoded.cookie_header, credentials.cookie_header);
+        assert_eq!(decoded.user, credentials.user);
+        assert_eq!(decoded.created_at, credentials.created_at);
+    }
+
+    #[test]
+    fn credentials_json_handles_absent_optionals() {
+        let text = r#"{"server_url":"https://online-go.com","jwt_token":"t","cookie_header":null,"user":null,"created_at":null}"#;
+        let decoded: OgsCredentials = serde_json::from_str(text).expect("deserialize");
+        assert_eq!(decoded.jwt_token, "t");
+        assert!(decoded.cookie_header.is_none());
+        assert!(decoded.user.is_none());
+        assert!(decoded.created_at.is_none());
     }
 }

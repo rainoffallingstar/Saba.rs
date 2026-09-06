@@ -6,6 +6,7 @@
 //! blocking `tungstenite` adapter; the client state machine lives in
 //! `ogs_client`.
 
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -15,17 +16,30 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tungstenite::Message;
+use url::Url;
 
-pub const OGS_SOCKET_URL: &str = "wss://online-go.com/";
+/// Canonical OGS realtime endpoint. Raw WebSockets are the official transport
+/// and live at the `/ws` path (not the site root, which is the SPA shell).
+pub const OGS_SOCKET_URL: &str = "wss://online-go.com/ws";
 /// OGS realtime endpoint pool:
 /// - `wsp.online-go.com`: Google Premium Network gateway (bypasses Cloudflare WebSocket throttling/timeouts on macOS)
 /// - `online-go.com`: Cloudflare gateway
 /// - `wss.online-go.com`: Direct public internet gateway
 pub const OGS_FALLBACK_SOCKET_URLS: &[&str] = &[
-    "wss://wsp.online-go.com/",
-    "wss://online-go.com/",
-    "wss://wss.online-go.com/",
+    "wss://wsp.online-go.com/ws",
+    "wss://online-go.com/ws",
+    "wss://wss.online-go.com/ws",
 ];
+
+/// Per-address TCP connect budget. A blocked/slow route (e.g. Cloudflare being
+/// throttled on macOS) must fail fast instead of blocking the worker thread on
+/// the OS's default SYN retransmission timeout.
+const OGS_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+/// Budget for the TLS + WebSocket handshake once a TCP connection is open.
+const OGS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Read timeout used by the reader loop to poll for inbound frames while still
+/// draining outbound commands between reads.
+const OGS_POLL_READ_TIMEOUT: Duration = Duration::from_millis(250);
 pub const OGS_DEVICE_LANGUAGE: &str = "zh";
 pub const OGS_LANGUAGE_VERSION: &str = "1.0";
 pub const OGS_CLIENT_VERSION: &str = "0.1";
@@ -283,29 +297,68 @@ fn connect_stream(url: &str, ready: &Sender<Result<(), String>>) -> Option<WsStr
 
     let mut last_error = String::new();
     for endpoint in endpoints {
-        let req = match build_ws_request(endpoint) {
-            Ok(req) => req,
-            Err(error) => {
-                last_error = error;
-                continue;
-            }
-        };
-        match tungstenite::connect(req) {
-            Ok((ws, _)) => {
-                if let Err(error) = set_socket_read_timeout(&ws, Duration::from_millis(250)) {
-                    last_error = format!("could not configure OGS socket: {error}");
-                    continue;
-                }
-                return Some(ws);
-            }
-            Err(error) => {
-                last_error = format!("OGS WebSocket connect failed to {endpoint}: {error}");
-            }
+        match connect_endpoint(endpoint) {
+            Ok(ws) => return Some(ws),
+            Err(error) => last_error = error,
         }
     }
 
     let _ = ready.send(Err(last_error));
     None
+}
+
+/// Connects to a single OGS endpoint with bounded timeouts. The TCP connect,
+/// TLS handshake, and WebSocket upgrade each carry their own budget so a
+/// blocked route fails fast and lets the next fallback gateway be tried.
+fn connect_endpoint(url: &str) -> Result<WsStream, String> {
+    let parsed =
+        Url::parse(url).map_err(|error| format!("invalid websocket url {url}: {error}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("websocket url has no host: {url}"))?;
+    let port = parsed.port_or_known_default().unwrap_or(443);
+
+    let socket_addr = format!("{host}:{port}");
+    let addresses = socket_addr
+        .to_socket_addrs()
+        .map_err(|error| format!("could not resolve OGS host {host}: {error}"))?;
+
+    let mut stream = None;
+    let mut last_tcp_error = String::from("no usable address");
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, OGS_CONNECT_TIMEOUT) {
+            Ok(connected) => {
+                if connected.set_nodelay(true).is_err() {
+                    continue;
+                }
+                if connected
+                    .set_read_timeout(Some(OGS_HANDSHAKE_TIMEOUT))
+                    .is_err()
+                {
+                    continue;
+                }
+                if connected
+                    .set_write_timeout(Some(OGS_HANDSHAKE_TIMEOUT))
+                    .is_err()
+                {
+                    continue;
+                }
+                stream = Some(connected);
+                break;
+            }
+            Err(error) => last_tcp_error = error.to_string(),
+        }
+    }
+    let stream =
+        stream.ok_or_else(|| format!("OGS WebSocket connect failed to {url}: {last_tcp_error}"))?;
+
+    let req = build_ws_request(url)?;
+    let (ws, _) = tungstenite::client_tls(req, stream)
+        .map_err(|error| format!("OGS WebSocket handshake failed to {url}: {error}"))?;
+
+    // Switch to the poll-friendly read timeout for the reader loop.
+    set_socket_read_timeout(&ws, OGS_POLL_READ_TIMEOUT)?;
+    Ok(ws)
 }
 
 fn drain_commands(
@@ -393,5 +446,31 @@ mod tests {
         assert_eq!(payload["jwt"], "jwt");
         assert_eq!(payload["device_id"], "device");
         assert_eq!(payload["user_agent"], "ua");
+    }
+
+    #[test]
+    fn socket_endpoints_use_the_ws_path() {
+        assert_eq!(OGS_SOCKET_URL, "wss://online-go.com/ws");
+        for url in OGS_FALLBACK_SOCKET_URLS {
+            assert!(
+                url.ends_with("/ws"),
+                "fallback endpoint must target the /ws realtime path: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn ws_request_carries_browser_like_headers() {
+        let req = build_ws_request("wss://online-go.com/ws").expect("build request");
+        assert_eq!(
+            req.headers().get("Origin").and_then(|v| v.to_str().ok()),
+            Some("https://online-go.com")
+        );
+        assert!(
+            req.headers()
+                .get("User-Agent")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ua| ua.contains("Ryusei/0.1"))
+        );
     }
 }
